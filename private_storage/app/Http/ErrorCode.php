@@ -28,8 +28,6 @@ final class ErrorCode
     public const SIGNATURE_INVALID   = 'SIGNATURE_INVALID';
     public const REPLAY_DETECTED     = 'REPLAY_DETECTED';
     public const CLOCK_SKEW          = 'CLOCK_SKEW';
-    public const CHALLENGE_INVALID   = 'CHALLENGE_INVALID';
-    public const CHALLENGE_EXPIRED   = 'CHALLENGE_EXPIRED';
     public const REFRESH_INVALID     = 'REFRESH_INVALID';
     public const DEVICE_KEY_INVALID  = 'DEVICE_KEY_INVALID';
     public const UNKNOWN_DEVICE      = 'UNKNOWN_DEVICE';

@@ -25,7 +25,6 @@ use FieldPulse\Config\Config;
 use FieldPulse\Database\AuditRepository;
 use FieldPulse\Database\JobRepository;
 use FieldPulse\Database\RefreshTokenRepository;
-use FieldPulse\Security\ChallengeService;
 use FieldPulse\Security\NonceGuard;
 use FieldPulse\Security\RateLimiter;
 use FieldPulse\Support\Logger;
@@ -49,7 +48,6 @@ try {
     // others, or a single locked table would block all housekeeping indefinitely.
     $buckets = [
         ['request nonces'    , static fn (): int => NonceGuard::prune($batch)],
-        ['auth challenges'   , static fn (): int => ChallengeService::pruneExpired($batch)],
         ['refresh tokens'    , static fn (): int => (new RefreshTokenRepository())->pruneExpired($batch)],
         ['login attempts'    , static fn (): int => RateLimiter::pruneOlderThanDays($loginDays)],
         ['expired pairings'  , static fn (): int => \FieldPulse\Database\Connection::execute(

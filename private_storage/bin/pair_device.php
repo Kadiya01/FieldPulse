@@ -12,8 +12,13 @@ declare(strict_types=1);
  * does not yield a usable code, and there is no "reprint" — a lost code is
  * replaced by issuing another one.
  *
- * The agent enters the code in the PWA alongside their IMEI, and the device
- * generates its P-256 keypair locally. The private key never leaves the handset.
+ * The agent signs in with their username and password, then enters this code in
+ * the PWA, and the browser generates its P-256 keypair locally. The private key
+ * never leaves the handset; only the public JWK is sent.
+ *
+ * No IMEI is involved at any point. It is not accepted by the login or
+ * registration endpoints, so asking an operator to read it off a handset buys
+ * nothing and teaches staff that it is part of authentication.
  */
 
 require_once dirname(__DIR__) . '/app/bootstrap.php';
@@ -23,7 +28,7 @@ use FieldPulse\Console\Cli;
 use FieldPulse\Database\AgentRepository;
 use FieldPulse\Database\AuditRepository;
 use FieldPulse\Database\Connection;
-use FieldPulse\Security\ChallengeService;
+use FieldPulse\Security\PairingCode;
 use FieldPulse\Support\Clock;
 
 Cli::init(__FILE__);
@@ -64,7 +69,7 @@ try {
     $pairingCode = null;
 
     for ($attempt = 0; $attempt < 3; $attempt++) {
-        $candidate = ChallengeService::randomPairingCode();
+        $candidate = PairingCode::random();
 
         try {
             Connection::execute(
@@ -75,7 +80,7 @@ try {
                  )',
                 [
                     'agent_id'    => (int) $agent['id'],
-                    'hash'        => ChallengeService::hashPairingCode($candidate),
+                    'hash'        => PairingCode::hash($candidate),
                     'label'       => $label === null ? null : mb_substr($label, 0, 100),
                     'expires_at'  => Clock::sql(Clock::shift($ttl)),
                     'created_by'  => mb_substr($created, 0, 100),

@@ -939,7 +939,7 @@ $t->test('a malformed JWK is refused', function (TestRunner $t): void {
 $t->test('a signature from the matching key verifies', function (TestRunner $t) use ($makeKey): void {
     [$key, $jwk] = $makeKey();
 
-    $message  = \FieldPulse\Security\ChallengeService::popMessage('abc123', 'device-uuid');
+    $message  = "FieldPulse-Test-v1\nabc123\ndevice-uuid";
     $signature = '';
 
     $t->assertTrue(openssl_sign($message, $signature, $key, OPENSSL_ALGO_SHA256), 'openssl_sign');
@@ -957,7 +957,7 @@ $t->test('a signature from a different key does not verify', function (TestRunne
     [$keyA] = $makeKey();
     [, $jwkB] = $makeKey();
 
-    $message = \FieldPulse\Security\ChallengeService::popMessage('abc123', 'device-uuid');
+    $message = "FieldPulse-Test-v1\nabc123\ndevice-uuid";
 
     $signature = '';
     openssl_sign($message, $signature, $keyA, OPENSSL_ALGO_SHA256);
@@ -982,11 +982,11 @@ $t->test('a signature over a different message does not verify', function (TestR
     $t->assertThrows(
         static fn () => \FieldPulse\Security\SignatureVerifier::assertProofOfPossession(
             $jwk,
-            \FieldPulse\Security\ChallengeService::popMessage('abc123', 'device-uuid'),
+            "FieldPulse-Test-v1\nabc123\ndevice-uuid",
             \FieldPulse\Support\Str::base64UrlEncode($signature)
         ),
         null,
-        'the signed message must be bound to the challenge'
+        'the signature must be bound to the exact signed message'
     );
 });
 

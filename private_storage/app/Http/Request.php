@@ -28,7 +28,15 @@ use FieldPulse\Support\Json;
  */
 final class Request
 {
-    /** @param array<string,string> $headers @param array<string,mixed> $query @param array<string,mixed> $form @param array<string,mixed> $files */
+    /**
+     * @param array<string,string> $headers @param array<string,mixed> $query @param array<string,mixed> $form @param array<string,mixed> $files
+     *
+     * $origin is the one field that is not readonly, and it is written exactly
+     * once, in capture(), immediately after construction. It has to be: reading
+     * it needs $this->headers, which does not exist until the object is built,
+     * so a static call inside the constructor's argument list fatals. Every
+     * other field is genuinely known before the object exists.
+     */
     private function __construct(
         private readonly string $method,
         private readonly string $path,
@@ -38,7 +46,7 @@ final class Request
         private readonly array $headers,
         private readonly string $rawBody,
         private readonly string $clientIp,
-        private readonly ?string $origin,
+        private ?string $origin = null,
     ) {
     }
 
@@ -84,7 +92,7 @@ final class Request
 
     public static function capture(): self
     {
-        return new self(
+        $request = new self(
             strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')),
             self::extractPath(),
             $_GET,
@@ -93,8 +101,24 @@ final class Request
             self::extractHeaders(),
             self::readRawBody(),
             self::resolveClientIp(),
-            self::header('Origin'),
+            null,
         );
+
+        /*
+         * Resolved after construction, not as a ninth constructor argument.
+         *
+         * header() reads $this->headers, which does not exist until the object
+         * is built, so the origin used to be read with self::header('Origin')
+         * inside the argument list. That is a static call to a non-static
+         * method: it fatals with "Non-static method cannot be called
+         * statically" on the very first request of every process. Nothing
+         * caught it because the origin is the only field that needs the
+         * already-extracted header map, and every test that builds a Request
+         * by hand passes the origin directly.
+         */
+        $request->origin = $request->header('Origin');
+
+        return $request;
     }
 
     /**

@@ -24,10 +24,20 @@ export default function LeaderboardPage() {
       if (!res.ok) throw new Error('Failed to fetch leaderboard');
       const json = await res.json();
       setData(json);
-      // Cache this locally in localStorage or IndexedDB for offline viewing as per requirements
+      // Cached for offline viewing. Safe in localStorage because this response
+      // is aggregate counts and site metadata — no token, and nothing the
+      // server would treat as a claim. It stays keyed to whoever last fetched
+      // it, so a shared handset can see a stale board, but a shared handset
+      // cannot spend a session: no credential is written here.
       localStorage.setItem('fieldpulse_leaderboard', JSON.stringify(json));
-    } catch (err: any) {
-      // Fallback to cached version if offline
+    } catch {
+      /*
+       * Fall back to the cache. This deliberately swallows the reason: a 401,
+       * a 500 and a dropped connection all resolve to the same stale board, and
+       * telling the agent "showing cached data" is true in every case. The auth
+       * failure is not hidden, though — authenticatedFetch has already raised
+       * auth_failure and the gate has moved the user to the login screen.
+       */
       const cached = localStorage.getItem('fieldpulse_leaderboard');
       if (cached) {
         setData(JSON.parse(cached));
@@ -40,8 +50,10 @@ export default function LeaderboardPage() {
     }
   };
 
+  // Fetches on mount, which is a synchronisation with a remote system rather
+  // than derived state, so this is what an effect is for.
   useEffect(() => {
-    fetchLeaderboard();
+    void fetchLeaderboard();
   }, []);
 
   return (

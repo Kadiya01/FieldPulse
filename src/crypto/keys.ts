@@ -10,7 +10,7 @@ const KEY_GEN_PARAMS: EcKeyGenParams = {
   namedCurve: 'P-256',
 };
 
-export async function generateAndStoreDeviceIdentity(): Promise<{ device_uuid: string; public_jwk: JsonWebKey }> {
+export async function generateAndStoreDeviceIdentity(): Promise<{ device_uuid: string; public_key_jwk: JsonWebKey }> {
   // Generate a cryptographically random installation UUID (v4).
   const device_uuid = crypto.randomUUID();
 
@@ -22,18 +22,20 @@ export async function generateAndStoreDeviceIdentity(): Promise<{ device_uuid: s
     ['sign', 'verify']
   );
 
-  // Store the private CryptoKey in IndexedDB.
+  // Export the public half now, while it is in hand. The private key is
+  // non-extractable and never leaves this function.
+  const public_key_jwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+
+  // Store the private CryptoKey in Dexie.
   await db.device.put({
     id: 'current',
     device_uuid,
     private_key: keyPair.privateKey,
+    public_key_jwk,
     registered_at: Date.now(),
   });
 
-  // Export public key to JWK
-  const public_jwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-
-  return { device_uuid, public_jwk };
+  return { device_uuid, public_key_jwk };
 }
 
 export async function getDeviceIdentity() {
@@ -66,6 +68,21 @@ export async function hashRequestBody(body: string | ArrayBuffer): Promise<strin
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   return hashHex;
+}
+
+/**
+ * Lowercase hex SHA-256 of a Blob's bytes.
+ *
+ * Distinct from hashRequestBody because a Blob has to be read to obtain its
+ * bytes first, and because the caller must be certain the digest describes the
+ * exact object being stored rather than a re-encoding of it. The server
+ * compares this against the bytes it receives and rejects a mismatch outright,
+ * so a digest taken from anything other than the uploaded blob is a submission
+ * that can never be accepted.
+ */
+export async function sha256Hex(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  return hashRequestBody(buffer);
 }
 
 export function generateNonce(): string {

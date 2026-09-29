@@ -48,6 +48,10 @@ final class RefreshController implements ActionInterface
             'token_type'          => $tokens['token_type'],
             'expires_in'          => $tokens['expires_in'],
             'refresh_expires_at'  => $tokens['refresh_expires_at'],
+            // The client needs this to decide whether to enrol a device. A
+            // refreshed bootstrap session still has no device, and one that
+            // claimed otherwise would silently never reach registration.
+            'device_bound'        => $tokens['device_bound'],
         ])->withCookie(array_merge(
             [
                 'name'  => $cookieName,

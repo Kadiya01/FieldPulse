@@ -1,0 +1,31 @@
+-- ---------------------------------------------------------------------------
+-- 018 — retire the IMEI proof-of-possession challenge table
+--
+-- The challenge flow existed to answer a real problem, and the problem is now
+-- solved a different way. In the zero-password model the IMEI identified the
+-- agent and the device key proved possession — but the device key had to be
+-- registered *before* login, and registration is itself a request that proves
+-- nothing. So the server issued a challenge, the device signed it, and the pair
+-- together stood in for a password. What actually authenticated the agent was
+-- the IMEI; the signature only proved the key it was presented with had not
+-- changed since the challenge was minted.
+--
+-- Phase 2 removes the premise. Login is username and password, verified with
+-- PHP's password_hash()/password_verify(). Device registration now happens
+-- *after* login, gated on the bootstrap session login returns plus the
+-- configured pairing policy (see DeviceController), so it no longer needs to be
+-- reachable by an unauthenticated client and no longer needs a challenge to
+-- stand in for the missing credential.
+--
+-- Nothing writes to auth_challenges any more, and the only code that read it
+-- (Security\ChallengeService) has been deleted. The table is dropped rather than
+-- left in place so that a future IMEI-challenge flow cannot be half-revived
+-- against a stale schema — reintroducing it would require a new migration that
+-- states the new threat model, which is the point.
+--
+-- The two lookups that indexed this table are gone with it; no other query
+-- referenced it. Data loss is nil: every row in it was single-use, expired
+-- within minutes, and worthless once superseded.
+-- ---------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS auth_challenges;

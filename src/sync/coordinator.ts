@@ -1,4 +1,4 @@
-import { db, type Submission } from '../db/db';
+import { db, type Submission, buildSubmitPayload } from '../db/db';
 import { authenticatedFetch } from '../api/client';
 
 const SYNC_LOCK_ID = 'main_sync_lock';
@@ -7,6 +7,46 @@ const SYNC_CHANNEL = new BroadcastChannel('fieldpulse_sync_channel');
 
 let isSyncRunning = false;
 let myHolderId = crypto.randomUUID();
+
+/**
+ * The 202 and 200 bodies the submission contract defines.
+ *
+ * `status` is required, and the rest of the shape is checked too. A 2xx whose
+ * body does not parse is treated as a *failure*, not a success: a proxy that
+ * answers 200 with an HTML login page, or a truncated body, would otherwise
+ * mark a submission SENT and prune the photo — after which the agent believes
+ * evidence was delivered that the server never accepted. Losing the retry is
+ * worse than the duplicate that a retry would have caused.
+ */
+export interface SubmitAccepted {
+  status: string;
+  submission_uuid: string;
+  submission_id: number;
+  self: string;
+  idempotent_replay?: boolean;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Parse and validate a 2xx submission response.
+ *
+ * Returns null when the body is not a well-formed acceptance. Callers must
+ * treat null as "not accepted" and leave the submission retryable.
+ */
+export function parseSubmitAccepted(response: unknown): SubmitAccepted | null {
+  if (typeof response !== 'object' || response === null) return null;
+  const outer = response as { data?: unknown };
+  if (typeof outer.data !== 'object' || outer.data === null) return null;
+  const data = outer.data as Record<string, unknown>;
+
+  if (typeof data.status !== 'string' || data.status === '') return null;
+  if (typeof data.submission_uuid !== 'string' || !UUID_RE.test(data.submission_uuid)) return null;
+  if (typeof data.submission_id !== 'number' || !Number.isInteger(data.submission_id)) return null;
+  if (typeof data.self !== 'string' || data.self === '') return null;
+
+  return data as unknown as SubmitAccepted;
+}
 
 export async function triggerSync() {
   SYNC_CHANNEL.postMessage('WAKE_UP');
@@ -43,7 +83,7 @@ async function acquireLock(): Promise<boolean> {
   return await db.transaction('rw', db.sync_lock, async () => {
     const lock = await db.sync_lock.get(SYNC_LOCK_ID);
     const now = Date.now();
-    
+
     if (!lock || lock.expires_at < now || lock.holder === myHolderId) {
       // Lock is free, expired, or already ours
       await db.sync_lock.put({
@@ -74,8 +114,13 @@ async function checkApiReachability(): Promise<boolean> {
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     const res = await fetch('/api/v1/leaderboard.php', { method: 'HEAD', signal: controller.signal });
     clearTimeout(timeoutId);
-    return res.ok || res.status === 401; // 401 means it's reachable but we need auth
-  } catch (error) {
+    // 401 counts as reachable: the network path works and the server answered,
+    // it just would not talk to us without a session. Treating that as offline
+    // would stall the queue for a user whose only problem is an expired token.
+    return res.ok || res.status === 401;
+  } catch {
+    // Offline, DNS failure, or the 5s timeout. Nothing distinguishes them here
+    // and none of them is actionable, so the queue waits and retries.
     return false;
   }
 }
@@ -86,8 +131,8 @@ async function processQueue() {
     const now = Date.now();
     const record = await db.submissions
       .orderBy('created_at')
-      .filter(sub => 
-        (sub.status === 'PENDING') || 
+      .filter(sub =>
+        (sub.status === 'PENDING') ||
         (sub.status === 'RETRY_WAIT' && sub.next_retry_at <= now)
       )
       .first();
@@ -106,58 +151,120 @@ async function processQueue() {
       console.error('Upload failed for', record.submission_uuid, error);
       // We don't break the loop, but the upload function handles setting back to RETRY_WAIT
       // Actually we might break if it's a network error to avoid hammering
-      break; 
+      break;
     }
   }
 }
 
-async function uploadSubmission(record: Submission) {
-  const formData = new FormData();
-  formData.append('submission_uuid', record.submission_uuid);
-  formData.append('agent_id', record.agent_id);
-  formData.append('device_uuid', record.device_uuid);
-  formData.append('count_claimed', record.count_claimed.toString());
-  if (record.client_latitude) formData.append('client_latitude', record.client_latitude.toString());
-  if (record.client_longitude) formData.append('client_longitude', record.client_longitude.toString());
-  formData.append('client_captured_at', record.client_captured_at.toString());
-  
-  if (record.photo_blob) {
-    formData.append('photo', record.photo_blob, 'capture.jpg');
+/**
+ * Assemble the multipart body for one submission.
+ *
+ * The `payload` part is serialised exactly once and that same string is both
+ * appended to the form and handed to the signing layer, because the server
+ * signs those bytes and then re-reads them out of the form. Re-serialising —
+ * even with identical key order — risks a different byte sequence, and the
+ * resulting failure (a signature over bytes the server did not receive) is
+ * indistinguishable from a server bug at 3am.
+ */
+export function buildSubmitForm(
+  sub: Submission,
+  payloadJson: string
+): FormData {
+  const form = new FormData();
+
+  // Two-argument append: this is a text field, and it lands in $_POST as a
+  // string. Appending it as a Blob with a JSON content type would reach the
+  // same $_POST slot, and would only obscure the fact that the signed bytes and
+  // the transmitted bytes are the identical string passed in.
+  form.append('payload', payloadJson);
+
+  if (sub.photo_blob) {
+    form.append('file', sub.photo_blob, 'capture.jpg');
   }
+
+  return form;
+}
+
+export async function uploadSubmission(record: Submission): Promise<void> {
+  if (!record.photo_blob) {
+    // Nothing to upload and no way to reconstruct it. Retrying forever would
+    // pin the lock owner awake, so this is terminal.
+    await db.submissions.update(record.submission_uuid, {
+      status: 'FAILED_PERMANENT',
+      last_attempt_at: Date.now(),
+      last_error_code: null,
+      last_error_message: 'No photo stored for this submission'
+    });
+    return;
+  }
+
+  // One serialisation, used for both the form part and the signature.
+  const payloadJson = JSON.stringify(buildSubmitPayload(record));
+  const form = buildSubmitForm(record, payloadJson);
 
   let response: Response;
   try {
     response = await authenticatedFetch('/submit.php', {
       method: 'POST',
-      body: formData
+      body: form,
+      signedBody: payloadJson
     });
   } catch (error: any) {
-    // Network failure / Timeout
-    await scheduleRetry(record, 500, error.message);
+    // Network failure / Timeout, or an auth failure the client layer already
+    // classified. Either way the submission is still retryable.
+    await scheduleRetry(record, 0, error.message);
     throw error;
   }
 
   const status = response.status;
   const now = Date.now();
 
-  if (status === 201 || status === 200) {
-    // RECEIVED or ALREADY_RECEIVED
-    // Delete photo_blob from IndexedDB
+  if (status === 202 || status === 200) {
+    let parsed: SubmitAccepted | null = null;
+    try {
+      parsed = parseSubmitAccepted(await response.json());
+    } catch {
+      // A 2xx whose body is not JSON at all. Same handling as a JSON body of
+      // the wrong shape: not an acceptance.
+      parsed = null;
+    }
+
+    if (parsed === null) {
+      // A success status with an unreadable body. Not an acceptance: keep the
+      // photo and retry, so the idempotency key makes the retry free.
+      await scheduleRetry(record, status, 'Malformed acceptance response');
+      return;
+    }
+
+    // 202 QUEUED (first acceptance) and 200 ALREADY_RECEIVED (idempotent
+    // replay) are both terminal for the client: the server has the file. Only
+    // now is it safe to drop the photo.
     await db.submissions.update(record.submission_uuid, {
       status: 'SENT',
-      photo_blob: undefined, // PRUNING
+      photo_blob: undefined, // PRUNING — the server has the bytes
       last_attempt_at: now,
-      last_error_code: null
+      last_error_code: null,
+      last_error_message: null,
+      server_submission_id: String(parsed.submission_id)
     });
-  } else if (status === 400 || status === 422 || status === 409 || status === 413) {
-    // Validation Error, Conflict, Payload Too Large
+  } else if (status === 409) {
+    // The UUID belongs to another agent. This will never succeed, and the
+    // server deliberately returns nothing about whose it is.
+    await db.submissions.update(record.submission_uuid, {
+      status: 'FAILED_PERMANENT',
+      last_attempt_at: now,
+      last_error_code: status,
+      last_error_message: 'IDEMPOTENCY_CONFLICT'
+    });
+  } else if (status === 400 || status === 413 || status === 415 || status === 422) {
+    // Validation Error, Payload Too Large, Unsupported Media. Retrying an
+    // unchanged body cannot change the answer.
     await db.submissions.update(record.submission_uuid, {
       status: 'FAILED_PERMANENT',
       last_attempt_at: now,
       last_error_code: status
     });
   } else if (status === 401 || status === 403) {
-    // FAILED_AUTH handled largely by authenticatedFetch but update state
     await db.submissions.update(record.submission_uuid, {
       status: 'FAILED_AUTH',
       last_attempt_at: now,
@@ -180,7 +287,7 @@ async function scheduleRetry(record: Submission, code: number, message: string, 
   // Exponential backoff with jitter (Base 2s, Max 60s)
   const baseDelay = 2000;
   const maxDelay = 60000;
-  
+
   let delay = fixedDelay;
   if (!delay) {
     const exp = Math.min(retryCount, 10);

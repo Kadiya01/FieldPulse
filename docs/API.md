@@ -67,16 +67,21 @@ The signed string is exactly:
 METHOD \n PATH \n TIMESTAMP \n NONCE \n SHA256HEX(raw request body)
 ```
 
-`PATH` is the request path only, with no query string and no scheme/host. For
-`submit.php` the body is the multipart body, byte for byte — which is why the
-JSON metadata travels in a `payload` part: re-serialising it would change the
-bytes and break the signature.
+`PATH` is the request path only, with no query string and no scheme/host.
 
-**This is the single most common integration mistake.** The PWA must capture the
-multipart body as a `Blob`/`ArrayBuffer`, hash those exact bytes, and send the
-same bytes. Building the form twice — once to hash, once to send — will
-reorder the parts and produce a `FILE_HASH_MISMATCH` that looks like a bug in the
-server.
+For `submit.php` the signed bytes are the **verbatim contents of the `payload`
+part**, not the assembled multipart body. The multipart boundary is chosen by
+the encoder and is not reproducible on the server side, so hashing the whole
+body would mean hashing bytes the verifier can never reconstruct. The server
+reads the `payload` part back out of the form and signs exactly those bytes.
+
+**This is the single most common integration mistake.** The PWA must serialise
+the `payload` JSON **once** and reuse that same string for both the hash and the
+`payload` part. Serialising twice — even with identical key order — risks a
+different byte sequence, and the result is a signature over bytes the server
+never received, which presents as a `SIGNATURE_INVALID` on a request that looks
+correct. `file_sha256` is a separate digest, computed over the file bytes, and is
+*not* what the device signature covers.
 
 ### CSRF
 
@@ -90,63 +95,61 @@ uses a bearer header, which a browser will not attach cross-origin.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/auth/challenge` | public |
-| POST | `/auth/login` | public |
+| POST | `/auth/login` | public, username + password |
 | POST | `/auth/refresh` | refresh cookie + Origin |
 | POST | `/auth/logout` | refresh cookie + Origin |
-| POST | `/device/register` | public, pairing code required |
-| POST | `/submit` | **signed** |
-| GET | `/submission.php?uuid=` | bearer, own submissions only |
-| GET | `/leaderboard` | bearer |
-| GET | `/reviews` | operator |
-| POST | `/reviews/decide` | operator |
-
----
-
-### POST /auth/challenge
-
-Issues the one-time value a device must sign to log in.
-
-```json
-{ "imei": "490154203237518", "device_id": "…optional for first binding…" }
-```
-
-```json
-{ "data": { "challenge_id": "…", "challenge": "base64url", "expires_at": "…", "expires_in": 300 } }
-```
-
-`429 RATE_LIMITED` here is normal and expected during a credential-stuffing
-attempt; the limit is per IMEI **and** per source IP.
+| POST | `/device/register` | bootstrap token + pairing code |
+| POST | `/api/v1/submit.php` | **signed** |
+| GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
+| GET | `/api/v1/leaderboard.php` | bearer |
+| GET | `/api/v1/reviews.php` | operator |
+| POST | `/api/v1/reviews/decide.php` | operator |
 
 ---
 
 ### POST /auth/login
 
+Exchanges a username and password for a **bootstrap** session.
+
 ```json
-{ "imei": "490154203237518", "challenge_id": "…", "signature": "base64url ES256" }
+{ "username": "ada", "password": "…" }
 ```
 
 ```json
 {
-  "data": {
-    "access_token": "eyJ…",
-    "token_type": "Bearer",
-    "expires_in": 900,
-    "refresh_expires_in": 2592000,
-    "device_id": "…",
-    "agent": { "agent_code": "AG-001", "name": "…", "role": "AGENT" }
-  }
+  "access_token": "eyJ…",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "refresh_expires_at": "2026-10-28T09:41:05Z",
+  "agent": { "id": 3, "agent_code": "AG-001", "full_name": "Ada Lovelace" },
+  "device_bound": false,
+  "next_step": "device.register"
 }
 ```
 
-A `Set-Cookie: fp_refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`
-accompanies this. The client must store it; the PWA cannot read it, which is the
-point.
+This response is **flat, not wrapped in `data`**, and so are `/auth/refresh`,
+`/auth/logout` and `/device/register`.
 
-An unknown IMEI returns `401` with a **generic** message. Telling a caller
-whether an IMEI is registered turns the login endpoint into an enumeration oracle
-for the entire agent roster, and since agent codes are guessable, that leaks the
-operator's book.
+A `Set-Cookie: fp_refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`
+accompanies it. The PWA cannot read it, which is the point.
+
+The access token is a *bootstrap* token: `scope=bootstrap`, `device_uuid=null`.
+It is deliberately weak and will only reach `/device/register`. Following it with
+`/device/register` replaces it with a device-bound token. `device_bound` is
+returned explicitly so a client never has to infer it from a scope claim.
+
+**Every failure is the same `401 UNAUTHENTICATED` with the same body**, and
+`Credentials::verify()` runs even when the username does not exist so the
+response time does not reveal it either. No such user, wrong password, inactive
+agent and no-credential-configured are indistinguishable at the edge: any of
+them being distinguishable is a way to learn things about the account.
+
+`429 RATE_LIMITED` here is expected during a credential-stuffing attempt. The
+limit is keyed on the username **and** the source IP; per-IP is what stops a
+single host walking the whole user table.
+
+IMEI is not accepted, read, or required anywhere in this flow. It is not an
+authentication factor and is not used as one.
 
 ---
 
@@ -162,27 +165,65 @@ only way reuse is detectable.
 
 ### POST /device/register
 
-Binds a new device key to an agent. Requires **either** a one-time pairing code
-issued by an operator (`bin/pair_device.php`) **or** a valid access token for a
-device already bound to the same agent.
+Binds a browser-generated ECDSA P-256 public key to the agent, upgrading the
+bootstrap session. Authenticated by the **bootstrap** access token; the Kernel
+rejects any other token on this route.
 
 ```json
-{ "imei": "490154203237518", "pairing_code": "1234567890", "device_id": "…", "public_key": "…PEM…" }
+{
+  "device_uuid": "9f1c1f6e-…",
+  "public_key_jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "pairing_code": "1234567890"
+}
 ```
 
-Without a pairing code and without an existing valid session, this returns
-`403`. A known IMEI is not a credential — anyone who learns a 15-digit IMEI must
-not be able to bind a device to that agent, and IMEIs are guessable in bulk.
+The private key is generated non-extractable and never leaves the browser; only
+the JWK above is sent. The field is `public_key_jwk`, a JWK object — not a PEM
+string.
+
+`pairing_code` is required when the agent's policy demands it (`ALWAYS`, or
+`FIRST_DEVICE_ONLY` before the first device exists). If it is missing, this
+returns `422 VALIDATION_FAILED` with `error.details.field = "pairing_code"`,
+which is how the client knows to prompt: the policy is server-side, so the UI
+asks when it is asked rather than guessing. Codes are issued out of band by
+`bin/pair_device.php`, are single-use, and are consumed by a conditional
+`UPDATE`, so two concurrent redemptions cannot both succeed.
+
+A `device_uuid` that already exists and belongs to **this** agent re-binds
+idempotently; the same key must be presented, or it is refused. One belonging to
+another agent returns the same generic `401` as every other failure, so this
+route is not a device-enumeration oracle.
+
+On success the bootstrap refresh family is **revoked** (`BOOTSTRAP_CONSUMED`)
+and a device-bound token and cookie are returned:
+
+```json
+{
+  "device_uuid": "9f1c1f6e-…",
+  "status": "ACTIVE",
+  "device_bound": true,
+  "access_token": "eyJ…",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "refresh_expires_at": "2026-10-28T09:41:05Z",
+  "agent": { "id": 3, "agent_code": "AG-001", "full_name": "Ada Lovelace" }
+}
+```
+
+Retiring the bootstrap family is the point of the binding step. Until a device
+is bound, login is pure credentials, so an unrevoked bootstrap session could mint
+tokens and enrol another device indefinitely; revoking it is scoped to
+`device_id IS NULL` so the bound token minted in the same request is untouched.
 
 ---
 
-### POST /submit
+### POST /api/v1/submit.php
 
 `multipart/form-data` with two parts:
 
 | Part | Type | Notes |
 |---|---|---|
-| `payload` | JSON string | The signed metadata |
+| `payload` | JSON string | The signed metadata. These exact bytes are what the device signature covers. |
 | `file` | binary | JPEG or PNG, ≤ `MAX_UPLOAD_BYTES` |
 
 ```json
@@ -202,20 +243,86 @@ not be able to bind a device to that agent, and IMEIs are guessable in bulk.
 `file_sha256` is **required**: it is what ties the device signature to the file
 bytes, and omitting it would allow the image to be swapped after signing.
 `latitude` and `longitude` must be supplied together or not at all.
+`captured_at` is ISO-8601.
 
-Responses:
+**There is no `agent_id`, `device_uuid`, or IMEI in this payload, by design.**
+Ownership is resolved server-side from the bearer token and the bound device
+row, so the request has no say in whose submission it becomes. The field list is
+enforced as an allowlist: an unknown key — including an `agent_id` — is rejected
+with `422`, not silently dropped, so a client that tries to assert its own owner
+fails loudly instead of appearing to succeed.
+
+#### Responses
 
 | Status | Meaning |
 |---|---|
-| `202` | Accepted and queued for verification |
+| `202` | Accepted and queued for verification. First time this UUID is seen. |
 | `200` | Idempotent replay of your own submission; `idempotent_replay: true` |
 | `409` | That UUID belongs to another agent |
+
+**`202` — first acceptance**
+
+```json
+{
+  "data": {
+    "status": "QUEUED",
+    "submission_uuid": "9f1c…",
+    "submission_id": 41,
+    "self": "/api/v1/submission.php?uuid=9f1c…",
+    "count_claimed": 12,
+    "received_at": "2026-09-28T09:41:07Z",
+    "estimated_review_seconds": 900
+  }
+}
+```
+
+`submission_id` is a JSON **number**, not a string. It is the server's row id and
+is stable for the life of the submission; poll `self` for the verdict.
+
+**`200` — idempotent replay**
+
+Same UUID, same `submission_id` as the original, plus:
+
+```json
+{
+  "data": {
+    "status": "ALREADY_RECEIVED",
+    "submission_uuid": "9f1c…",
+    "submission_id": 41,
+    "idempotent_replay": true,
+    "submission_status": "QUEUED",
+    "self": "/api/v1/submission.php?uuid=9f1c…"
+  }
+}
+```
+
+`202` and `200` are **both terminal for the client**: in either case the server
+holds the file and the local copy may be pruned. A retry is free, because the
+UUID is the idempotency key.
+
+A `2xx` whose body does not match the shape above is **not** an acceptance.
+Treat it as a failure and retry — a proxy returning `200` with an HTML error
+page would otherwise mark a submission as delivered that the server never
+received, and prune the only copy of the evidence.
 
 `202` is correct, not provisional hand-waving: the file is stored and the work
 is scheduled. The verdict arrives asynchronously — see VERIFICATION.md. A `202`
 followed by a `REJECTED` verdict is the system working, not a contradiction.
 
-The response includes `self`, the polling target for the verdict.
+**`409` — idempotency conflict**
+
+```json
+{
+  "error": {
+    "code": "IDEMPOTENCY_CONFLICT",
+    "message": "That submission identifier belongs to another agent."
+  }
+}
+```
+
+The response deliberately contains no `data` envelope: it must not confirm that
+the other agent's submission exists, and must not reveal anything about it.
+This is terminal for the client.
 
 ---
 
@@ -299,13 +406,30 @@ supervisor who made it.
 
 ## Client integration order
 
-1. `GET /auth/challenge` with the IMEI.
-2. Sign the challenge with the device key. `Security\CanonicalPayload::build()`
-   is the reference implementation; the challenge itself is signed with the same
-   detached-signature encoding, not the header scheme.
-3. `POST /auth/login`, store the refresh cookie, keep the access token in memory.
-4. On any `401`, call `/auth/refresh` and retry **once**.
-5. For `submit`, build the multipart body once, hash it, sign, send.
-6. Poll the `self` link until `pending` is false, or refresh proactively at ~80%
+1. `POST /auth/login` with username and password. Keep the returned access token
+   in memory only — never in `localStorage` or `sessionStorage` — and let the
+   `HttpOnly` refresh cookie be stored by the browser.
+2. Generate a non-extractable ECDSA P-256 key pair in the browser
+   (`crypto.subtle.generateKey(..., false, ['sign','verify'])`), persist the
+   `CryptoKey` handle and its public JWK in IndexedDB, and never send the
+   private half anywhere.
+3. `POST /device/register` with the bootstrap token, `device_uuid`,
+   `public_key_jwk`, and a pairing code if the server asks for one. This returns
+   the device-bound token that replaces the bootstrap one.
+4. On a page load with no token in memory, call `/auth/refresh` once to restore
+   it. If that succeeds but IndexedDB has no private key, the state is
+   `UNREGISTERED` — the cookie is fine, the browser cannot prove the device —
+   and the user re-registers rather than logging in again.
+5. On any `401`, call `/auth/refresh` and retry **once**. Serialise refreshes
+   with `navigator.locks`: the refresh token is single-use, so two tabs (or two
+   concurrent requests) refreshing independently present a rotated token and the
+   server revokes the family. Broadcast the new access token to sibling tabs
+   rather than storing it.
+5. For `submit`, serialise the `payload` JSON **once**, sign that string, then
+   send it as the `payload` part alongside `file`. Never sign the assembled
+   multipart body — the boundary is not reproducible server-side.
+6. On `202` or `200` with a well-formed body, the submission is delivered:
+   prune the local photo. On any other outcome, keep it and retry.
+7. Poll the `self` link until `pending` is false, or refresh proactively at ~80%
    of `expires_in` rather than waiting for the 401 — that saves a round trip on
    flaky mobile networks.

@@ -45,9 +45,32 @@ use FieldPulse\Support\Uuid;
  * The third case is a UUID collision or a replay attempt, and it must never
  * return the other agent's submission details, which is why the lookup that
  * detects it returns nothing but the conflict itself.
+ *
+ * Ownership is never taken from the request
+ * -----------------------------------------
+ * There is no agent_id, no IMEI, and no device_uuid in the payload, and adding
+ * any of them would be a vulnerability rather than a convenience: a client that
+ * can name its own owner can submit against another agent's ledger, and
+ * idempotency keys would stop meaning anything. $context->agentId() is resolved
+ * by Http\Kernel from the bearer token and the device record, so the bytes on
+ * the wire have no say in whose submission this becomes. ALLOWED_PAYLOAD_KEYS
+ * enforces that as a hard allowlist, so an agent_id smuggled in alongside a
+ * valid payload is rejected rather than ignored.
  */
 final class SubmitController implements ActionInterface
 {
+    /**
+     * Reported in the 200 body only. SubmissionRepository::QUEUED and friends
+     * are the row's lifecycle; this is the fact that the request was a retry.
+     */
+    public const STATUS_ALREADY_RECEIVED = 'ALREADY_RECEIVED';
+
+    /**
+     * Fields a client may send. Deliberately an allowlist and not a denylist:
+     * a field that is not on this list is rejected with 422, which is the only
+     * way an ownership claim from the client can be guaranteed to fail loudly
+     * rather than be quietly dropped.
+     */
     private const ALLOWED_PAYLOAD_KEYS = [
         'submission_uuid',
         'count_claimed',
@@ -250,21 +273,21 @@ final class SubmitController implements ActionInterface
 
         return Response::json([
             'data' => [
-                'submission_uuid' => $submissionUuid,
                 'status'          => SubmissionRepository::QUEUED,
+                'submission_uuid' => $submissionUuid,
+                'submission_id'   => $submissionId,
+                // The polling target for the verdict, and the one a client must
+                // use. It sits at the top level of `data` rather than inside a
+                // `links` object: there is exactly one of it, and a client that
+                // has to guess that it is nested one level down is a client that
+                // will eventually guess wrong and never learn what happened to the
+                // photo the agent just took.
+                'self'            => $this->selfLink($submissionUuid),
                 'count_claimed'   => $countClaimed,
                 'received_at'     => Clock::sql(),
-                // The client needs to know what to poll. The worker runs on a
-                // one-minute cron, so this is an honest lower bound.
+                // The worker runs on a one-minute cron, so this is an honest
+                // lower bound rather than a promise.
                 'estimated_review_seconds' => 120,
-                'links'           => [
-                    // Polling target for the verdict. Not optional to a client:
-                    // without it a PWA can only read the agent's weekly total
-                    // from the leaderboard and has no way to learn what happened
-                    // to the photo they just took.
-                    'self'        => '/api/v1/submission.php?uuid=' . rawurlencode($submissionUuid),
-                    'leaderboard' => '/api/v1/leaderboard',
-                ],
             ],
         ], 202);
     }
@@ -413,16 +436,40 @@ final class SubmitController implements ActionInterface
 
         // 200, not 202: the client asked "did you get it", and the answer is
         // yes, with the current state of the original submission.
+        //
+        // `status` is the literal ALREADY_RECEIVED and deliberately NOT the
+        // row's own status. A retrying client has to be able to branch on
+        // "was this accepted" without knowing the six-value submission state
+        // machine, and collapsing the two would make a VERIFIED replay
+        // indistinguishable from a fresh acceptance at the same status value.
+        // The underlying state is available separately as `submission_status`.
         return Response::json([
             'data' => [
-                'submission_uuid' => (string) $existing['submission_uuid'],
-                'status'          => (string) $existing['status'],
-                'count_claimed'   => (int) $existing['count_claimed'],
-                'received_at'     => (string) $existing['server_received_at'],
-                'verified_at'     => $existing['verified_at'],
+                'status'           => self::STATUS_ALREADY_RECEIVED,
+                'submission_uuid'  => (string) $existing['submission_uuid'],
+                'submission_id'    => (int) $existing['id'],
                 'idempotent_replay' => true,
+                'submission_status' => (string) $existing['status'],
+                'count_claimed'    => (int) $existing['count_claimed'],
+                'received_at'      => (string) $existing['server_received_at'],
+                'verified_at'      => $existing['verified_at'],
+                'self'             => $this->selfLink((string) $existing['submission_uuid']),
             ],
         ], 200);
+    }
+
+    /**
+     * The canonical polling target for a submission's verdict.
+     *
+     * One method, so the 202 and 200 bodies cannot drift apart. The bare UUID
+     * goes through rawurlencode even though a UUID needs no escaping: this
+     * returns a value a client will put straight into a fetch URL, and the
+     * encoding is what makes that safe for whatever the identifier turns out to
+     * be.
+     */
+    private function selfLink(string $submissionUuid): string
+    {
+        return '/api/v1/submission.php?uuid=' . rawurlencode($submissionUuid);
     }
 
     private function isDuplicate(\Throwable $e): bool

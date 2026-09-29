@@ -45,11 +45,59 @@ final class TokenService
     }
 
     /**
+     * Mint a *bootstrap* session: an agent with no device bound.
+     *
+     * Login is pure credentials, so at that moment the client provably has no
+     * device — its key pair is generated in the browser and registered
+     * afterwards. A session that cannot be represented is a login response with
+     * nowhere to put its refresh cookie, so bootstrap sessions exist. They are
+     * deliberately weak: bound to no device, they cannot produce a valid device
+     * signature, and Security\Authenticator admits them only to the bearer-only
+     * bootstrap route. DeviceController replaces them on completion.
+     *
+     * @param  array<string,mixed> $agent
+     * @return array{access_token:string,refresh_token:string,refresh_expires_at:string,expires_in:int,token_type:string,device_bound:bool}
+     */
+    public function issueBootstrap(array $agent, ?string $userAgent = null): array
+    {
+        $c = Config::instance();
+
+        $accessToken = Jwt::issue([
+            'agent_id'    => (int) $agent['id'],
+            'agent_code'  => (string) $agent['agent_code'],
+            'device_uuid' => null,
+            'scope'       => 'bootstrap',
+        ]);
+
+        $rawRefresh     = Str::base64UrlEncode(random_bytes(48));
+        $family         = Uuid::v4();
+        $refreshExpires = RefreshTokenRepository::expiryUtc($c->int('security.refresh_ttl'));
+
+        $this->tokens->create(
+            (int) $agent['id'],
+            null,
+            RefreshTokenRepository::hash($rawRefresh),
+            $family,
+            $refreshExpires,
+            $userAgent === null ? null : hash('sha256', $userAgent)
+        );
+
+        return [
+            'access_token'      => $accessToken,
+            'refresh_token'     => $rawRefresh,
+            'refresh_expires_at' => $refreshExpires,
+            'expires_in'        => $c->int('security.access_ttl'),
+            'token_type'        => 'Bearer',
+            'device_bound'      => false,
+        ];
+    }
+
+    /**
      * Mint an access token and a refresh token for an agent/device pair.
      *
      * @param  array<string,mixed> $agent
      * @param  array<string,mixed> $device
-     * @return array{access_token:string,refresh_token:string,refresh_expires_at:string,expires_in:int,token_type:string}
+     * @return array{access_token:string,refresh_token:string,refresh_expires_at:string,expires_in:int,token_type:string,device_bound:bool}
      */
     public function issue(array $agent, array $device, ?string $family = null, ?string $userAgent = null): array
     {
@@ -92,13 +140,14 @@ final class TokenService
             'refresh_expires_at' => $refreshExpires,
             'expires_in'        => $c->int('security.access_ttl'),
             'token_type'        => 'Bearer',
+            'device_bound'      => true,
         ];
     }
 
     /**
      * Exchange a refresh token for a new pair.
      *
-     * @return array{access_token:string,refresh_token:string,refresh_expires_at:string,expires_in:int,token_type:string}
+     * @return array{access_token:string,refresh_token:string,refresh_expires_at:string,expires_in:int,token_type:string,device_bound:bool}
      * @throws ApiException
      */
     public function rotate(string $rawToken, ?string $userAgent = null): array
@@ -114,13 +163,22 @@ final class TokenService
         // device (or the original device was cloned). Kill the family.
         if ($row['revoked_at'] !== null) {
             $this->tokens->revokeFamily((string) $row['token_family'], 'REUSE_DETECTED');
-            $this->devices->setStatus((int) $row['device_id'], DeviceStatus::REVOKED);
+
+            /*
+             * Only revoke the *device* when the token was ever bound to one.
+             * A bootstrap session has no device, and (int) null is 0, so the
+             * unguarded form would try to revoke device 0 — a row that either
+             * does not exist or, worse, belongs to somebody.
+             */
+            if ($row['device_id'] !== null) {
+                $this->devices->setStatus((int) $row['device_id'], DeviceStatus::REVOKED);
+            }
 
             $this->audit->record([
                 'actor_agent_id' => (int) $row['agent_id'],
                 'action'         => 'auth.refresh_reuse_detected',
                 'entity_type'    => 'device',
-                'entity_id'      => (int) $row['device_id'],
+                'entity_id'      => $row['device_id'] === null ? null : (int) $row['device_id'],
                 'metadata'       => ['family' => (string) $row['token_family']],
             ]);
 
@@ -137,17 +195,32 @@ final class TokenService
         }
 
         $agent  = $this->agents->findById((int) $row['agent_id']);
-        $device = $this->devices->findById((int) $row['device_id']);
+        $device = $row['device_id'] === null ? null : $this->devices->findById((int) $row['device_id']);
 
-        if ($agent === null || $device === null) {
+        if ($agent === null) {
             throw new ApiException(401, ErrorCode::REFRESH_INVALID, 'Refresh token is no longer valid.');
         }
 
-        // Re-check both states on refresh: a device revoked between login and
-        // refresh must not be able to extend its session.
+        // Re-check the agent state on refresh: an agent suspended between login
+        // and refresh must not be able to extend its session.
         if ($agent['status'] !== AgentRepository::ACTIVE) {
             $this->tokens->revokeFamily((string) $row['token_family'], 'AGENT_INACTIVE');
             throw new ApiException(403, ErrorCode::AGENT_INACTIVE, 'This agent is not active.');
+        }
+
+        /*
+         * A bootstrap refresh token belongs to a session that never completed
+         * device registration — the page reloaded between login and the
+         * registration call. Rotating it yields another bootstrap session, so
+         * the client can still finish registering. It is not an error, and it
+         * is not a licence to skip registration: a bootstrap token cannot
+         * produce a device signature, so it cannot reach any signed route.
+         */
+        if ($device === null) {
+            $issued = $this->issueBootstrap($agent, $userAgent);
+            $this->linkSuccessor((int) $row['id'], $issued['refresh_token']);
+
+            return $issued;
         }
 
         if (!DeviceStatus::canSubmit((string) $device['status'])) {
@@ -161,13 +234,25 @@ final class TokenService
 
         $issued = $this->issue($agent, $device, (string) $row['token_family'], $userAgent);
 
-        // Find the successor created above and link it to the old token.
-        $successor = $this->tokens->findByHash(RefreshTokenRepository::hash($issued['refresh_token']));
-        if ($successor !== null) {
-            $this->tokens->markRotated((int) $row['id'], (int) $successor['id']);
-        }
+        $this->linkSuccessor((int) $row['id'], $issued['refresh_token']);
 
         return $issued;
+    }
+
+    /**
+     * Point a rotated token at its replacement.
+     *
+     * The link is what makes later presentation of the *old* token detectable as
+     * reuse rather than as an unknown token, which is the difference between
+     * revoking a family and doing nothing.
+     */
+    private function linkSuccessor(int $previousId, string $successorRaw): void
+    {
+        $successor = $this->tokens->findByHash(RefreshTokenRepository::hash($successorRaw));
+
+        if ($successor !== null) {
+            $this->tokens->markRotated($previousId, (int) $successor['id']);
+        }
     }
 
     public function revokeRaw(string $rawToken, string $reason): void
@@ -182,6 +267,16 @@ final class TokenService
     public function revokeDeviceSessions(int $deviceId, string $reason): void
     {
         $this->tokens->revokeAllForDevice($deviceId, $reason);
+    }
+
+    /**
+     * Retire the bootstrap sessions for an agent, once a device is bound.
+     *
+     * @return int Number of sessions revoked.
+     */
+    public function revokeBootstrapSessions(int $agentId, string $reason): int
+    {
+        return $this->tokens->revokeUnboundForAgent($agentId, $reason);
     }
 
     /**

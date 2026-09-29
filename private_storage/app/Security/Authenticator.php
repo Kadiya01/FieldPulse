@@ -110,6 +110,68 @@ final class Authenticator
     }
 
     /**
+     * Stage 1 for a session that has no device bound yet.
+     *
+     * Login is pure credentials, so the client arrives at device registration
+     * holding a bootstrap token: a real, correctly signed, unexpired token
+     * whose `device_uuid` claim is null. This method admits exactly that, and
+     * only that, to the registration route.
+     *
+     * What it deliberately does NOT do is skip any check. The agent row is
+     * re-read and its status re-checked, so a suspended account cannot register
+     * a device; the token's `scope` must be `bootstrap`, so a normal token
+     * cannot be traded for a device binding it never needed; and the caller is
+     * responsible for enforcing the pairing policy, which is a property of the
+     * agent's device count and not of the token.
+     *
+     * The returned AuthContext carries a null device, so any code that reaches
+     * for it must handle that. That is the point: a bootstrap session is
+     * structurally incapable of signing anything, because there is no key.
+     *
+     * @throws ApiException
+     */
+    public function authenticateBootstrap(Request $request): AuthContext
+    {
+        $token = $request->bearerToken();
+
+        if ($token === null) {
+            throw new ApiException(
+                401,
+                ErrorCode::UNAUTHENTICATED,
+                'A Bearer access token is required.'
+            );
+        }
+
+        $claims = Jwt::verifyAndDecode($token);
+
+        if (($claims['scope'] ?? null) !== 'bootstrap') {
+            throw new ApiException(
+                401,
+                ErrorCode::TOKEN_INVALID,
+                'This token cannot be used to register a device.'
+            );
+        }
+
+        $agent = $this->agents->findById((int) $claims['sub']);
+
+        if ($agent === null) {
+            throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'This token cannot be used to register a device.');
+        }
+
+        if ((string) $agent['status'] !== AgentRepository::ACTIVE) {
+            throw new ApiException(
+                403,
+                ErrorCode::AGENT_INACTIVE,
+                (string) $agent['status'] === AgentRepository::SUSPENDED
+                    ? 'This account is suspended. Contact your supervisor.'
+                    : 'This account is not active.'
+            );
+        }
+
+        return new AuthContext($agent, null, $claims);
+    }
+
+    /**
      * Stage 2. Verifies the signature and consumes the nonce.
      *
      * Order within this stage: validate header shape -> clock skew -> signature

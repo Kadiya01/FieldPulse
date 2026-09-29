@@ -12,9 +12,17 @@ use FieldPulse\Support\Clock;
  */
 final class RefreshTokenRepository extends Repository
 {
+    /**
+     * Record a refresh token.
+     *
+     * $deviceId is nullable: a session created by login, before the browser has
+     * registered a device, is a bootstrap session bound to no device. Those
+     * tokens can only reach the bearer-only bootstrap route. See
+     * TokenService::issueBootstrap().
+     */
     public function create(
         int $agentId,
-        int $deviceId,
+        ?int $deviceId,
         string $tokenHash,
         string $family,
         string $expiresAt,
@@ -102,6 +110,31 @@ final class RefreshTokenRepository extends Repository
         return $this->exec(
             'UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP(), revoked_reason = :reason
               WHERE agent_id = :agent_id AND revoked_at IS NULL',
+            ['reason' => $reason, 'agent_id' => $agentId]
+        );
+    }
+
+    /**
+     * Revoke only the sessions that are not yet bound to a device.
+     *
+     * A bootstrap session exists for the short window between a correct
+     * password and device registration. Once a device is bound, a surviving
+     * bootstrap session is pure liability: it can still mint another bootstrap
+     * token, and therefore enrol another device, long after the agent has
+     * proved possession of a key. That is the whole reason the binding step
+     * exists, so the bootstrap family is retired at the moment it is spent.
+     *
+     * Scoped by device_id IS NULL rather than by family, because the controller
+     * does not necessarily have the bootstrap cookie to hand — the registration
+     * request authenticates on the access token — and failing to retire the
+     * family would leave the gap open. The device-bound token minted in the
+     * same request is not affected, because its device_id is already set.
+     */
+    public function revokeUnboundForAgent(int $agentId, string $reason): int
+    {
+        return $this->exec(
+            'UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP(), revoked_reason = :reason
+              WHERE agent_id = :agent_id AND device_id IS NULL AND revoked_at IS NULL',
             ['reason' => $reason, 'agent_id' => $agentId]
         );
     }

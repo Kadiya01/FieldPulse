@@ -34,8 +34,12 @@ final class DeviceStatus
     /**
      * Map a non-ACTIVE status onto the specific client-facing error, so the PWA
      * can tell the agent to call support vs. re-pair.
+     *
+     * Returns a code string, not an ErrorCode instance: ErrorCode is a closed
+     * set of string constants, and declaring the class as the return type made
+     * every revocation a fatal TypeError instead of a 403.
      */
-    public static function denialCode(string $status): \FieldPulse\Http\ErrorCode
+    public static function denialCode(string $status): string
     {
         return match ($status) {
             self::REVOKED  => \FieldPulse\Http\ErrorCode::DEVICE_REVOKED,

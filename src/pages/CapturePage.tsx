@@ -4,7 +4,7 @@ import { processImageCapture } from '../camera/compress';
 import { triggerSync } from '../sync/coordinator';
 import { Link } from 'react-router-dom';
 import { Camera, Send, Database, AlertTriangle } from 'lucide-react';
-import { getDeviceIdentity } from '../crypto/keys';
+import { getDeviceIdentity, sha256Hex } from '../crypto/keys';
 
 export default function CapturePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -26,7 +26,7 @@ export default function CapturePage() {
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
         }
-      } catch (err) {
+      } catch {
         setErrorMsg('Camera access denied or unavailable.');
       }
     }
@@ -69,33 +69,47 @@ export default function CapturePage() {
 
       // 1. Process and compress image client-side before storage
       const { blob: compressedBlob } = await processImageCapture(photoBlob);
-      
+
       // 2. Fetch browser GPS if available
-      let lat = null, lng = null;
+      let lat: number | null = null,
+        lng: number | null = null,
+        accuracy: number | null = null;
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 });
         });
         lat = pos.coords.latitude;
         lng = pos.coords.longitude;
-      } catch (e) {
-        // Ignore GPS failure, we don't trust client GPS anyway as per rules, 
-        // but we collect it as a claim if available.
+        // Sent as accuracy_m so the server's GPS_UNRELIABLE check can tell a
+        // genuine in-fence reading from a coarse network fix.
+        accuracy = pos.coords.accuracy;
+      } catch {
+        // No position, and that is a valid outcome rather than a failure: the
+        // server scores a missing coordinate differently from a bad one, and
+        // accuracy_m only means something alongside lat/lng, so nothing is
+        // sent rather than a partial reading. The agent can still submit.
       }
 
       // 3. Create idempotency UUID
       const submission_uuid = crypto.randomUUID();
       const now = Date.now();
 
+      // The digest is taken over the bytes that are stored, so that the hash
+      // sent at upload time provably describes this blob. Recomputing it later
+      // against a re-encoded copy would produce an unresolvable hash mismatch.
+      const file_sha256 = await sha256Hex(compressedBlob);
+
       // 4. Persist to Dexie (Offline-First)
+      //
+      // No agent_id: ownership is derived server-side from the access token and
+      // the bound device, and the request payload has no field for it.
       await db.submissions.put({
         submission_uuid,
-        agent_id: 'current_agent', // Would come from auth state
-        device_uuid: device.device_uuid,
         count_claimed: countClaimed,
-        client_latitude: lat,
-        client_longitude: lng,
-        client_captured_at: Math.floor(now / 1000),
+        latitude: lat,
+        longitude: lng,
+        accuracy_m: accuracy,
+        captured_at: new Date(now).toISOString(),
         created_at: now,
         updated_at: now,
         status: 'PENDING',
@@ -108,6 +122,7 @@ export default function CapturePage() {
         photo_blob: compressedBlob,
         photo_mime_type: compressedBlob.type,
         photo_size: compressedBlob.size,
+        file_sha256,
         client_exif: '{}'
       });
 

@@ -74,7 +74,13 @@ final class LeaderboardRepository extends Repository
         $selfRank   = null;
 
         if ($selfAgentId !== null) {
-            $self = $this->selfRow($periodStartDate, $selfAgentId, $siteId, $where, $params);
+            /*
+             * No $where is passed: filters() yields a string, and the earlier
+             * signature here declared array, so every leaderboard request for a
+             * logged-in agent died on a TypeError. The clause is rebuilt from
+             * scratch below anyway, so the argument was never used.
+             */
+            $self = $this->selfRow($periodStartDate, $selfAgentId, $siteId, $params);
 
             if ($self !== null) {
                 $selfRank = (int) $this->value(
@@ -114,7 +120,10 @@ final class LeaderboardRepository extends Repository
      * @param  array<string,mixed> $params
      * @return array<string,mixed>|null
      */
-    private function selfRow(string $period, int $agentId, ?int $siteId, array $where, array $params): ?array
+    /**
+     * @param array<string,mixed> $params
+     */
+    private function selfRow(string $period, int $agentId, ?int $siteId, array $params): ?array
     {
         $sql = 'SELECT a.id AS agent_id, a.agent_code, a.full_name,
                        s.total_verified_count

@@ -25,11 +25,63 @@ final class Validator
     }
 
     /**
+     * A login username: 3-64 characters from a deliberately small alphabet.
+     *
+     * The alphabet is restrictive on purpose. Usernames are compared in a
+     * lookup, echoed in an audit record, and shown in a login form; keeping them
+     * to letters, digits, dot, underscore and hyphen means no control
+     * characters, no leading or trailing whitespace, and nothing that makes
+     * two visually identical names distinguishable to the person reading the
+     * audit log. Normalising the case at login rather than storing it folded
+     * means the stored form is the one the operator chose.
+     */
+    public static function username(mixed $value, string $field = 'username'): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation('Field "' . $field . '" is required.', ['field' => $field]);
+        }
+
+        $username = trim($value);
+
+        if (preg_match('/^[A-Za-z0-9._-]{3,64}$/', $username) !== 1) {
+            throw ApiException::validation(
+                'Username must be 3 to 64 characters using letters, digits, dot, underscore or hyphen.',
+                ['field' => $field]
+            );
+        }
+
+        /*
+         * At least one letter, which the character class alone does not require.
+         *
+         * An all-digit username is an IMEI-shaped one. Phase 2 removed IMEI as a
+         * credential, and this makes that structural rather than incidental: an
+         * agent's hardware serial number can never be *chosen* as a username, so
+         * there is no way for the two identifier spaces to drift into each other
+         * and for someone's device to end up naming their account. It is a
+         * naming convention as much as a control, and it is cheap to enforce
+         * here instead of explaining in the enrolment docs.
+         */
+        if (preg_match('/[A-Za-z]/', $username) !== 1) {
+            throw ApiException::validation(
+                'Username must contain at least one letter.',
+                ['field' => $field]
+            );
+        }
+
+        return $username;
+    }
+
+    /**
      * IMEI: 14-16 digits, and Luhn-valid.
      *
-     * The Luhn check is not decoration. Most of the 15-digit space is not a
-     * possible IMEI, so this alone removes ~90% of blind-guess space before any
-     * database lookup happens.
+     * NOT AN AUTHENTICATION FACTOR. This validates the *format* of an
+     * administrative attribute only. Nothing in the login, refresh or device
+     * registration flow calls this, and an IMEI does not authenticate anyone:
+     * it is a hardware serial number, printed on the handset and the box and
+     * recycled between owners, and a browser cannot read it at all.
+     *
+     * The Luhn check remains because it is still worth rejecting a mistyped
+     * value that is being stored for support purposes.
      */
     public static function imei(mixed $value, string $field = 'imei'): string
     {

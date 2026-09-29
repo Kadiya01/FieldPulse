@@ -135,11 +135,17 @@ final class SignatureVerifier
     }
 
     /**
-     * Confirm a freshly registered key actually controls the matching private
-     * key. Without this, a caller could register someone else's public JWK and
-     * then impersonate them.
+     * Confirm a freshly supplied public key is actually controlled by whoever
+     * presented it, by checking a signature over an arbitrary message.
      *
-     * @param array<string,mixed> $jwk
+     * Kept as a general primitive rather than a login-specific one: the
+     * challenge→sign→login round trip is gone, so this is no longer how a
+     * session starts, but verifying that a key controls its own private half is
+     * a property worth being able to assert anywhere a JWK is accepted. Without
+     * it, a caller could register someone else's public JWK and then
+     * impersonate them.
+     *
+     * @param  array<string,mixed> $jwk
      * @throws ApiException
      */
     public static function assertProofOfPossession(array $jwk, string $message, string $signatureB64): void
@@ -153,13 +159,13 @@ final class SignatureVerifier
         $raw = \FieldPulse\Support\Str::base64UrlDecode($signatureB64);
 
         if ($raw === null) {
-            throw new ApiException(401, ErrorCode::CHALLENGE_INVALID, 'Malformed proof-of-possession signature.');
+            throw new ApiException(401, ErrorCode::SIGNATURE_INVALID, 'Malformed proof-of-possession signature.');
         }
 
         if (@openssl_verify($message, $raw, $key, OPENSSL_ALGO_SHA256) !== 1) {
             throw new ApiException(
                 401,
-                ErrorCode::CHALLENGE_INVALID,
+                ErrorCode::SIGNATURE_INVALID,
                 'The supplied signature does not match the supplied public key.'
             );
         }

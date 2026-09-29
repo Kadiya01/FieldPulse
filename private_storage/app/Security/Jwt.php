@@ -167,8 +167,47 @@ final class Jwt
             throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'Access token subject is invalid.');
         }
 
-        if (!isset($claims['device_uuid']) || !is_string($claims['device_uuid'])) {
-            throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'Access token is not bound to a device.');
+        /*
+         * device_uuid is required to be PRESENT, and may be null.
+         *
+         * A null device_uuid is a bootstrap session: login is pure credentials,
+         * so at the moment the token is minted the client provably has no bound
+         * device. Rejecting null here would make the bootstrap token
+         * unrepresentable and force login to either bind a device it does not
+         * have yet or drop the refresh cookie on the floor.
+         *
+         * This method checks the claim is well formed, not that it is
+         * *sufficient* for a given route. That distinction is the whole design:
+         * Authenticator::authenticate() requires a non-null device_uuid,
+         * authenticateBootstrap() requires a null one, and neither can be
+         * reached with the other's token. A token that is well formed but
+         * insufficient for the route it is presented to fails there, which is
+         * where the route's requirement is visible.
+         */
+        if (!array_key_exists('device_uuid', $claims)) {
+            throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'Access token does not declare a device binding.');
+        }
+
+        $deviceUuid = $claims['device_uuid'];
+
+        if ($deviceUuid !== null && (!is_string($deviceUuid) || $deviceUuid === '')) {
+            throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'Access token device binding is invalid.');
+        }
+
+        /*
+         * A bootstrap token must SAY it is one. Without this, scope is inferred
+         * from the absence of a device claim, and any future code path that
+         * mints a device-less token for some other reason would silently
+         * inherit bootstrap privileges.
+         */
+        $scope = $claims['scope'] ?? null;
+
+        if ($deviceUuid === null && $scope !== 'bootstrap') {
+            throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'Access token is not a bootstrap session.');
+        }
+
+        if ($deviceUuid !== null && $scope === 'bootstrap') {
+            throw new ApiException(401, ErrorCode::TOKEN_INVALID, 'Access token is internally inconsistent.');
         }
     }
 

@@ -366,7 +366,6 @@ register_shutdown_function(static function () use (
         foreach ($createdAgentIds as $agentId) {
             Connection::execute('DELETE FROM refresh_tokens WHERE agent_id = :id', ['id' => $agentId]);
             Connection::execute('DELETE FROM pairing_codes WHERE agent_id = :id', ['id' => $agentId]);
-            Connection::execute('DELETE FROM auth_challenges WHERE agent_id = :id', ['id' => $agentId]);
         }
 
         foreach ($createdDeviceIds as $deviceId) {
@@ -401,7 +400,7 @@ $t->test('every table the code writes to exists', function (TestRunner $t): void
     $tables = [
         'agents', 'devices', 'refresh_tokens', 'submissions',
         'submission_verifications', 'processing_jobs', 'agent_performance_summary',
-        'audit_logs', 'request_nonces', 'auth_challenges', 'agent_sites',
+        'audit_logs', 'request_nonces', 'agent_sites',
         'login_attempts', 'pairing_codes',
     ];
 

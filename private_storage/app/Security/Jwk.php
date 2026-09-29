@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace FieldPulse\Security;
 
+use FieldPulse\Http\ApiException;
 use FieldPulse\Support\Str;
 
 /**

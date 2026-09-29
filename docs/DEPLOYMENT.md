@@ -104,12 +104,13 @@ because the spec's requirements are only satisfiable with extra columns:
 | Migration | Why it exists |
 |---|---|
 | 009 `request_nonces` | §7 replay protection needs durable nonce state |
-| 010 `auth_challenges` | §6 PoP challenge must survive across two requests |
 | 011 `agent_sites` | §12 geofence needs operator-set centres; `agents` has no location |
 | 012 `login_attempts` | §6 rate limiting across PHP processes |
 | 013 `pairing_codes` | Out-of-band device binding (see §Security model) |
 | 014 `agent_role` | §13 review decisions need a supervisor role |
 | 015 review provenance | Who reviewed what, when, and why |
+| 017 `add_username_password` | §6 username/password credentials; `refresh_tokens.device_id` becomes nullable |
+| 018 `retire_auth_challenges` | Drops the challenge table; §6 is now credentials, not PoP-on-login
 
 ---
 
@@ -263,15 +264,31 @@ file, so this is a correctness check, not a hardening preference.
 
 ## 9. Security model in one paragraph
 
-An IMEI **identifies**; it never authenticates. Login requires a P-256 signature
-from a key already bound to the agent, over a server-issued one-time challenge.
-That key is bound by an operator-issued one-time pairing code, or from a handset
-that already holds a valid session. Access tokens are HS256 JWTs, 15 minutes.
-Refresh tokens are SHA-256 hashes in an HttpOnly/Secure/SameSite=Strict cookie,
-rotated on every use, with reuse revoking the whole token family. Every
-mutating request carries a device signature over
-`METHOD\nPATH\nTIMESTAMP\nNONCE\nSHA256HEX(BODY)` with a durable one-time nonce
-and ±300s skew. Nothing in the request body is trusted for authorisation.
+Login is a **username and password** (bcrypt). IMEI **identifies**; it never
+authenticates and is not accepted anywhere in the auth flow — it is printed on
+the handset and the box, is recycled between owners, and a browser cannot read
+it at all, so it is a user-typed string with the assurance of a serial number.
+Every login failure is byte-identical, and the password hash is verified even
+when the username does not exist, so neither the body nor the response time is
+an account-enumeration oracle.
+
+Login returns a deliberately weak **bootstrap** JWT (`scope=bootstrap`,
+`device_uuid=null`). The only route it may reach is `/device/register`, which
+binds a browser-generated non-extractable ECDSA P-256 public JWK to the agent and
+upgrades the session to a device-bound token. Binding is authorised by an
+operator-issued one-time pairing code, and it revokes the bootstrap refresh
+family — until a device is bound, the agent can only prove a password.
+
+Access tokens are HS256 JWTs, 15 minutes. Refresh tokens are SHA-256 hashes in
+an HttpOnly/Secure/SameSite=Strict cookie, rotated on every use, with reuse
+revoking the whole token family. Every mutating request carries a device
+signature over `METHOD
+PATH
+TIMESTAMP
+NONCE
+SHA256HEX(BODY)` with a durable
+one-time nonce and ±300s skew. Nothing in the request body is trusted for
+authorisation.
 
 ---
 

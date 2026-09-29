@@ -7,10 +7,16 @@ namespace FieldPulse\Database;
 /**
  * agents access.
  *
- * Note the absence of any "find by code then compare" helper: in a zero-password
- * deployment the agent_code is not a credential, and the only lookup that
- * carries security weight is by IMEI, which is always followed by a proof of
- * possession check in Security\ChallengeService.
+ * The credential lookup is by username, and the only thing that proves an agent
+ * is who they claim to be is a password verified with password_verify() against
+ * the bcrypt hash in password_hash.
+ *
+ * IMEI is not a credential and is not used to authenticate anything. It is
+ * retained as an administrative attribute — useful for support and for matching
+ * a handset to an ERP record — and deliberately reachable only through
+ * findByImei(), which no authentication path calls. It is not a secret: it is
+ * printed on the handset, printed on the box, and recycled between owners, and
+ * a browser cannot read it at all.
  */
 final class AgentRepository extends Repository
 {
@@ -31,7 +37,77 @@ final class AgentRepository extends Repository
     }
 
     /**
-     * The lookup behind the zero-password login: IMEI -> agent.
+     * The lookup behind login: username -> agent.
+     *
+     * Case-insensitive on the caller's side, case-sensitively matched here.
+     * MySQL's default utf8mb4_unicode_ci collation already compares
+     * case-insensitively, so "Ada" and "ada" cannot both exist and a login is
+     * unambiguous. Storing the case the operator chose is what makes the
+     * account recognisable to the person who owns it.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function findByUsername(string $username): ?array
+    {
+        return $this->one(
+            'SELECT * FROM agents WHERE username = :u',
+            ['u' => $username]
+        );
+    }
+
+    /**
+     * Give an agent a username and password.
+     *
+     * $passwordHash must already be a password_hash() output. This method never
+     * hashes anything itself so that there is exactly one place in the codebase
+     * that calls password_hash(), and it is a command run by an operator rather
+     * than a request handler.
+     */
+    public function setCredentials(int $agentId, string $username, string $passwordHash): void
+    {
+        $this->exec(
+            'UPDATE agents
+                SET username = :u, password_hash = :h, password_updated_at = UTC_TIMESTAMP()
+              WHERE id = :id',
+            ['u' => $username, 'h' => $passwordHash, 'id' => $agentId]
+        );
+    }
+
+    /**
+     * Clear an agent's password credential without deleting the account.
+     *
+     * Setting password_hash to NULL makes the agent unable to log in, which is
+     * the correct meaning of "revoke this credential" and is not the same as
+     * deleting the agent, which would orphan their submissions.
+     */
+    public function clearCredentials(int $agentId): void
+    {
+        $this->exec(
+            'UPDATE agents SET password_hash = NULL, password_updated_at = UTC_TIMESTAMP() WHERE id = :id',
+            ['id' => $agentId]
+        );
+    }
+
+    /**
+     * True when the agent holds a usable password credential.
+     *
+     * Checked by the login controller so that a row enrolled under the previous
+     * IMEI model, whose password_hash is NULL, fails as "no such user" rather
+     * than reaching password_verify() with an empty hash.
+     */
+    public function hasPasswordCredential(int $agentId): bool
+    {
+        $value = Connection::fetchValue(
+            'SELECT password_hash FROM agents WHERE id = :id',
+            ['id' => $agentId]
+        );
+
+        return is_string($value) && $value !== '';
+    }
+
+    /**
+     * The lookup that used to sit behind login. Retained for administrative
+     * and support use only.
      *
      * @return array<string,mixed>|null
      */

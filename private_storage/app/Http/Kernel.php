@@ -26,7 +26,6 @@ final class Kernel
 {
     /** @var array<string,class-string> */
     private const ROUTES = [
-        'auth.challenge'   => \FieldPulse\Domain\ChallengeController::class,
         'auth.login'       => \FieldPulse\Domain\LoginController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
@@ -48,24 +47,29 @@ final class Kernel
      * requirement here means an unauthenticated route is something you can see
      * in one place.
      *
-     *   public    no credentials at all
-     *   bearer    access JWT, plus a live agent and ACTIVE device
-     *   signed    bearer, plus a valid device PoP signature over this request
-     *   operator  bearer, plus SUPERVISOR or ADMIN role
+     *   public     no credentials at all
+     *   bootstrap  a bootstrap access JWT: a live agent, and explicitly NO
+     *              device. Only device.register accepts this. A bootstrap
+     *              session has no key, so it cannot produce a signature and
+     *              therefore cannot reach any signed route; that is the whole
+     *              reason it is a separate mode rather than a weaker `bearer`.
+     *   bearer     access JWT, plus a live agent and ACTIVE device
+     *   signed     bearer, plus a valid device signature over this request
+     *   operator   bearer, plus SUPERVISOR or ADMIN role
      *
-     * device.register is public, and that is not an oversight. A first-time
-     * pairing happens before the agent has any token or any key on record, so
-     * requiring a credential here would make pairing impossible. It is protected
-     * inside the controller instead, by two factors the client cannot forge: an
-     * operator-issued pairing code, or an existing valid access token for the
-     * same agent. Both are checked there, per request.
+     * device.register is `bootstrap`, not `public`. It was public while login
+     * was IMEI-based, because a first-time pairing had to happen before the
+     * agent had any credential. That is no longer true: login is username and
+     * password, so by the time a device is registered the agent is
+     * authenticated, and the route is gated on that bootstrap token plus the
+     * configured pairing policy. Making it public would let anyone with a
+     * stolen password bind their own key to the account.
      */
     private const AUTH = [
-        'auth.challenge'   => 'public',
         'auth.login'       => 'public',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
-        'device.register'  => 'public',   // authorised in-controller; see above
+        'device.register'  => 'bootstrap',
         'submit'           => 'signed',
         'submission.status' => 'bearer',
         'leaderboard'      => 'bearer',
@@ -309,9 +313,14 @@ final class Kernel
 
         $authenticator = \FieldPulse\Security\Authenticator::i();
 
-        $context = $requirement === 'signed'
-            ? $authenticator->authenticateSignedRequest($request)
-            : $authenticator->authenticate($request);
+        $context = match ($requirement) {
+            // No device, so no signature is even possible. Scoped to
+            // device.register, and the controller layers the pairing policy on
+            // top of it.
+            'bootstrap' => $authenticator->authenticateBootstrap($request),
+            'signed'    => $authenticator->authenticateSignedRequest($request),
+            default     => $authenticator->authenticate($request),
+        };
 
         $request->setAuthContext($context);
 

@@ -67,7 +67,6 @@ return [
         // §7 replay protection.
         'clock_skew'        => (int) Env::get('CLOCK_SKEW_SECONDS', '300'),
         'nonce_ttl'         => (int) Env::get('NONCE_TTL_SECONDS', '900'),         // 15 minutes
-        'challenge_ttl'     => (int) Env::get('CHALLENGE_TTL_SECONDS', '300'),
         'pairing_code_ttl'  => (int) Env::get('PAIRING_CODE_TTL_SECONDS', '1800'),   // 30 minutes
         'signature_algorithm' => 'ES256',                                          // ECDSA P-256 + SHA-256
         'canonical_separator' => "\n",
@@ -84,13 +83,37 @@ return [
     ],
 
     'auth' => [
-        // Zero-password model: IMEI identifies the agent, the P-256 device key
-        // proves possession. See docs/SECURITY_MODEL.md.
+        /*
+         * Login is username + password (see Security\Credentials), and a device
+         * is registered afterwards from the bootstrap session login returns.
+         * imei_pattern survives only for the administrative pairing CLI and for
+         * validating legacy rows: it is not an authentication input.
+         */
         'imei_pattern'      => '/^\d{14,16}$/',
         'login_rate_limit'  => (int) Env::get('LOGIN_RATE_LIMIT', '10'),
         'login_rate_window' => (int) Env::get('LOGIN_RATE_WINDOW', '900'),
         'register_rate_limit'  => (int) Env::get('REGISTER_RATE_LIMIT', '5'),
         'register_rate_window' => (int) Env::get('REGISTER_RATE_WINDOW', '3600'),
+
+        /*
+         * How much friction adding a device costs. Registration is gated on a
+         * login-issued bootstrap token in every case; this decides whether it
+         * ALSO requires an operator-issued one-time pairing code, which is the
+         * only out-of-band factor standing between a stolen password and a
+         * key an attacker controls.
+         *
+         *   ALWAYS          every new device needs a code. Safest; an agent
+         *                   replacing a lost handset needs a new code.
+         *   FIRST_DEVICE_ONLY  the first device needs a code, later ones do not.
+         *                   The default: one enrolment per agent, then friction
+         *                   only when the agent is adding a second device.
+         *   NEVER           any new device, no code. Password-only: treat a
+         *                   compromised password as a compromised account.
+         *
+         * An unrecognised value is treated as ALWAYS rather than ignored, so a
+         * typo here fails closed. See DeviceController::policy().
+         */
+        'device_pairing_policy' => strtoupper((string) Env::get('DEVICE_PAIRING_POLICY', 'FIRST_DEVICE_ONLY')),
     ],
 
     'upload' => [

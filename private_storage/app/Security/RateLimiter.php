@@ -13,16 +13,22 @@ use FieldPulse\Support\Clock;
 /**
  * Fixed-window rate limiting backed by login_attempts.
  *
- * Two independent windows are enforced: per identifier (the IMEI) and per IP.
- * Either being exhausted blocks the request, so an attacker cannot distribute
- * guesses for one IMEI across many addresses, nor spray many IMEIs from one
- * address.
+ * Two independent windows are enforced: per identifier and per IP. Either being
+ * exhausted blocks the request. The identifier is whatever the endpoint names
+ * as its subject — the submitted username on auth.login, the device_uuid on
+ * device.register — and it is not a credential, only a key to count against.
+ *
+ * Both windows are needed. The per-identifier one stops a single account being
+ * ground down from a botnet; the per-IP one stops one host walking the entire
+ * user table. Neither alone is sufficient: without the per-IP window, "login"
+ * is a free username oracle at N tries per window for the whole user table at
+ * once.
  *
  * Counts are exact within the window, and a rejected request does not extend
  * it — otherwise a continuous trickle would hold the door open forever.
  *
  * Hashes, not plaintext: identifier_hash and ip_hash are salted digests, so a
- * table dump yields neither usable IMEIs nor address lists.
+ * table dump yields neither usable usernames nor address lists.
  */
 final class RateLimiter
 {

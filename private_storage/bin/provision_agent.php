@@ -13,9 +13,10 @@ declare(strict_types=1);
  * creates the identity that every other credential is derived from, so it must
  * never be reachable over HTTP.
  *
- * IMEI is validated with a Luhn check and stored as a string. It is a lookup
- * key, never a secret — see Security\ChallengeService for why the device key
- * and a pairing code are needed alongside it.
+ * IMEI is validated with a Luhn check and stored as a string. It is an
+ * administrative attribute only: it is not a login input, not an authentication
+ * factor, and not required to register a device. See Security\PairingCode for
+ * the factor that does stand between a stolen password and a new device.
  */
 
 require_once dirname(__DIR__) . '/app/bootstrap.php';

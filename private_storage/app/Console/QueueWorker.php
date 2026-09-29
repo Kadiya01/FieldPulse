@@ -227,7 +227,6 @@ final class QueueWorker
     {
         return [
             'nonces'        => \FieldPulse\Security\NonceGuard::prune(),
-            'challenges'    => \FieldPulse\Security\ChallengeService::pruneExpired(),
             'refresh_tokens' => (new \FieldPulse\Database\RefreshTokenRepository())->pruneExpired(),
             'login_attempts' => \FieldPulse\Security\RateLimiter::pruneOlderThanDays(),
             'jobs_completed' => $this->jobs->purgeCompleted(),
