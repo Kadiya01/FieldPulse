@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- iOS ignores the SVG favicon and falls back to a screenshot unless a PNG
+         apple-touch-icon is declared. -->
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Must match theme_color in vite.config.ts, or the browser chrome and the
+         installed app's chrome disagree. -->
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="description" content="Offline-First Biometric Enrollment" />
+    <title>FieldPulse</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

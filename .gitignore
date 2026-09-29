@@ -1,0 +1,38 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files. The real .env holds JWT_SECRET and DB_PASSWORD; only the
+# template is tracked. Without this, a `git add -A` on a cPanel account would
+# commit the signing secret for the whole deployment.
+.env
+.env.*
+!.env.example
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Runtime storage created by the app, not source. Holds uploaded evidence
+# (quarantine, processed/{verified,review,rejected}), operational logs, and
+# worker temp files. The logs are already covered by *.log above, but the
+# uploaded photos are not, and committing real field submissions — with their
+# embedded GPS and timestamps — would be a privacy incident, not just clutter.
+private_storage/fieldpulse/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

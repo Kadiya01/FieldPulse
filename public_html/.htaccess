@@ -1,0 +1,154 @@
+# ---------------------------------------------------------------------------
+# FieldPulse — document root lockdown
+#
+# Everything that matters lives in ../private_storage, outside this directory.
+# This file's job is to make sure nothing outside public_html can be reached
+# even if the directory above it is a symlink, a misconfigured alias, or an
+# add-domain that points one level too high.
+#
+# Order of precedence in Apache: <Files> sections are merged after the main
+# server/directory config, and within a merge the FIRST matching section wins.
+# The Allow rules below are therefore deliberately written before the deny
+# sections, so a .php file is granted before the dotfile rule can consider it.
+# ---------------------------------------------------------------------------
+
+<IfModule mod_authz_core.c>
+    # Nothing in this tree should be listable. A directory index here would
+    # advertise the exact endpoint names an attacker should be probing.
+    Options -Indexes
+    Options +SymLinksIfOwnerMatch
+</IfModule>
+
+# The PWA shell. Stated explicitly rather than inherited: `Options -Indexes`
+# removes the generated listing, and relying on the server's inherited
+# DirectoryIndex to still pick up index.html is one config change away from the
+# root URL serving a 403.
+<IfModule mod_dir.c>
+    DirectoryIndex index.html
+</IfModule>
+
+# --- Grant first: our entry points are .php files ----------------------------
+<FilesMatch "\.php$">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Allow from all
+    </IfModule>
+</FilesMatch>
+
+# --- Then deny: dotfiles and editor debris -----------------------------------
+# Deliberately does NOT match "\." anywhere in the name. A broad "contains a dot"
+# pattern also matches submit.php and would take the entire API offline. This
+# targets a leading dot, a known editor backup extension, or a trailing tilde.
+<FilesMatch "(^\.)|~$|\.(bak|old|orig|save|swp|swo|dist|log|sql|ini|conf|env|yml|yaml|jsonl)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# --- CGI handlers are never legitimate here ----------------------------------
+<IfModule mod_alias.c>
+    RedirectMatch 404 ^/(cgi-bin|wp-admin|wp-login|xmlrpc\.php)
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Any request whose final path segment begins with a dot is a probe for
+    # .env, .git, .htpasswd. Denied outright, including for well-known, which
+    # is not something this application serves.
+    RewriteRule (^|/)\. - [F,L]
+
+    # Deny request for any file that is not one of the known-good suffixes. This
+    # is an allowlist, so a newly added file type is inert until it is declared
+    # here, rather than live the moment it is uploaded.
+    #
+    # The path is captured into %1 first, with the query string excluded, because
+    # %{REQUEST_URI} includes it. Testing the suffix against the whole URI means a
+    # request for leaderboard.php?limit=25 ends in "=25", matches nothing, and
+    # gets a 403 — the suffix allowlist would break the single most ordinary
+    # request the API makes.
+    RewriteCond %{REQUEST_URI} ^([^?]*)(\?.*)?$
+    # Only enforce the allowlist against a path segment that actually names a
+    # file. An extensionless path is a client-side React Router route (/queue,
+    # /login, /leaderboard), not a file, so it has no suffix to allowlist --
+    # testing it as one returned 403 for every deep link on a deployed host,
+    # while `vite dev` served the same URLs happily.
+    RewriteCond %1 \.[A-Za-z0-9]+$
+    RewriteCond %1 !\.(php|js|mjs|css|map|json|webmanifest|html|txt|ico|png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot)$ [NC]
+    RewriteRule ^ - [F,L]
+
+    # SPA fallback: serve the built shell for a client-side route.
+    #
+    # Restricted to extensionless paths on purpose. Rewriting *any* unmatched
+    # request would answer a missing chunk request (say a stale
+    # /assets/index-abc123.js) with 200 and a page of HTML, which the service
+    # worker and the browser would both have to diagnose. A missing asset should
+    # stay a 404. API paths are excluded explicitly so a renamed or missing
+    # endpoint keeps returning the API's own 404 rather than a 200 of HTML that
+    # a client would try to parse as JSON.
+    # %1 is the path with the query string already stripped by the RewriteCond
+    # above, and it is what the allowlist tests. Testing %{REQUEST_URI} here
+    # instead would include the query, so a client-side route such as
+    # /leaderboard?ref=app.js would look like it named a .js file and 404.
+    RewriteCond %1 !^/api/ [NC]
+    RewriteCond %1 !\.[A-Za-z0-9]+$ [NC]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ /index.html [L]
+</IfModule>
+
+# --- Caching for the PWA shell -----------------------------------------------
+# The build content-hashes these assets, so a long max-age is safe: a new deploy
+# changes the filename, which is exactly what a cache-busting URL is for.
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType application/javascript "access plus 1 year"
+    ExpiresByType text/css          "access plus 1 year"
+    ExpiresByType image/webp        "access plus 6 months"
+    ExpiresByType image/svg+xml     "access plus 6 months"
+    ExpiresByType font/woff2        "access plus 1 year"
+</IfModule>
+
+# --- Security headers --------------------------------------------------------
+# The API is JSON-only and consumed by a PWA, so the policy is tight: no
+# framing, no content sniffing, no referrer leakage. Permissions-Policy grants
+# only the two device APIs the app actually uses — camera for the capture screen,
+# geolocation for the submission payload — and nothing else.
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "geolocation=(self), camera=(self), microphone=(), payment=(), usb=()"
+
+    # Send the Strict-Transport-Security header as soon as the certificate is
+    # live. Set it here rather than relying on the operator, but note it does
+    # nothing until TLS terminates on this vhost.
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+    # Remove the stack fingerprint. Free recon for an attacker.
+    Header unset X-Powered-By
+    Header always unset X-Powered-By
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# Not configured here, and deliberately so:
+#
+#   php_flag engine off   would disable PHP for api/ as well, since it applies
+#                         to the directory and inherits into subdirectories. The
+#                         real defence against an uploaded .php file executing is
+#                         structural: no directory inside public_html is ever
+#                         writable by the web user. Uploads are written to
+#                         ../private_storage/fieldpulse/quarantine by the PHP CLI
+#                         or web user, never to a public path.
+#
+#   ServerSignature Off   only valid in server or virtualhost config, not in
+#                         .htaccess, where it causes a 500. Ask the operator to
+#                         set it, or ignore it.
+# ---------------------------------------------------------------------------
