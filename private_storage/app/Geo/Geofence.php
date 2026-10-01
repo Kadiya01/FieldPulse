@@ -19,9 +19,17 @@ use FieldPulse\Http\ErrorCode;
  *   WITHIN_GEOFENCE       inside at least one assigned site radius
  *   OUTSIDE_GEOFENCE      outside every assigned radius
  *   NO_GPS                the client supplied no usable position
+ *   INVALID_GPS           the coordinates are not a position at all
  *   SITE_UNASSIGNED       the agent has no active site configured, so no
  *                         geofence judgement is possible
  *   GPS_UNRELIABLE        position present but implausible for a handset
+ *
+ * INVALID_GPS is kept separate from GPS_UNRELIABLE because the two call for
+ * different conclusions. Out-of-range or non-finite coordinates are a broken
+ * payload, and no amount of review will make them describe a place. A fix that
+ * is merely implausible — null island, a transposed pair, a confidence radius
+ * wider than the site — is a readable position whose *reliability* is in doubt,
+ * which is exactly what a human is for.
  *
  * SITE_UNASSIGNED is deliberately not treated as a pass. An agent with no site
  * assignment must reach a human, not be auto-verified on the absence of a check.
@@ -31,6 +39,7 @@ final class Geofence
     public const WITHIN_GEOFENCE  = 'WITHIN_GEOFENCE';
     public const OUTSIDE_GEOFENCE = 'OUTSIDE_GEOFENCE';
     public const NO_GPS           = 'NO_GPS';
+    public const INVALID_GPS      = 'INVALID_GPS';
     public const SITE_UNASSIGNED  = 'SITE_UNASSIGNED';
     public const GPS_UNRELIABLE   = 'GPS_UNRELIABLE';
 
@@ -46,6 +55,11 @@ final class Geofence
      * @param  float|null $exifLat    Server-read EXIF position, used when the
      *                                client supplied none.
      * @param  float|null $exifLng
+     * @param  float|null $accuracyM  Client-reported horizontal accuracy in
+     *                                metres. Untrusted, but it is the only
+     *                                signal available about how *good* the fix
+     *                                is, and a fix with a 2 km confidence radius
+     *                                cannot be used to decide a 250 m geofence.
      * @return array{
      *   status:string, site_id:?int, site_name:?string,
      *   distance_m:?float, radius_m:?int, source:string
@@ -56,7 +70,8 @@ final class Geofence
         ?float $clientLat,
         ?float $clientLng,
         ?float $exifLat = null,
-        ?float $exifLng = null
+        ?float $exifLng = null,
+        ?float $accuracyM = null
     ): array {
         $source = 'client';
         $lat    = $clientLat;
@@ -78,7 +93,27 @@ final class Geofence
             return self::result(self::NO_GPS);
         }
 
+        // A coordinate that cannot be a position is rejected before any
+        // plausibility judgement and before the site search. Falling back to the
+        // EXIF position here would hide a broken payload behind a different
+        // source, and the box search would otherwise compare nonsense.
+        if (!self::isCoordinate($lat, $lng)) {
+            return self::result(self::INVALID_GPS);
+        }
+
         if (!self::isPlausibleHandsetPosition($lat, $lng)) {
+            return self::result(self::GPS_UNRELIABLE);
+        }
+
+        // A position with a confidence radius larger than the tolerance cannot
+        // decide a site radius. This is checked against the *site* radius rather
+        // than a fixed constant, because a 250 m site and a 2 km site have
+        // genuinely different ideas about what counts as a usable fix.
+        //
+        // Only the client path carries accuracyM: EXIF GPS does not record a
+        // confidence figure, so an EXIF-only fix is judged on position alone,
+        // exactly as it was before accuracy_m was stored.
+        if ($accuracyM !== null && self::exceedsSiteTolerance($agentId, $accuracyM)) {
             return self::result(self::GPS_UNRELIABLE);
         }
 
@@ -168,17 +203,62 @@ final class Geofence
     }
 
     /**
+     * Can this accuracy figure decide any of this agent's site radii?
+     *
+     * True when the reported accuracy is worse than the smallest site the agent
+     * is assigned — a fix that cannot rule out being inside a 100 m radius is
+     * not usable evidence for that radius, however correct the point itself is.
+     *
+     * An agent with no assigned sites returns false, so the check cannot
+     * manufacture an OUTSIDE/SITE_UNASSIGNED outcome into a GPS failure. The
+     * NO_GPS and SITE_UNASSIGNED branches below are reached on their own terms.
+     */
+    private static function exceedsSiteTolerance(int $agentId, float $accuracyM): bool
+    {
+        $smallestRadius = (int) Connection::fetchValue(
+            'SELECT MIN(radius_m) FROM agent_sites WHERE agent_id = :a AND is_active = 1',
+            ['a' => $agentId]
+        );
+
+        if ($smallestRadius <= 0) {
+            return false;
+        }
+
+        return $accuracyM > $smallestRadius;
+    }
+
+    /**
+     * Can these two numbers denote a point on the earth?
+     *
+     * is_finite() is checked first and on its own, because every comparison
+     * below is false for NAN (NAN < x and NAN > x are both false), so a range
+     * test alone would wave NAN straight through into the site search.
+     */
+    private static function isCoordinate(float $lat, float $lng): bool
+    {
+        if (!is_finite($lat) || !is_finite($lng)) {
+            return false;
+        }
+
+        if ($lat < -90.0 || $lat > 90.0 || $lng < -180.0 || $lng > 180.0) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * A (0,0) fix or a coordinate in the middle of an ocean is a broken handset,
      * not a field visit. Null Island is the classic software default that leaks
      * straight into a geofence decision.
+     *
+     * The range check is not repeated here: isCoordinate() has already run, so
+     * reaching this point means the numbers are in range and only their
+     * *plausibility* is in question.
      */
     private static function isPlausibleHandsetPosition(float $lat, float $lng): bool
     {
         if ($lat === 0.0 && $lng === 0.0) {
-            return false;
-        }
-
-        if (abs($lat) > 90.0 || abs($lng) > 180.0) {
             return false;
         }
 
@@ -213,7 +293,9 @@ final class Geofence
 
     public static function isBlocking(string $status): bool
     {
-        return $status === self::GPS_UNRELIABLE || $status === self::NO_GPS;
+        return $status === self::INVALID_GPS
+            || $status === self::GPS_UNRELIABLE
+            || $status === self::NO_GPS;
     }
 
     public static function errorCode(): string

@@ -71,6 +71,40 @@ try {
         }
     }
 
+    /*
+     * Storage reconciliation, after the TTL deletes rather than alongside them.
+     *
+     * It is not a delete and not a bucket: reconcile() inspects rows whose bytes
+     * must exist and reports where they actually are. Running it after the TTL
+     * work means a tick that deletes a lot still reports on storage, and a
+     * reconcile that throws cannot prevent any expiry from being reclaimed.
+     *
+     * Reported on every run, not just when something is wrong. A reconciler whose
+     * failures are visible only when the count is non-zero is a reconciler
+     * nobody thinks to check, so the healthy line is printed too — "0 missing"
+     * from a cron log is the evidence that the check is still running.
+     *
+     * Reconcile never throws; it counts. bin/integrity.php is the suite that
+     * asserts its behaviour, so this stays a report.
+     */
+    Cli::heading('Storage reconciliation');
+
+    $storage = \FieldPulse\Storage\StorageState::reconcile(new \FieldPulse\Database\SubmissionRepository());
+
+    Cli::out('  ' . str_pad('rows checked', 18) . $storage['checked']);
+    Cli::out('  ' . str_pad('evidence found', 18) . ($storage['checked'] - $storage['missing'] - $storage['unreadable']));
+    Cli::out('  ' . str_pad('moves repaired', 18) . $storage['repaired']);
+    Cli::out('  ' . str_pad('rows unresolvable', 18) . $storage['unreadable']);
+
+    if ($storage['missing'] > 0) {
+        Cli::warn(
+            str_pad('evidence missing', 18) . $storage['missing']
+            . ' — marked MISSING in the ledger; this is storage loss, not a race, and needs a human'
+        );
+    } else {
+        Cli::out('  ' . str_pad('evidence missing', 18) . '0');
+    }
+
     $stats = (new JobRepository())->stats();
 
     Cli::heading('Queue depth');

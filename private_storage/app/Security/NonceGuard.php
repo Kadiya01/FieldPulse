@@ -88,7 +88,7 @@ final class NonceGuard
     {
         $deleted = Connection::execute(
             'DELETE FROM request_nonces WHERE expires_at < UTC_TIMESTAMP() ORDER BY expires_at ASC'
-            . \FieldPulse\Database\Repository::limitClause($limit, 10000)
+            . \FieldPulse\Database\Repository::limitOnly($limit, 10000)
         );
 
         return $deleted;

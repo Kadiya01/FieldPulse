@@ -34,10 +34,25 @@ final class Config
 
     public static function boot(?string $envFile = null): self
     {
-        $envFile ??= FIELDPULSE_PRIVATE_ROOT . '/.env';
-
-        if (!Env::isLoaded()) {
+        /*
+         * An explicitly named file always wins, even if Env has already been
+         * read.
+         *
+         * Every CLI entry point calls Cli::init(), which calls boot() with no
+         * argument and therefore loads the default .env, before the entry point
+         * gets a chance to honour its own --env= option. Guarding the load with
+         * isLoaded() — which is what this used to do — made --env= silently
+         * inert in every script that supports it: healthcheck, integration,
+         * integrity, contract, verification, queue and selftest all reported a
+         * green result against the wrong database. An option that quietly
+         * verifies something other than what was asked for is worse than one
+         * that is missing, because the database matrix depends on it being
+         * honest.
+         */
+        if ($envFile !== null) {
             Env::load($envFile);
+        } elseif (!Env::isLoaded()) {
+            Env::load(FIELDPULSE_PRIVATE_ROOT . '/.env');
         }
 
         /** @var array<string,mixed> $schema */

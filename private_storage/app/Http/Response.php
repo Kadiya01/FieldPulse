@@ -108,6 +108,22 @@ final class Response
             header('X-Content-Type-Options: nosniff');
             header('X-Frame-Options: DENY');
             header('Referrer-Policy: no-referrer');
+
+            // Defence in depth for the JSON layer, and the only part of the
+            // policy that .htaccess cannot express. The document root sets a
+            // full policy for the PWA shell (it needs script-src 'self' for the
+            // bundle and img-src blob: for the camera preview); an API response
+            // needs nothing at all. Both are emitted, and when both reach the
+            // client the browser enforces the intersection, so a duplicated
+            // header tightens the result rather than weakening it. That matters
+            // because these two also cover a host that does not read
+            // .htaccess at all — nginx, or LiteSpeed with AllowOverride None.
+            header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+            // Same reasoning, and inverted: the PWA document needs geolocation
+            // and camera to capture a submission, but no API response ever needs
+            // a device capability, so it grants none.
+            header('Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=(), usb=(), idle-detection=()');
+
             header('X-Request-Id: ' . RequestId::current());
 
             foreach ($this->headers as $name => $value) {

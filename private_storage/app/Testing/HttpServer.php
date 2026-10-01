@@ -71,11 +71,16 @@ final class HttpServer
         bool $keep = false,
         array $configOverrides = [],
         array $env = [],
-        int $maxUploadBytes = 16_000_000
+        int $maxUploadBytes = 16_000_000,
+        ?string $docRoot = null
     ): self {
         $repoRoot   = dirname(__DIR__, 3);
-        $publicRoot = $repoRoot . '/public_html';
+        $publicRoot = $docRoot ?? ($repoRoot . '/public_html');
         $workDir    = sys_get_temp_dir() . '/fieldpulse-http-' . strtolower(substr(bin2hex(random_bytes(5)), 0, 8));
+
+        if (!is_dir($publicRoot)) {
+            throw new \RuntimeException('No document root to serve: ' . $publicRoot);
+        }
 
         if (!is_dir($workDir) && !mkdir($workDir, 0o777, true) && !is_dir($workDir)) {
             throw new \RuntimeException('Could not create the HTTP scratch directory ' . $workDir);

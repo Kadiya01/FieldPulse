@@ -106,15 +106,27 @@ final class QueueWorker
                 $submissionId  = (int) $job['submission_id'];
                 $attempts      = (int) $job['attempts'];
                 $maxAttempts   = (int) $job['max_attempts'];
+                $lock          = (string) $job['locked_by'];
 
                 try {
                     $this->process($job);
 
-                    $this->jobs->complete($jobId);
-                    $summary['completed']++;
+                    if ($this->jobs->complete($jobId, $lock)) {
+                        $summary['completed']++;
+                    } else {
+                        // The lease was reaped and another worker owns the job
+                        // now. The work above was idempotent, so this is a
+                        // wasted pass, not a corruption.
+                        Logger::warning('worker.complete_lost_ownership', [
+                            'job_id' => $jobId,
+                            'worker' => $workerId,
+                            'lock'   => $lock,
+                        ]);
+                    }
                 } catch (\Throwable $e) {
                     $willRetry = $this->jobs->fail(
                         $jobId,
+                        $lock,
                         'JOB_EXCEPTION',
                         mb_substr($e->getMessage(), 0, 2000),
                         $attempts,

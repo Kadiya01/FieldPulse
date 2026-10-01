@@ -15,6 +15,7 @@ use FieldPulse\Http\Request;
 use FieldPulse\Http\Response;
 use FieldPulse\Imaging\ImageInspector;
 use FieldPulse\Security\AuthContext;
+use FieldPulse\Storage\StorageState;
 use FieldPulse\Support\Clock;
 use FieldPulse\Support\Logger;
 use FieldPulse\Support\Paths;
@@ -127,6 +128,16 @@ final class SubmitController implements ActionInterface
 
         $coordinates = $this->readCoordinates($payload);
 
+        // accuracy_m is validated here rather than in readCoordinates() because
+        // it is independently optional: a capture with no position at all sends
+        // none of the three, and a capture with a position but no reported
+        // accuracy sends two. Tying it to the coordinate pair would reject a
+        // perfectly good fix from a handset that simply omitted the field.
+        $accuracyM = Validator::accuracy(
+            $payload['accuracy_m'] ?? null,
+            (float) $c->float('geofence.gps_accuracy_max_m')
+        );
+
         // --- Idempotency, before any file work ---------------------------
         $existing = $this->submissions->findByUuid($submissionUuid);
 
@@ -193,6 +204,7 @@ final class SubmitController implements ActionInterface
                 $countClaimed,
                 $coordinates,
                 $capturedAt,
+                $accuracyM,
                 $storedPath,
                 $actualHash,
                 $inspection,
@@ -207,6 +219,7 @@ final class SubmitController implements ActionInterface
                     $coordinates['latitude'],
                     $coordinates['longitude'],
                     $capturedAt,
+                    $accuracyM,
                     $storedPath,
                     $actualHash,
                     $inspection['mime'],
@@ -373,6 +386,13 @@ final class SubmitController implements ActionInterface
      * move_uploaded_file() first, because only it enforces the is_uploaded_file
      * check that prevents an attacker from moving an arbitrary server file. The
      * destination name is generated, never derived from the client's filename.
+     *
+     * Deliberately returns only after the bytes are on disk in private storage
+     * with restrictive permissions. The caller then commits the ledger row, and
+     * those two operations are NOT atomic with respect to each other — see
+     * StorageState for the crash windows and which reconciler closes each one.
+     * The ordering is what makes them safe: a file that exists is the state a
+     * row may reference, never the reverse.
      */
     private function storeInQuarantine(array $inspection): string
     {
@@ -401,7 +421,20 @@ final class SubmitController implements ActionInterface
 
         @chmod($target, $c->int('storage.file_perms', 0640));
 
-        return 'quarantine/' . $name;
+        // fsync the file itself before the directory entry. Without this the
+        // bytes can be in the page cache and the name on disk, and still be lost
+        // to a power cut between this point and the ledger commit — a row
+        // pointing at a file full of zeros.
+        $handle = @fopen($target, 'r');
+
+        if ($handle !== false) {
+            @fsync($handle);
+            fclose($handle);
+        }
+
+        StorageState::fsyncDir($directory);
+
+        return Paths::DIR_QUARANTINE . '/' . $name;
     }
 
     /**

@@ -38,6 +38,78 @@ final class Paths
         return rtrim((string) Config::instance()->str('storage.root'), '/\\');
     }
 
+    /**
+     * Candidate document roots, most specific first.
+     *
+     * APP_URL wins when it names a subdirectory, because that is the only
+     * authoritative statement of where the operator believes the app lives.
+     * public_html beside private_storage is the documented default and is
+     * always tried as a fallback.
+     *
+     * @return list<string>
+     */
+    public static function documentRootCandidates(): array
+    {
+        $candidates = [];
+
+        $urlPath = parse_url((string) Config::instance()->str('app.url', ''), PHP_URL_PATH);
+
+        if (is_string($urlPath) && trim($urlPath, '/') !== '') {
+            $candidates[] = dirname(FIELDPULSE_BASE_ROOT . '/' . rtrim($urlPath, '/'));
+        }
+
+        $candidates[] = FIELDPULSE_BASE_ROOT . '/public_html';
+
+        return $candidates;
+    }
+
+    /**
+     * Resolved document root directories that actually exist on disk.
+     *
+     * @return list<string>
+     */
+    public static function documentRoots(): array
+    {
+        $resolved = [];
+
+        foreach (self::documentRootCandidates() as $candidate) {
+            $real = realpath($candidate);
+
+            if ($real !== false && is_dir($real)) {
+                $resolved[] = $real;
+            }
+        }
+
+        return array_values(array_unique($resolved));
+    }
+
+    /**
+     * Web-server configuration files that carry PHP limits.
+     *
+     * Returned as paths rather than contents because a host is free to run
+     * mod_php, which ignores .user.ini entirely and reads php.ini instead; a
+     * caller that wanted only .user.ini would conclude the limits are
+     * unconfigured when they are configured perfectly well.
+     *
+     * @return list<string>
+     */
+    public static function webConfigFiles(): array
+    {
+        $files = [];
+
+        foreach (self::documentRoots() as $docroot) {
+            foreach (['.user.ini', '.htaccess'] as $name) {
+                $path = $docroot . '/' . $name;
+
+                if (is_file($path)) {
+                    $files[] = $path;
+                }
+            }
+        }
+
+        return $files;
+    }
+
     public static function quarantineDir(): string
     {
         return self::storageRoot() . '/' . self::DIR_QUARANTINE;
@@ -127,22 +199,7 @@ final class Paths
      */
     public static function absoluteForStoredPath(string $relativePath): string
     {
-        $normalised = str_replace('\\', '/', trim($relativePath));
-
-        // A stored path is always relative to the storage root. Stripping the
-        // leading separator and carrying on turned '/etc/passwd' into
-        // <root>/etc/passwd, which is contained but still wrong: it silently
-        // reinterprets a malformed value instead of refusing it, and it did so
-        // in a way that hid the fact this guard was never exercised. Reject
-        // anything that names a filesystem root of its own, including a Windows
-        // drive or a UNC share.
-        if (str_starts_with($normalised, '/') || preg_match('#^[A-Za-z]:#', $normalised) === 1) {
-            throw new \InvalidArgumentException('Illegal stored file path.');
-        }
-
-        if ($normalised === '' || str_contains($normalised, '../') || str_contains($normalised, "\0")) {
-            throw new \InvalidArgumentException('Illegal stored file path.');
-        }
+        $normalised = self::normaliseRelativePath($relativePath);
 
         $absolute = self::storageRoot() . '/' . $normalised;
 
@@ -151,6 +208,85 @@ final class Paths
         }
 
         return $absolute;
+    }
+
+    /**
+     * Normalise a caller-supplied relative storage path and reject anything that
+     * is not one.
+     *
+     * Shared by absoluteForStoredPath() and storagePath() because the two must
+     * accept exactly the same language. They were separate checks for a while
+     * and drifted: storagePath() accepted 'C:/Windows/x' while
+     * absoluteForStoredPath() refused it, and both accepted percent-encoded
+     * traversal. A path the read side refuses must not be constructible on the
+     * write side.
+     *
+     * Rejected, with reasons:
+     *
+     *   ""                        empty.
+     *   NUL                       truncation of any downstream syscall.
+     *   "/etc/passwd"             absolute Unix - refused rather than ltrim'd into
+     *                             <root>/etc/passwd. Stripping the separator is
+     *                             contained but wrong: it silently reinterprets a
+     *                             malformed value, and it hid the fact that this
+     *                             guard was never exercised.
+     *   "C:/Windows/..."          absolute Windows drive.
+     *   UNC "\server\share"    absolute Windows share path.
+     *   "../x", "a/../../b",      traversal in any position. Split into segments
+     *   "a/.."                    rather than str_contains('../'), because a
+     *                             trailing "a/.." resolves out of the directory
+     *                             and contains no "../" substring at all.
+     *   "%2e%2e%2f", "..%2f"      percent-encoded traversal. The filesystem
+     *                             treats these as literal directory names, so
+     *                             they are harmless here - and they are still
+     *                             rejected, because any layer that decodes before
+     *                             us (an .htaccess rewrite, a future URL-routed
+     *                             download, an admin tool that re-reads file_path)
+     *                             turns a literal name back into traversal. A
+     *                             guard that depends on nothing else happening
+     *                             downstream is the one worth having.
+     *
+     * @return string Normalised to forward slashes, no leading separator, literal
+     *                form preserved.
+     * @throws \InvalidArgumentException
+     */
+    private static function normaliseRelativePath(string $relativePath): string
+    {
+        $normalised = str_replace('\\', '/', trim($relativePath));
+
+        if ($normalised === '' || str_contains($normalised, "\0")) {
+            throw new \InvalidArgumentException('Illegal storage path.');
+        }
+
+        if (str_starts_with($normalised, '/') || preg_match('#^[A-Za-z]:#', $normalised) === 1) {
+            throw new \InvalidArgumentException('Storage path must be relative to the storage root.');
+        }
+
+        // Only the decoded form is inspected; the literal form is what is
+        // returned, so a legitimate filename containing a percent sign is not
+        // mangled. Two rounds, because a reverse proxy plus an application
+        // decoder is exactly the double-encoding case.
+        for ($round = 0; $round < 2; $round++) {
+            $decoded = rawurldecode($normalised);
+
+            if (str_contains($decoded, "\0")) {
+                throw new \InvalidArgumentException('Illegal storage path.');
+            }
+
+            foreach (explode('/', $decoded) as $segment) {
+                if ($segment === '..') {
+                    throw new \InvalidArgumentException('Path traversal is not permitted in a storage path.');
+                }
+            }
+
+            if ($decoded === $normalised) {
+                break;
+            }
+
+            $normalised = $decoded;
+        }
+
+        return $normalised;
     }
 
     /**
@@ -184,18 +320,12 @@ final class Paths
      */
     public static function storagePath(string $relative, bool $createParents = true): string
     {
-        $normalised = str_replace('\\', '/', trim($relative));
-        $normalised = ltrim($normalised, '/');
-
-        if ($normalised === '' || str_contains($normalised, "\0")) {
-            throw new \InvalidArgumentException('Illegal storage path.');
-        }
-
-        foreach (explode('/', $normalised) as $segment) {
-            if ($segment === '..') {
-                throw new \InvalidArgumentException('Path traversal is not permitted in a storage path.');
-            }
-        }
+        // Same validator as absoluteForStoredPath(), on purpose. This method used
+        // to ltrim a leading '/' and only scan for a literal '..' segment, which
+        // meant it accepted 'C:/Windows/x' and '%2e%2e%2f' — inputs the read side
+        // refused. A write path that speaks a wider language than its own reader
+        // is how a path that can be written becomes a path that cannot be read.
+        $normalised = self::normaliseRelativePath($relative);
 
         $absolute = self::storageRoot() . '/' . $normalised;
         $parent   = dirname($absolute);

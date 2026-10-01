@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace FieldPulse\Imaging;
 
+use FieldPulse\Config\Config;
 use FieldPulse\Support\Clock;
 use FieldPulse\Support\Logger;
 
@@ -17,11 +18,21 @@ use FieldPulse\Support\Logger;
  * named server_exif_* — the prefix records that these are the server's reading
  * of an untrusted source, not a server assertion.
  *
- * Four outcomes, per §12:
+ * Five outcomes, per §12:
  *   PRESENT_VALID   GPS and/or capture time present and parseable
  *   PRESENT_INVALID present but unparseable or out of range (tampering signal)
  *   ABSENT          the block has no such field
  *   UNREADABLE      the file cannot be opened for metadata at all
+ *   INCONSISTENT    every field parses, and they contradict each other
+ *
+ * INCONSISTENT is a separate axis rather than a fifth parse outcome, because it
+ * is a different kind of finding. PRESENT_INVALID says a field is broken;
+ * INCONSISTENT says the fields are individually well-formed and still cannot
+ * all be true — a capture time later than the digitisation time, or a GPS
+ * timestamp hours away from DateTimeOriginal in the same file. Those pairs only
+ * disagree when the block has been assembled from more than one source, which is
+ * the observable signature of a rewritten file. Neither read proves or disproves
+ * anything on its own, so the state escalates to review and claims nothing.
  */
 final class ExifExtractor
 {
@@ -29,6 +40,10 @@ final class ExifExtractor
     public const PRESENT_INVALID = 'PRESENT_INVALID';
     public const ABSENT          = 'ABSENT';
     public const UNREADABLE      = 'UNREADABLE';
+    public const INCONSISTENT    = 'INCONSISTENT';
+
+    /** No cross-tag contradiction was found. */
+    public const CONSISTENT      = 'CONSISTENT';
 
     private function __construct()
     {
@@ -38,6 +53,7 @@ final class ExifExtractor
      * @return array{
      *   gps_status:string,
      *   captured_status:string,
+     *   consistency:string,
      *   latitude:?float,
      *   longitude:?float,
      *   captured_at:?string,
@@ -49,20 +65,24 @@ final class ExifExtractor
     public static function extract(string $path): array
     {
         $empty = [
-            'gps_status'         => self::ABSENT,
-            'captured_status'     => self::ABSENT,
-            'latitude'            => null,
-            'longitude'           => null,
-            'captured_at'         => null,
-            'make'                => null,
-            'model'               => null,
+            'gps_status'            => self::ABSENT,
+            'captured_status'       => self::ABSENT,
+            'consistency'           => self::CONSISTENT,
+            'latitude'              => null,
+            'longitude'             => null,
+            'captured_at'           => null,
+            'make'                  => null,
+            'model'                 => null,
             'datetime_original_raw' => null,
         ];
 
         if (!function_exists('exif_read_data')) {
             Logger::warning('exif.extension_missing');
 
-            return ['gps_status' => self::UNREADABLE, 'captured_status' => self::UNREADABLE] + $empty;
+            return [
+                'gps_status'     => self::UNREADABLE,
+                'captured_status' => self::UNREADABLE,
+            ] + $empty;
         }
 
         $data = @exif_read_data($path, null, true, false);
@@ -73,7 +93,8 @@ final class ExifExtractor
             return $empty;
         }
 
-        $result            = $empty;
+        $result  = $empty;
+        $gpsTags = null;
 
         // exif_read_data() with section = null groups the tags by IFD rather
         // than returning them flat: DateTimeOriginal and DateTimeDigitized live
@@ -99,6 +120,7 @@ final class ExifExtractor
         // --- GPS -------------------------------------------------------------
         if (isset($data['GPS']) && is_array($data['GPS'])) {
             $gps = $data['GPS'];
+            $gpsTags = $gps;
             $dms = self::dmsToDecimal(
                 $gps['GPSLatitudeRef'] ?? null,
                 $gps['GPSLatitude'] ?? null,
@@ -143,7 +165,152 @@ final class ExifExtractor
             }
         }
 
+        $result['consistency'] = self::consistency($tags, $gpsTags);
+
         return $result;
+    }
+
+    /**
+     * Do the parsed tags contradict each other?
+     *
+     * Two pairs are compared, both of which have a fixed internal order:
+     *
+     *   DateTimeOriginal <= DateTimeDigitized
+     *     A photo is captured and then digitised, so the original time can be
+     *     equal to or earlier than the digitised one. The reverse means one of
+     *     the two strings was edited.
+     *
+     *   GPSDateStamp + GPSTimeStamp ~= DateTimeOriginal
+     *     Both are written by the camera from the same clock in the same file.
+     *     A large disagreement means the two blocks came from different captures.
+     *
+     * The tolerance is the same window TimestampVerifier already uses to decide
+     * whether the EXIF and client clocks agree, so "these two timestamps are
+     * from the same moment" means one thing across the whole pipeline instead of
+     * being defined twice.
+     *
+     * A missing partner is not a contradiction: files routinely carry one of the
+     * two, and an absent field is reported as ABSENT on its own axis.
+     *
+     * @param  array<array-key,mixed> $tags
+     * @param  array<array-key,mixed>|null $gpsTags
+     */
+    private static function consistency(array $tags, ?array $gpsTags): string
+    {
+        $tolerance = Config::instance()->int('timestamps.max_future_skew');
+
+        $original = self::parseExifDate((string) (self::firstString($tags, ['DateTimeOriginal']) ?? ''));
+        $digitized = self::parseExifDate((string) (self::firstString($tags, ['DateTimeDigitized']) ?? ''));
+
+        if ($original !== null && $digitized !== null) {
+            if ($original->getTimestamp() - $digitized->getTimestamp() > $tolerance) {
+                return self::INCONSISTENT;
+            }
+        }
+
+        $gpsAt = self::gpsTimestamp($gpsTags);
+
+        if ($original !== null && $gpsAt !== null) {
+            if (abs($gpsAt->getTimestamp() - $original->getTimestamp()) > $tolerance) {
+                return self::INCONSISTENT;
+            }
+        }
+
+        return self::CONSISTENT;
+    }
+
+    /**
+     * Compose GPSDateStamp + GPSTimeStamp into a UTC instant.
+     *
+     * PHP returns GPSTimeStamp as "HH:MM:SS" on most builds and as an array of
+     * rationals on some, so both shapes are accepted. Neither tag carries a
+     * timezone in EXIF 2.2; the pair is read as UTC, the same assumption
+     * parseExifDate() makes for DateTimeOriginal, which is what makes the two
+     * comparable at all.
+     *
+     * @param  array<array-key,mixed>|null $gpsTags
+     */
+    private static function gpsTimestamp(?array $gpsTags): ?\DateTimeImmutable
+    {
+        if ($gpsTags === null) {
+            return null;
+        }
+
+        $date = $gpsTags['GPSDateStamp'] ?? null;
+
+        if (!is_string($date)) {
+            return null;
+        }
+
+        $date = trim($date);
+
+        if (preg_match('/^(\d{4})[:\-](\d{2})[:\-](\d{2})$/', $date, $d) !== 1) {
+            return null;
+        }
+
+        $time = $gpsTags['GPSTimeStamp'] ?? null;
+
+        if (is_array($time)) {
+            // Rational triples, as a non-standard encoder may write them.
+            $parts = array_values($time);
+
+            if (count($parts) < 3) {
+                return null;
+            }
+
+            $numerator = 0.0;
+            $denominator = 1.0;
+
+            foreach ([[$parts[0], $parts[1]], [$parts[2], $parts[3] ?? null], [$parts[4] ?? null, $parts[5] ?? null]] as $i => $pair) {
+                if ($pair[0] === null) {
+                    return null;
+                }
+
+                $n = (float) $pair[0];
+                $den = $pair[1] === null ? 1.0 : (float) $pair[1];
+
+                if ($den == 0.0) {
+                    return null;
+                }
+
+                $component = $n / $den;
+
+                match ($i) {
+                    0 => $numerator = $component * 3600.0,
+                    1 => $numerator += $component * 60.0,
+                    default => $numerator += $component,
+                };
+            }
+
+            $hours = (int) floor($numerator / 3600);
+            $minutes = (int) floor(fmod($numerator, 3600.0) / 60);
+            $seconds = (int) round(fmod($numerator, 60.0));
+        } else {
+            if (!is_string($time)) {
+                return null;
+            }
+
+            if (preg_match('/^(\d{2}):(\d{2}):(\d{2}(\.\d+)?)$/', trim($time), $t) !== 1) {
+                return null;
+            }
+
+            $hours   = (int) $t[1];
+            $minutes = (int) $t[2];
+            $seconds = (int) round((float) $t[3]);
+        }
+
+        if ($hours > 23 || $minutes > 59 || $seconds > 59) {
+            return null;
+        }
+
+        if (!checkdate((int) $d[2], (int) $d[3], (int) $d[1])) {
+            return null;
+        }
+
+        return new \DateTimeImmutable(
+            sprintf('%s-%s-%s %02d:%02d:%02d', $d[1], $d[2], $d[3], $hours, $minutes, $seconds),
+            new \DateTimeZone('UTC')
+        );
     }
 
     /**
@@ -264,10 +431,19 @@ final class ExifExtractor
     }
 
     /**
-     * Combine the GPS findings into one status for submission_verifications.
+     * Combine the per-field findings into one status for submission_verifications.
+     *
+     * Precedence is worst-first. UNREADABLE means the block was never available,
+     * which outranks everything; PRESENT_INVALID outranks INCONSISTENT because a
+     * broken field is a simpler explanation for a bad block than a contradiction
+     * between two well-formed ones, and reporting the simpler cause first keeps
+     * the recorded reason actionable.
      */
-    public static function combinedStatus(string $gpsStatus, string $capturedStatus): string
-    {
+    public static function combinedStatus(
+        string $gpsStatus,
+        string $capturedStatus,
+        string $consistency = self::CONSISTENT
+    ): string {
         if ($gpsStatus === self::UNREADABLE || $capturedStatus === self::UNREADABLE) {
             return self::UNREADABLE;
         }
@@ -276,10 +452,32 @@ final class ExifExtractor
             return self::PRESENT_INVALID;
         }
 
+        if ($consistency === self::INCONSISTENT) {
+            return self::INCONSISTENT;
+        }
+
         if ($gpsStatus === self::PRESENT_VALID || $capturedStatus === self::PRESENT_VALID) {
             return self::PRESENT_VALID;
         }
 
         return self::ABSENT;
+    }
+
+    /**
+     * The combined status of an extract() result.
+     *
+     * One definition of "what was the EXIF state of this file", used by both the
+     * verdict row and the decision matrix, so the column written to the database
+     * and the reason shown to a reviewer can never disagree.
+     *
+     * @param  array<string,mixed> $extract
+     */
+    public static function statusOf(array $extract): string
+    {
+        return self::combinedStatus(
+            (string) ($extract['gps_status'] ?? self::ABSENT),
+            (string) ($extract['captured_status'] ?? self::ABSENT),
+            (string) ($extract['consistency'] ?? self::CONSISTENT)
+        );
     }
 }

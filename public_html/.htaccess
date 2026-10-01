@@ -69,20 +69,40 @@
     # is an allowlist, so a newly added file type is inert until it is declared
     # here, rather than live the moment it is uploaded.
     #
-    # The path is captured into %1 first, with the query string excluded, because
-    # %{REQUEST_URI} includes it. Testing the suffix against the whole URI means a
-    # request for leaderboard.php?limit=25 ends in "=25", matches nothing, and
-    # gets a 403 — the suffix allowlist would break the single most ordinary
-    # request the API makes.
-    RewriteCond %{REQUEST_URI} ^([^?]*)(\?.*)?$
+    # Every suffix test below reads %{REQUEST_FILENAME}, and that choice is load
+    # bearing. It is the resolved on-disk path: it never carries a query string,
+    # and it is never affected by whether an earlier RewriteCond captured a
+    # backreference.
+    #
+    # The previous version captured the path into %1 with
+    # `RewriteCond %{REQUEST_URI} ^([^?]*)(\?.*)?$` and tested %1 in the
+    # conditions below. That was verified broken on Apache 2.4.55: the negated
+    # condition `RewriteCond %1 !\.(html|...)$ [NC]` evaluated as though %1 were
+    # empty, so every request for a file with a real extension was answered 403
+    # — including /index.html, every hashed asset, and every API entry point. The
+    # whole site was offline and nothing in the repository could see it, because
+    # the file is only ever read by an Apache that was never running. The same
+    # capture fed the SPA fallback below, so its "is this /api/?" and "is this
+    # extensionless?" tests were equally unreliable.
+    #
+    # Do not reintroduce a cross-condition capture here. bin/deploy_test.php
+    # asserts these rules against a real Apache and is the only thing standing
+    # between a working document root and a silently dead one.
+
     # Only enforce the allowlist against a path segment that actually names a
     # file. An extensionless path is a client-side React Router route (/queue,
     # /login, /leaderboard), not a file, so it has no suffix to allowlist --
     # testing it as one returned 403 for every deep link on a deployed host,
     # while `vite dev` served the same URLs happily.
-    RewriteCond %1 \.[A-Za-z0-9]+$
-    RewriteCond %1 !\.(php|js|mjs|css|map|json|webmanifest|html|txt|ico|png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot)$ [NC]
+    RewriteCond %{REQUEST_FILENAME} \.[A-Za-z0-9]+$
+    RewriteCond %{REQUEST_FILENAME} !\.(php|js|mjs|css|map|json|webmanifest|html|txt|ico|png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot)$ [NC]
     RewriteRule ^ - [F,L]
+
+    # Nothing under api/ may ever be answered with the SPA shell. This short
+    # circuit runs before the fallback and matches the per-directory path, so it
+    # also holds when the app is installed in a subdirectory (/app/api/...), which
+    # a %{REQUEST_URI} prefix test would not cover.
+    RewriteRule ^api/ - [L]
 
     # SPA fallback: serve the built shell for a client-side route.
     #
@@ -90,15 +110,10 @@
     # request would answer a missing chunk request (say a stale
     # /assets/index-abc123.js) with 200 and a page of HTML, which the service
     # worker and the browser would both have to diagnose. A missing asset should
-    # stay a 404. API paths are excluded explicitly so a renamed or missing
-    # endpoint keeps returning the API's own 404 rather than a 200 of HTML that
-    # a client would try to parse as JSON.
-    # %1 is the path with the query string already stripped by the RewriteCond
-    # above, and it is what the allowlist tests. Testing %{REQUEST_URI} here
-    # instead would include the query, so a client-side route such as
-    # /leaderboard?ref=app.js would look like it named a .js file and 404.
-    RewriteCond %1 !^/api/ [NC]
-    RewriteCond %1 !\.[A-Za-z0-9]+$ [NC]
+    # stay a 404. API paths are excluded above so a renamed or missing endpoint
+    # keeps returning the API's own 404 rather than a 200 of HTML that a client
+    # would try to parse as JSON.
+    RewriteCond %{REQUEST_FILENAME} !\.[A-Za-z0-9]+$
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteRule ^ /index.html [L]
@@ -127,10 +142,49 @@
     Header always set Referrer-Policy "no-referrer"
     Header always set Permissions-Policy "geolocation=(self), camera=(self), microphone=(), payment=(), usb=()"
 
+    # Content-Security-Policy, no 'unsafe-inline' and no 'unsafe-eval'.
+    #
+    # The built shell ships zero inline <script> and zero inline <style> (Vite
+    # emits external module scripts and an external stylesheet; registerSW.js is
+    # an external file), and the bundle contains no eval/new Function, so none of
+    # the usual escape hatches are needed. That is a property of the build, not
+    # a guess: `npm run build` then `grep -c 'eval(\|new Function' dist/assets/*.js`
+    # has to stay at 0, and deploy_test.php re-checks it on every deploy, because
+    # a dev-only eval() or a styled-components style block would start violating
+    # this policy in production where nothing would announce it.
+    #
+    # blob: appears in img-src/media-src for the camera preview, which is a local
+    # FileReader stream and never leaves the device. worker-src keeps blob: for
+    # the service worker's runtime importScripts. manifest-src is separate from
+    # script-src because a manifest is fetched as a manifest, not a script.
+    #
+    # upgrade-insecure-requests assumes a working certificate. The app already
+    # requires one (APP_URL is https, the refresh cookie is Secure, and HSTS
+    # below pins the host), so it is consistent — but on a host with no
+    # certificate at all this directive rewrites every same-origin request to
+    # https and the app fails closed rather than silently running in plaintext.
+    Header always set Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+
     # Send the Strict-Transport-Security header as soon as the certificate is
     # live. Set it here rather than relying on the operator, but note it does
-    # nothing until TLS terminates on this vhost.
+    # nothing until TLS terminates on this vhost. Emitted unconditionally on
+    # purpose: gating it on %{HTTPS} would silently drop the header when TLS
+    # terminates upstream in a proxy the operator forgot to declare via
+    # TRUST_PROXY_HEADERS, and a browser ignores HSTS received over plain HTTP
+    # in any case, so sending it on both is correct rather than sloppy.
     Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+    # The service worker must never be served from cache, or a deploy cannot
+    # take over a stale worker. index.html is cached no-store for the same
+    # reason: it names the content-hashed asset URLs, so a cached copy pins the
+    # client to the previous build.
+    <FilesMatch "\.(html|webmanifest)$">
+        Header always set Cache-Control "no-store, must-revalidate"
+    </FilesMatch>
+    <FilesMatch "^sw\.js$">
+        Header always set Cache-Control "no-store, must-revalidate"
+        Header always set Service-Worker-Allowed "/"
+    </FilesMatch>
 
     # Remove the stack fingerprint. Free recon for an attacker.
     Header unset X-Powered-By

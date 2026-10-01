@@ -226,6 +226,26 @@ tokens and enrol another device indefinitely; revoking it is scoped to
 | `payload` | JSON string | The signed metadata. These exact bytes are what the device signature covers. |
 | `file` | binary | JPEG or PNG, ≤ `MAX_UPLOAD_BYTES` |
 
+The upload is validated on the server before anything is stored, and every check
+uses the **bytes**, never the client's claims:
+
+| Check | Rejects |
+|---|---|
+| `UPLOAD_ERR_OK` | truncated or failed multipart bodies |
+| `is_uploaded_file()` | a `payload`-style field passed as `file` |
+| byte size vs `MAX_UPLOAD_BYTES` | oversized uploads (`413`) |
+| `finfo` against `storage.allowed_mimes` | anything that is not genuinely JPEG or PNG |
+| actual GD decode | a file with a valid header but no image data |
+| width/height vs `MAX_IMAGE_DIMENSION` | oversized dimensions |
+| width × height vs `MAX_IMAGE_PIXELS` | decompression-bomb pixel counts |
+| `sha256(file bytes)` vs `file_sha256` | a file swapped after signing |
+
+Two consequences worth stating plainly. A valid JPEG header is not sufficient:
+libjpeg tolerates a truncated scan and returns an image, so the decode check is
+a real gate rather than a formality. And the extension comes from the
+server-detected MIME, so a Windows PE binary renamed `photo.jpg` with a matching
+client MIME is rejected on content, not on its name.
+
 ```json
 {
   "submission_uuid": "9f1c…",

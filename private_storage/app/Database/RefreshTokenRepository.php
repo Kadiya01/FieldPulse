@@ -144,7 +144,7 @@ final class RefreshTokenRepository extends Repository
         return $this->exec(
             'DELETE FROM refresh_tokens
               WHERE expires_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)
-              ORDER BY expires_at ASC' . self::limitClause($limit, 10000)
+              ORDER BY expires_at ASC' . self::limitOnly($limit, 10000)
         );
     }
 

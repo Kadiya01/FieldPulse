@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace FieldPulse\Verification;
 
 use FieldPulse\Database\SubmissionRepository;
+use FieldPulse\Imaging\ExifExtractor;
 
 /**
  * The decision matrix (§11).
@@ -40,8 +41,10 @@ final class DecisionMatrix
     public const TIMESTAMP_UNPARSEABLE  = 'TIMESTAMP_UNPARSEABLE';
     public const OUTSIDE_GEOFENCE       = 'OUTSIDE_GEOFENCE';
     public const NO_GPS                 = 'NO_GPS';
+    public const INVALID_GPS            = 'INVALID_GPS';
     public const SITE_UNASSIGNED        = 'SITE_UNASSIGNED';
     public const GPS_UNRELIABLE         = 'GPS_UNRELIABLE';
+    public const EXIF_INCONSISTENT      = 'EXIF_INCONSISTENT';
     public const HIGH_VOLUME_CLAIM      = 'HIGH_VOLUME_CLAIM';
     public const IMAGE_UNREADABLE       = 'IMAGE_UNREADABLE';
 
@@ -55,6 +58,7 @@ final class DecisionMatrix
      *   timestamp:array<string,mixed>,
      *   duplicate:array<string,mixed>,
      *   geofence:array<string,mixed>,
+     *   exif:array<string,mixed>,
      *   weekly_verified_count:int,
      *   count_claimed:int
      * } $checks
@@ -108,6 +112,21 @@ final class DecisionMatrix
         }
 
         // --- Review-grade uncertainty ----------------------------------------
+        // An EXIF block whose fields contradict each other is a rewritten file,
+        // not a broken one. That is a review, never a rejection: the same
+        // disagreement appears in a phone that synced its clock while taking the
+        // photo, and the system cannot tell those apart from here. It is recorded
+        // rather than silently ignored so the block is never counted as evidence
+        // of anything.
+        $exifStatus = (string) ($checks['exif']['status'] ?? '');
+
+        if ($exifStatus === ExifExtractor::INCONSISTENT) {
+            $reasons[] = [
+                'code'   => self::EXIF_INCONSISTENT,
+                'detail' => 'EXIF fields contradict each other (capture time and GPS clock, or original and digitised time, disagree)',
+            ];
+        }
+
         if (($duplicate['status'] ?? '') === DuplicateDetector::POSSIBLE) {
             $reasons[] = [
                 'code'   => self::POSSIBLE_DUPLICATE,
@@ -142,6 +161,7 @@ final class DecisionMatrix
         $geofenceReviews = [
             \FieldPulse\Geo\Geofence::OUTSIDE_GEOFENCE => [self::OUTSIDE_GEOFENCE, 'position outside every assigned site radius'],
             \FieldPulse\Geo\Geofence::NO_GPS           => [self::NO_GPS, 'no position supplied'],
+            \FieldPulse\Geo\Geofence::INVALID_GPS      => [self::INVALID_GPS, 'coordinates are out of range or not a finite position'],
             \FieldPulse\Geo\Geofence::SITE_UNASSIGNED  => [self::SITE_UNASSIGNED, 'agent has no site assignment to check against'],
             \FieldPulse\Geo\Geofence::GPS_UNRELIABLE   => [self::GPS_UNRELIABLE, 'supplied position is not plausible for a handset'],
         ];

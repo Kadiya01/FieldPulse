@@ -253,6 +253,18 @@ $injectExif = static function (string $jpegPath, \DateTimeImmutable $when): void
  * runs the DCT and hashes it, and a fixture that skipped that would not
  * exercise the code that actually breaks. Pass $exifAt to give the photo a
  * capture time.
+ *
+ * $seed selects the pixels, and IT IS A GLOBAL NAMESPACE, NOT A LOCAL ONE.
+ *
+ * The same seed produces byte-identical output, so a seed used by one test is a
+ * duplicate submission for every other test that reuses it. Reusing 7 here once
+ * made an unrelated review-queue test fail: its new submission was byte-identical
+ * to an earlier one, so the pipeline correctly returned EXACT_DUPLICATE instead
+ * of SITE_UNASSIGNED and the row never entered the queue. Two failures, both
+ * pointing at unrelated code.
+ *
+ * Give each new test a seed nothing else uses. The only intentional repeat is
+ * the exact-duplicate test, which passes the same seed twice on purpose.
  */
 $makeImage = static function (int $seed, int $size = 160, ?\DateTimeImmutable $exifAt = null) use (
     &$createdFiles,
@@ -295,7 +307,8 @@ $makeSubmission = static function (
     array $image,
     int $countClaimed = 1,
     ?float $lat = null,
-    ?float $lng = null
+    ?float $lng = null,
+    ?float $accuracyM = null
 ) use ($submissions, &$createdSubmissionIds, $runTag): int {
     [$absolute, $relative, $sha] = $image;
 
@@ -307,6 +320,7 @@ $makeSubmission = static function (
         $lat,
         $lng,
         Clock::sql(),
+        $accuracyM,
         $relative,
         $sha,
         'image/jpeg',
@@ -609,6 +623,98 @@ $t->test('an agent with no assigned site lands in review, not a false pass', fun
     $t->assertNull($row['verified_at'], 'a flagged submission is never marked verified');
 });
 
+$t->test('accuracy_m stored on a submission reaches the geofence decision', function (TestRunner $t) use (
+    $makeAgent,
+    $makeDevice,
+    $makeImage,
+    $makeSubmission,
+    $submissions
+): void {
+    /*
+     * The last leg of the accuracy_m chain.
+     *
+     * bin/integrity.php proves the field is validated and persisted. Nothing
+     * there proves it is USED, and "stored but ignored" is precisely the
+     * defect Phase 4 is about. So this asserts the field changes the outcome:
+     *
+     *   same coordinates, same site radius (250 m), same file
+     *   accuracy 10 m   -> VERIFIED
+     *   accuracy 400 m  -> GPS_UNRELIABLE, because a fix whose 95% confidence
+     *                      radius is larger than the site radius cannot decide
+     *                      that site radius
+     *
+     * Without client_accuracy_m being read by Geofence::evaluate(), both
+     * submissions produce byte-identical verdicts and this fails.
+     */
+    $goodAgent  = $makeAgent('AGENT', true, 6.5244, 3.3792);
+    $goodDevice = $makeDevice($goodAgent);
+
+    $goodImage = $makeImage(91, 160, new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+    $goodId    = $makeSubmission($goodAgent, $goodDevice, $goodImage, 2, 6.5244, 3.3792, 10.0);
+
+    $goodResult = (new VerificationService())->verify($goodId);
+
+    $t->assertSame(
+        DecisionMatrix::VERIFIED,
+        $goodResult['disposition'],
+        'a 10 m fix inside the fence verifies'
+    );
+
+    $coarseAgent  = $makeAgent('AGENT', true, 6.5244, 3.3792);
+    $coarseDevice = $makeDevice($coarseAgent);
+
+    $coarseImage = $makeImage(92, 160, new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+    $coarseId    = $makeSubmission($coarseAgent, $coarseDevice, $coarseImage, 2, 6.5244, 3.3792, 400.0);
+
+    $coarseResult = (new VerificationService())->verify($coarseId);
+
+    $t->assertSame(
+        DecisionMatrix::GPS_UNRELIABLE,
+        $coarseResult['reason'],
+        'a 400 m fix cannot decide a 250 m site radius, even from the same coordinates'
+    );
+    $t->assertSame(
+        DecisionMatrix::REQUIRES_REVIEW,
+        $coarseResult['disposition'],
+        'and it is held for review rather than auto-verified on a weak fix'
+    );
+
+    // The value must still be readable afterwards: a reviewer looking at the row
+    // needs to know the fix was poor, and that question is answered here.
+    $row = $submissions->findById($coarseId);
+    $t->assertSame(
+        400.0,
+        (float) $row['client_accuracy_m'],
+        'the reported accuracy is retained on the row for the reviewer'
+    );
+    $t->assertNull($row['verified_at'], 'a GPS_UNRELIABLE submission is never marked verified');
+});
+
+$t->test('a submission with no reported accuracy is judged on position alone', function (TestRunner $t) use (
+    $makeAgent,
+    $makeDevice,
+    $makeImage,
+    $makeSubmission
+): void {
+    // The null case has to keep its old behaviour. Accuracy is an additional
+    // signal, not a new requirement: a handset that omits it should not be
+    // failed for the omission, and EXIF-only fixes carry no accuracy figure at
+    // all, so requiring one would make them unverifiable.
+    $agentId  = $makeAgent('AGENT', true, 6.5244, 3.3792);
+    $deviceId = $makeDevice($agentId);
+    $image    = $makeImage(93, 160, new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+
+    $submissionId = $makeSubmission($agentId, $deviceId, $image, 2, 6.5244, 3.3792, null);
+
+    $result = (new VerificationService())->verify($submissionId);
+
+    $t->assertSame(
+        DecisionMatrix::VERIFIED,
+        $result['disposition'],
+        'an omitted accuracy does not block verification'
+    );
+});
+
 $t->test('a byte-identical resubmission is caught as an exact duplicate', function (TestRunner $t) use (
     $makeAgent,
     $makeDevice,
@@ -876,7 +982,7 @@ $t->test('a job is enqueued, claimed once and completed', function (TestRunner $
     $second = $jobs->claimBatch($runTag . '-worker-2', 10);
     $t->assertSame(0, count(array_filter($second, static fn (array $j): bool => (int) $j['submission_id'] === $submissionId)), 'a claimed job is not claimed again');
 
-    $jobs->complete((int) $mine[0]['id']);
+    $jobs->complete((int) $mine[0]['id'], (string) $mine[0]['locked_by']);
 
     $t->assertSame(
         'COMPLETED',

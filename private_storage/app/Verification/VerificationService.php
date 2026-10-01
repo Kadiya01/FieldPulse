@@ -14,6 +14,7 @@ use FieldPulse\Geo\Geofence;
 use FieldPulse\Imaging\ExifExtractor;
 use FieldPulse\Imaging\ImageInspector;
 use FieldPulse\Imaging\PHash;
+use FieldPulse\Storage\StorageState;
 use FieldPulse\Support\Clock;
 use FieldPulse\Support\Logger;
 use FieldPulse\Support\Paths;
@@ -146,8 +147,9 @@ final class VerificationService
             $agentId,
             $submission['client_latitude'] === null ? null : (float) $submission['client_latitude'],
             $submission['client_longitude'] === null ? null : (float) $submission['client_longitude'],
-            $exif['gps']['latitude'] ?? null,
-            $exif['gps']['longitude'] ?? null
+            $exif['latitude'] ?? null,
+            $exif['longitude'] ?? null,
+            $submission['client_accuracy_m'] === null ? null : (float) $submission['client_accuracy_m']
         );
 
         $geofence['message'] = self::describeGeofence($geofence);
@@ -168,11 +170,14 @@ final class VerificationService
             $submissionId
         );
 
+        $exifStatus = ExifExtractor::statusOf($exif);
+
         $decision = DecisionMatrix::decide([
             'image_ok'              => true,
             'timestamp'             => $timestamp,
             'duplicate'             => $duplicate,
             'geofence'              => $geofence,
+            'exif'                  => ['status' => $exifStatus],
             'weekly_verified_count' => $weeklyVerified,
             'count_claimed'         => (int) $submission['count_claimed'],
         ]);
@@ -228,6 +233,37 @@ final class VerificationService
         // verification row are identical even if config were re-read mid-flight.
         $version = Config::instance()->str('verification.version');
 
+        /*
+         * The bytes move BEFORE the ledger says the verdict, not after.
+         *
+         * The ordering is the whole point, and it is the opposite of what this
+         * code did originally: it committed the terminal status first and then
+         * moved the file, treating a failed move as a warning. That ordering
+         * makes a real, silent failure mode.
+         *
+         * If the disk is read-only, full, or the rename fails, the original
+         * order left the ledger claiming VERIFIED while the bytes sat in
+         * quarantine forever. Nothing would ever retry — the job had already
+         * completed successfully — so the agent is paid for evidence that is
+         * filed in the wrong place and cannot be found by anyone reviewing the
+         * submission. The row asserted a verdict that the storage could not
+         * support.
+         *
+         * Moving first inverts the risk. If the move fails, this throws, the
+         * disposition transaction never runs, and the job stays retryable —
+         * so the terminal status can only ever be written for evidence that is
+         * already in its final folder. The worst case is a verified submission
+         * sitting in quarantine that gets picked up again, which is recoverable
+         * work rather than a false claim.
+         *
+         * There is no transaction to enlist the rename in: StorageState defines
+         * the crash windows, and each one leaves a state reconcile() can detect
+         * and resolve. This ordering is what makes the retry safe, because a
+         * retry re-reads file_path — which markStorageMoved() has already
+         * rewritten to the final location — and finds the bytes.
+         */
+        $this->archiveFile($submission, $status);
+
         Connection::transaction(function () use (
             $submissionId,
             $agentId,
@@ -252,8 +288,8 @@ final class VerificationService
                 $version,
                 $phash['hex'] ?? null,
                 $phash['bands'] ?? null,
-                $exif['gps']['latitude'] ?? null,
-                $exif['gps']['longitude'] ?? null,
+                $exif['latitude'] ?? null,
+                $exif['longitude'] ?? null,
                 $exif['captured_at'] ?? null
             );
 
@@ -267,8 +303,6 @@ final class VerificationService
                 'reasons'   => $reasons,
             ]);
         });
-
-        $this->archiveFile($submission, $status);
 
         if ($aggregate) {
             $this->aggregate($agentId, $submissionId);
@@ -336,7 +370,7 @@ final class VerificationService
         $timestampStatus = (string) ($evidence['timestamp']['status'] ?? 'NOT_EVALUATED');
         $geofenceStatus  = (string) ($evidence['geofence']['status'] ?? 'NOT_EVALUATED');
         $duplicateStatus = (string) ($evidence['duplicate']['status'] ?? DuplicateDetector::NONE);
-        $exifStatus      = (string) ($evidence['exif']['presence'] ?? 'ABSENT');
+        $exifStatus      = ExifExtractor::statusOf((array) ($evidence['exif'] ?? []));
 
         $this->exec(
             'INSERT INTO submission_verifications (
@@ -440,58 +474,39 @@ final class VerificationService
     }
 
     /**
-     * Move the file out of quarantine into its disposition folder (§8).
+     * Move the file out of quarantine into its disposition folder (§8), or fail.
      *
-     * The stored path is rewritten only after the move succeeds, so a crash
-     * between the two leaves an orphan in the destination rather than a
-     * submission pointing at nothing.
+     * Delegates to StorageState, which owns the crash semantics for the
+     * filesystem/ledger pair. This method owns the decision to abort: when the
+     * bytes cannot be placed, the caller must not reach the disposition write,
+     * because marking a submission VERIFIED while its evidence is still in
+     * quarantine produces a ledger row claiming a verdict backed by a file
+     * nobody can find.
+     *
+     * So it throws rather than returning. The exception is not an error in the
+     * job-failure sense: QueueWorker::process() catches it, fails the job with
+     * backoff, and leaves the submission retryable, which is the correct state
+     * for "the disk said no". An earlier version logged a warning and returned
+     * normally, so the job completed, the status committed, and the failure was
+     * visible only in a log nobody reads.
+     *
+     * @throws \RuntimeException when the evidence cannot be placed
      */
     private function archiveFile(array $submission, string $status): void
     {
-        $folder = match ($status) {
-            SubmissionRepository::VERIFIED        => Paths::DIR_VERIFIED,
-            SubmissionRepository::REQUIRES_REVIEW => Paths::DIR_REVIEW,
-            default                             => Paths::DIR_REJECTED,
-        };
-
-        $source   = Paths::absoluteForStoredPath((string) $submission['file_path']);
-        $filename = $folder . '/' . $submission['submission_uuid']
-            . '.' . self::extensionFor((string) $submission['file_mime']);
-
-        try {
-            $target = Paths::storagePath($filename);
-        } catch (\Throwable $e) {
-            Logger::error('verification.archive_path_invalid', ['error' => $e->getMessage()]);
-
+        if (StorageState::archive($this->submissions, $submission, $status)) {
             return;
         }
 
-        if (!is_file($source)) {
-            Logger::warning('verification.archive_source_missing', ['path' => basename($source)]);
+        Logger::error('verification.archive_deferred', [
+            'submission_id' => (int) $submission['id'],
+            'status'        => $status,
+        ]);
 
-            return;
-        }
-
-        if (!@rename($source, $target)) {
-            Logger::error('verification.archive_move_failed', [
-                'from' => basename($source),
-                'to'   => $filename,
-            ]);
-
-            return;
-        }
-
-        @chmod($target, Config::instance()->int('storage.file_perms', 0640));
-
-        Connection::execute(
-            'UPDATE submissions SET file_path = :path, updated_at = UTC_TIMESTAMP() WHERE id = :id',
-            ['path' => Paths::relativeForAbsolutePath($target), 'id' => (int) $submission['id']]
+        throw new \RuntimeException(
+            'Evidence could not be moved to its disposition folder for submission '
+            . (int) $submission['id'] . '; leaving it retryable rather than committing a verdict.'
         );
-    }
-
-    private static function extensionFor(string $mime): string
-    {
-        return $mime === ImageInspector::MIME_PNG ? 'png' : 'jpg';
     }
 
     /**
@@ -542,6 +557,7 @@ final class VerificationService
 
         return match ($status) {
             Geofence::NO_GPS          => 'no position was supplied with the submission',
+            Geofence::INVALID_GPS     => 'supplied coordinates are out of range or not a finite position',
             Geofence::SITE_UNASSIGNED => 'no active site is assigned to this agent',
             Geofence::GPS_UNRELIABLE  => 'supplied position is not plausible for a handset',
             default                   => 'geofence status: ' . $status,

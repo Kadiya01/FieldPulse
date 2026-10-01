@@ -35,11 +35,74 @@ retries and a visible failure state.
 10. weekly cap                count_claimed sum against the cap
 11. decide                    Verification\DecisionMatrix
 12. archive                   quarantine → processed/{disposition}/
-13. aggregate                 recompute the agent's weekly summary
+13. write the verdict         status + disposition row, in one transaction
+14. aggregate                 recompute the agent's weekly summary
 ```
 
-Steps 12 and 13 are inside the transaction that writes the verdict, so a crash
-cannot leave a file moved but not recorded or a verdict recorded but not counted.
+### Step 12 runs before step 13, and that ordering is load-bearing
+
+Step 12 is a `rename()` and step 13 is a MySQL transaction. They are two
+different kinds of store with no shared commit: MySQL will atomically roll back
+an INSERT that fails, but it cannot roll back a rename that already happened, and
+a rename cannot be enlisted in the transaction that would have recorded it.
+
+The original order was 13 then 12, treating a failed move as a warning to log.
+That ordering has a silent failure mode. If the disk is read-only or full, the
+ledger commits `VERIFIED` while the bytes are still in `quarantine/`. The job
+completes, so nothing retries it. The agent is paid for evidence that cannot be
+found by anyone reviewing the submission, and the ledger asserts a verdict the
+storage cannot support.
+
+Archiving first inverts that. A failed move now throws before the disposition
+transaction opens, so a terminal status can only ever be written for evidence
+already filed correctly. The submission stays retryable and is picked up again.
+
+The trade is deliberate: a failed archive produces *work left to do* rather than
+*evidence claimed and unfindable*. The first is recoverable; the second is a
+false statement in the ledger.
+
+### Crash windows, and what each one means
+
+Because there is no single commit, every interruption point has to be defined.
+`StorageState` (migration `019`) gives each row an explicit `storage_state`, so
+the question is never "what happened" but "which state is this row in".
+
+| Window | On-disk state | Ledger state | Meaning |
+|---|---|---|---|
+| after ingest, before ledger row | orphan in `quarantine/` | no row | harmless; `bin/prune.php` deletes unreferenced files past the grace period |
+| after ledger row | bytes in `quarantine/` | `QUARANTINED` | normal pending work |
+| mid-rename | either | `QUARANTINED` | POSIX `rename()` is atomic within a filesystem; there is no half-moved file |
+| after rename, before row update | bytes in `processed/<disposition>/` | `QUARANTINED`, `file_path` still names quarantine | **repairable** — see below |
+| after row update, before verdict commit | bytes in `processed/<disposition>/` | `PROCESSED`, still `QUEUED` | retry re-reads `file_path`, finds the bytes, completes |
+| any time | no bytes | `MISSING` | storage loss, not a race |
+
+The "after rename, before row update" window is why the final filename must be
+**deterministic**: it is derived only from the server-issued UUID and the
+server-detected MIME, so a reconciler can compute the exact location to look in
+without trusting anything the row says.
+
+`reconcile()` searches **all three** disposition folders, not the one implied by
+`status`. This is a consequence of the write order above: because archiving runs
+before the verdict commits, a crashed row still reads `PROCESSING` or `QUEUED`.
+A reconciler that derived the destination from `status` would resolve to
+`REJECTED`, search `processed/rejected`, find nothing, and record `MISSING` for a
+file sitting in `processed/verified`. The filename does not depend on the
+disposition, so searching each folder is exact rather than a guess.
+
+The guarantee is deliberately narrow. No crash can lose evidence. What
+`StorageState` promises is that a crash is always *visible* and that the visible
+state always names the next concrete action.
+
+### Reconciliation runs from `bin/prune.php`
+
+`php private_storage/bin/prune.php` (and `--dry-run`) reports reconciliation
+after the TTL deletes, not as one of them. It is not a delete, and a failure to
+reconcile must not prevent expired rows from being reclaimed.
+
+It reports on healthy runs too. A reconciler whose output is only interesting
+when the count is non-zero is one nobody thinks to check, so `0 missing` appears
+in the cron log as proof the check is still running. Non-zero `missing` is
+labelled as storage loss needing a human, because that is what it is.
 
 ---
 
@@ -112,11 +175,104 @@ No coordinates supplied. Also a review, not a pass, for the same reason.
 Supplied coordinates are not plausible for a handset — null island, a
 lat/long transposition, or a fix so precise it indicates mocking.
 
+It also covers a reported accuracy too coarse to decide the fence: when
+`client_accuracy_m` exceeds the agent's smallest active site radius, a 400 m fix
+cannot establish presence inside a 250 m site no matter how well-centred the
+coordinates are. The point is that the reading is uninformative, not that the
+agent is dishonest, which is why it is a review.
+
+### Accuracy is validated at the edge, then used
+
+`accuracy_m` is optional. It is captured in the browser
+(`navigator.geolocation`, `CapturePage`), persisted to IndexedDB, carried in the
+signed payload, validated in `Validator::accuracy()` (finite, `>= 0`, `<=`
+`geofence.gps_accuracy_max_m`, default 500), stored on `submissions`, and read
+back during verification.
+
+Omitting it is not an error. A handset that declines to report accuracy should
+not be failed for the refusal, and EXIF-only fixes carry no accuracy figure at
+all, so requiring one would make them unverifiable. A missing value is judged on
+position alone.
+
+Validation is deliberately strict about the non-finite cases. `NaN` and `INF`
+satisfy `>= 0` in PHP, so an unchecked numeric comparison would accept them and
+store them in a `DECIMAL(10,2)` column, where they either truncate to zero —
+silently converting "broken" into "perfect" — or raise a warning. `Validator::accuracy()`
+rejects them explicitly.
+
 ### Timestamp family
 `TIMESTAMP_MISSING`, `TIMESTAMP_UNPARSEABLE`, `TIMESTAMP_TOO_OLD`,
 `TIMESTAMP_DISCREPANCY`. EXIF and client timestamps disagreeing beyond
 tolerance means one of the two is wrong, and the system has no way to tell which
 is telling the truth.
+
+### `INVALID_GPS`
+The coordinates cannot denote a point on the earth at all: non-finite, or outside
+`[-90, 90]` / `[-180, 180]`.
+
+Kept separate from `GPS_UNRELIABLE` because the two support different
+conclusions. Out-of-range coordinates are a broken payload, and no amount of
+review will make them describe a place. An implausible-but-in-range fix — null
+island, a transposed pair, a confidence radius wider than the site — is a
+readable position whose *reliability* is in doubt, which is what a human is for.
+
+The distinction is checked before the site search and before any EXIF fallback, so
+a broken payload cannot hide behind a different source or be compared against a
+site. `is_finite()` is tested first and on its own: every range comparison is
+false for `NaN`, so a range test alone would wave it straight through into the
+box search.
+
+### `EXIF_INCONSISTENT`
+Every EXIF field parses cleanly, and they contradict each other:
+`DateTimeOriginal` and `DateTimeDigitized` disagree, or `DateTimeOriginal` and the
+GPS satellite clock disagree, by more than `timestamps.max_future_skew`.
+
+**This is a review, never a rejection.** The two commonest causes are innocent:
+a handset whose clock was corrected mid-capture writes two plausible times, and a
+camera whose clock was never set disagrees with the GPS chip that does. Editing a
+file produces the same signature, and nothing here distinguishes the three. What
+the check does earn is that a file contradicting *itself* reaches a person instead
+of auto-verifying.
+
+### EXIF is recorded on three axes, not one
+
+`submission_verifications.exif_status` is a single column, but the extractor
+reports three independent findings that are composed into it worst-first:
+
+| Axis | Values |
+|---|---|
+| `gps_status` | `PRESENT` / `ABSENT` / `INVALID` |
+| `captured_status` | `PRESENT_VALID` / `PRESENT_INVALID` / `ABSENT` |
+| `consistency` | `CONSISTENT` / `INCONSISTENT` |
+
+| Composed status | Meaning |
+|---|---|
+| `UNREADABLE` | No EXIF block at all. Outranks everything. |
+| `PRESENT_VALID` | Present and every field parses and agrees. |
+| `PRESENT_INVALID` | Present but a field is unparseable. |
+| `INCONSISTENT` | Every field parses; they contradict each other. |
+
+Precedence is worst-first, and `PRESENT_INVALID` outranks `INCONSISTENT`
+deliberately: a broken field is a simpler explanation for a bad block than a
+contradiction between two well-formed ones, so the simpler cause is what a
+reviewer reads first.
+
+`ExifExtractor::statusOf()` is the single definition of that composition.
+`VerificationService` calls it rather than recomputing the precedence — the
+defect this phase opened with was exactly two definitions of "what was the EXIF
+state of this file", which made the recorded column and the reason shown to a
+reviewer disagree.
+
+### Absent EXIF is not fraud
+
+The most common reason a legitimate submission cannot be auto-verified is that
+the phone withheld permission at the OS level. `PRESENT_INVALID` is a review, and
+`ABSENT` is a review; neither is ever a rejection, and neither may be presented as
+suspicion.
+
+Valid EXIF is equally not a pass. A clean, self-consistent block submitted from
+outside the fence is still `OUTSIDE_GEOFENCE`, because a camera clock proves
+nothing about where a photograph was taken.
 
 ---
 
@@ -135,8 +291,16 @@ incidental. An earlier version sorted the coefficients by magnitude before
 assigning bits, which made every bit mean "the i-th largest coefficient" instead
 of "the coefficient at position i" — the magnitude distribution survived and the
 spatial arrangement was thrown away. Two unrelated images with a similar spread
-of coefficient sizes then hashed as near-identical. The
-`--filter=phash` mirror test in `bin/selftest.php` exists to catch exactly this.
+of coefficient sizes then hashed as near-identical.
+
+Reading down a column instead of across a row has the same shape of defect and is
+harder to see, because the hash stays deterministic, stays 64 bits, keeps its
+bands, and every distance test still passes — the positions being compared are
+simply transposed. `bin/verification.php` asserts the layout against an
+independent, deliberately naive `O(N^4)` DCT reference and demands a bit-for-bit
+match, so any reordering of the traversal, the median, or the DC handling fails
+the test rather than degrading the hash quietly. The DC term is compared against
+the AC median to fill the 64th bit.
 
 Bands are only an **index**. Candidates are retrieved by shared band, then the
 full 64-bit Hamming distance is computed. A pair 9–15 bits apart whose bands
@@ -173,28 +337,48 @@ makes multi-site deployment work without a special case.
 ## The queue
 
 The database is the queue. There is no broker to run and nothing to supervise.
+Rows live in `processing_jobs` with a status of `PENDING`, `PROCESSING`,
+`COMPLETED` or `FAILED`, an `available_at` gate, an `attempts`/`max_attempts`
+pair, and a `locked_by` worker token.
 
+Claiming prefers the primitive that means what it says:
+
+```sql
+SELECT id FROM processing_jobs
+ WHERE status = 'PENDING' AND available_at <= UTC_TIMESTAMP()
+   AND attempts < max_attempts
+ ORDER BY available_at, id LIMIT :n
+ FOR UPDATE SKIP LOCKED;
 ```
-claim   UPDATE ... SET status='processing', locked_at=UTC_TIMESTAMP(), lock_token=:t
-        WHERE id IN (SELECT id FROM (SELECT id FROM processing_jobs
-                     WHERE status IN ('queued','failed') AND run_after <= UTC_TIMESTAMP()
-                     ORDER BY run_after, id LIMIT :n) AS due)
-```
 
-`claimBatch` is safe to run concurrently: the row lock is what serialises it, and
-each worker only ever touches rows carrying its own `lock_token`.
+`SKIP LOCKED` needs MySQL 8.0.1+ or MariaDB 10.6+. The server version is probed
+once and, on an older MariaDB, `claimBatch` falls back to a single
+`UPDATE ... ORDER BY ... LIMIT` that stamps the head of the queue with a unique
+per-claim token. In both forms the read-back is scoped to that token, so a
+worker can only ever see the rows it actually won. Two overlapping cron ticks
+therefore never process the same job.
 
-A job that dies — timeout, OOM, `kill -9` — is left in `processing`. The next
-tick's `recoverStaleLocks` returns it to the queue once `locked_at` is older than
-`JOB_LOCK_TIMEOUT_MIN`. Without that, one killed worker would strand a
-submission in `processing` forever, with no error and no alert.
+The token is also an ownership proof. `complete()` and `fail()` are scoped to
+`locked_by`, so a worker whose lease was reaped cannot complete or fail a job a
+second worker has since claimed; the write affects zero rows instead.
 
-Retries use exponential backoff via `run_after`, capped by `JOB_MAX_ATTEMPTS`.
-A submission that exhausts its attempts ends in `FAILED` with the error recorded,
-visible to an operator. It is never silently dropped.
+A job that dies — timeout, OOM, `kill -9` — is left in `PROCESSING`. The next
+tick's `recoverStaleLocks` reclaims it once `locked_at` is older than
+`JOB_LOCK_TIMEOUT_MIN`. A stale job with attempts left returns to `PENDING`; a
+stale job that has already burned `JOB_MAX_ATTEMPTS` is marked `FAILED` and its
+submission moved to `REQUIRES_REVIEW`. That second branch is what stops a poison
+job (a file that kills its worker every time) from being reclaimed forever
+without ever surfacing.
+
+Retries use exponential backoff via `available_at`. A submission that exhausts
+its attempts ends in `FAILED` with the error recorded, visible to an operator.
+It is never silently dropped.
 
 Overlapping cron ticks are **expected and safe**. A tick that runs past 60
-seconds will overlap the next one; the lock protocol handles it.
+seconds will overlap the next one; the claim and lease protocol handles it.
+`bin/queue.php` drives two real PHP workers at the same instant, recovers a
+crashed worker's lock, exercises retry/permanent-failure/ownership, and proves
+aggregation is idempotent.
 
 ---
 
@@ -213,6 +397,64 @@ from the verification service, the review service, and the rebuild tool. An
 earlier version kept a second copy of the summary SQL inside the verification
 service, and the two drifted until one referenced a column the table did not
 have. One table, one writer.
+
+---
+
+## What the tests cover
+
+`bin/verification.php` — 78 assertions across six groups, all against real files
+and real rows in `fieldpulse_test`. It is not a unit suite: the defects this
+phase was opened for were *wiring* defects, two components each individually
+correct and neither matching the other's contract, and component tests pass
+straight through a broken wire.
+
+| Group | What it pins down |
+|---|---|
+| `exif` | Every parse outcome, both tolerance directions, both contradiction axes, and `statusOf()` agreeing with the extractor it replaces |
+| `geofence` | All six outcomes, each proved *not* to be a pass; the range boundary vs. implausibility; accuracy too coarse for the fence; the box search narrowing candidates without deciding |
+| `phash` | Determinism, band indexing, `normaliseHex` round-trips, row-major layout against an independent DCT reference, brightness invariance, blank-image stability |
+| `duplicates` | Exact vs. perceptual, cross-agent, self-exclusion, both threshold boundaries, the margin edges, band-unretrievable candidates, nearest-candidate selection |
+| `timestamps` | The server receipt time as the anchor, all four statuses, and the grading asymmetry between future and old |
+| `pipeline` | `VerificationService` end to end: a clean pass, a contradiction escalated, EXIF persisted, integrity failure first, idempotency |
+
+Fixtures are built by the suite and removed on exit via a shutdown handler, which
+runs even on fatal error. An existing `quarantine/` file that the run did not
+create is never touched.
+
+### Coverage was verified by mutation, not by assertion count
+
+78 passing tests prove nothing on their own. Each check below was temporarily
+reverted to the bug it guards against and the suite re-run to confirm it failed:
+
+| Mutation | Caught by |
+|---|---|
+| `EXIF_INCONSISTENT` → auto-verify | pipeline + timestamps groups |
+| EXIF→receipt delta hardcoded to 0 | 4 timestamp tests |
+| GPS-vs-capture contradiction check deleted | GPS cross-check test |
+| DC bit forced to 0 | hash round-trip test |
+| AC median comparison `>` → `>=` | hash layout reference test |
+| Exact-duplicate digest salted | 3 duplicate tests |
+| Geofence accuracy check disabled | 3 geofence tests |
+
+The GPS contradiction check was found this way: deleting it left every other test
+green. It is covered by driving `ExifExtractor`'s private helpers through
+reflection, because this PHP build will not return a hand-built GPS IFD from
+`exif_read_data` at all — it exposes `IFD0` and `EXIF` but never `GPS`. That is a
+fixture limitation, not untested behaviour, and it is the one place where a
+reviewer should know the coverage is not end-to-end.
+
+### A note on the near-miss mutations
+
+Two mutations were *not* caught and were investigated rather than papered over:
+
+- **DC included in the median.** Adding a large positive DC term to a set of 63
+  AC values barely moves the median (it sorts to the top, shifting only the
+  average of the two middle values), so the hash is nearly unchanged. The
+  property that actually matters — a uniform brightness change must not move the
+  hash — is asserted directly and holds at distance 0.
+- **Threshold comparison off-by-one.** The comparison reads
+  `$distance <= $threshold`; no such literal exists in the detector, so that
+  mutation was a no-op rather than a gap.
 
 ---
 

@@ -28,6 +28,19 @@ final class SubmissionRepository extends Repository
         self::REJECTED,
     ];
 
+    /*
+     * Where the bytes are, as distinct from what was decided about them.
+     *
+     * Deliberately a separate axis from self::TERMINAL. status answers "what did
+     * verification conclude", storage_state answers "is the evidence still
+     * there". Collapsing them is how a row ends up claiming REJECTED while the
+     * file that justified the rejection was never written — two different
+     * failures that a single enum cannot represent.
+     */
+    public const STORAGE_QUARANTINED = 'QUARANTINED';
+    public const STORAGE_PROCESSED   = 'PROCESSED';
+    public const STORAGE_MISSING     = 'MISSING';
+
     /** @return array<string,mixed>|null */
     public function findByUuid(string $uuid): ?array
     {
@@ -75,6 +88,7 @@ final class SubmissionRepository extends Repository
         ?float $clientLat,
         ?float $clientLng,
         ?string $clientCapturedAt,
+        ?float $clientAccuracyM,
         string $filePath,
         string $fileSha256,
         string $fileMime,
@@ -85,12 +99,12 @@ final class SubmissionRepository extends Repository
         $this->exec(
             'INSERT INTO submissions (
                 submission_uuid, agent_id, device_id, count_claimed,
-                client_latitude, client_longitude, client_captured_at,
+                client_latitude, client_longitude, client_captured_at, client_accuracy_m,
                 file_path, file_sha256, file_mime, file_size, image_width, image_height,
                 server_received_at, status, created_at, updated_at
              ) VALUES (
                 :uuid, :agent_id, :device_id, :count_claimed,
-                :lat, :lng, :captured_at,
+                :lat, :lng, :captured_at, :accuracy,
                 :file_path, :sha256, :mime, :size, :width, :height,
                 UTC_TIMESTAMP(), :status, UTC_TIMESTAMP(), UTC_TIMESTAMP()
              )',
@@ -102,6 +116,7 @@ final class SubmissionRepository extends Repository
                 'lat'          => $clientLat,
                 'lng'          => $clientLng,
                 'captured_at'  => $clientCapturedAt,
+                'accuracy'     => $clientAccuracyM,
                 'file_path'    => $filePath,
                 'sha256'       => $fileSha256,
                 'mime'         => $fileMime,
@@ -199,6 +214,97 @@ final class SubmissionRepository extends Repository
             'UPDATE submissions SET aggregation_applied_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP()
               WHERE id = :id AND aggregation_applied_at IS NULL',
             ['id' => $id]
+        );
+    }
+
+    /**
+     * Record a storage move: new path, new state, same statement.
+     *
+     * file_path and storage_state are updated together on purpose. They are two
+     * representations of one fact, and splitting them across two UPDATEs leaves
+     * a window in which a reader can observe PROCESSED with the quarantine path
+     * still in file_path — which is a row whose bytes cannot be located.
+     *
+     * The caller is responsible for having completed the rename first. There is
+     * no ordering here that makes the filesystem and the ledger atomic, only an
+     * honest record of which one got there first: see StorageState.
+     */
+    public function markStorageMoved(int $id, string $relativePath, string $state): void
+    {
+        $this->exec(
+            'UPDATE submissions
+                SET file_path = :path,
+                    storage_state = :state,
+                    storage_state_updated_at = UTC_TIMESTAMP(),
+                    updated_at = UTC_TIMESTAMP()
+              WHERE id = :id',
+            ['path' => $relativePath, 'state' => $state, 'id' => $id]
+        );
+    }
+
+    /**
+     * Flag a row whose file_path no longer names a file.
+     *
+     * Not a status change. The verification outcome stands — evidence that has
+     * gone missing was still assessed — but the row stops claiming the bytes are
+     * retrievable, so an audit asking "can I re-read the evidence for this
+     * VERIFIED submission" gets MISSING instead of a silent empty read.
+     */
+    public function markStorageMissing(int $id): void
+    {
+        // :state appears twice, so it is bound twice. PDO in native-prepare mode
+        // does not accept a repeated named placeholder — it reports
+        // "Invalid parameter number" — and Config may or may not have emulation
+        // enabled depending on the driver, which makes a repeated placeholder
+        // pass locally and fail in production. Binding it twice is correct under
+        // both modes.
+        $this->exec(
+            'UPDATE submissions
+                SET storage_state = :state,
+                    storage_state_updated_at = UTC_TIMESTAMP(),
+                    updated_at = UTC_TIMESTAMP()
+              WHERE id = :id AND storage_state <> :state_current',
+            [
+                'state'         => self::STORAGE_MISSING,
+                'id'            => $id,
+                'state_current' => self::STORAGE_MISSING,
+            ]
+        );
+    }
+
+    /**
+     * Rows whose bytes need to be checked, oldest first.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function rowsForStorageReconcile(int $limit = 500): array
+    {
+        /*
+         * status is in the column list, and it has to be.
+         *
+         * reconcile() rebuilds the deterministic final path, and that path
+         * depends on the disposition: processed/verified, processed/review and
+         * processed/rejected are three different folders. The disposition is
+         * derived from status, so a row selected without it resolves to the
+         * default folder, looks there for the bytes, does not find them, and
+         * reports MISSING — for a file that is sitting correctly in verified/.
+         *
+         * The failure is silent and total: every row in the wrong folder reads
+         * as lost evidence, and the reconciler marks the entire backlog MISSING
+         * while reporting that it checked it. That is worse than not
+         * reconciling at all, because it converts a repairable state into a
+         * recorded loss.
+         */
+        return Connection::fetchAll(
+            'SELECT id, status, file_path, file_sha256, file_mime, storage_state
+               FROM submissions
+              WHERE storage_state IN (:quarantined, :processed)
+              ORDER BY server_received_at ASC
+              LIMIT ' . max(1, $limit),
+            [
+                'quarantined' => self::STORAGE_QUARANTINED,
+                'processed'   => self::STORAGE_PROCESSED,
+            ]
         );
     }
 

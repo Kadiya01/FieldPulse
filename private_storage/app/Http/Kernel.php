@@ -118,6 +118,8 @@ final class Kernel
             } else {
                 http_response_code(500);
                 header('Content-Type: application/json; charset=utf-8');
+                header('X-Content-Type-Options: nosniff');
+                header('Cache-Control: no-store');
                 echo '{"error":{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable."}}';
             }
             exit;
@@ -172,7 +174,12 @@ final class Kernel
                 $e->errorCode(),
                 $e->getMessage(),
                 $e->status(),
-                self::debugDetails($e)
+                // Client-safe allowlisted details, always. See
+                // ApiException::CLIENT_SAFE_KEYS for why this is not gated on
+                // APP_DEBUG: gating it meant a production client never received
+                // details.field, and ApiError.field in src/api/client.ts was
+                // therefore always null.
+                $e->clientDetails()
             );
 
             foreach ($e->cookies() as $cookie) {
@@ -210,6 +217,7 @@ final class Kernel
 
         return $e->context();
     }
+
 
     private static function debug(ApiException $e): void
     {

@@ -254,10 +254,11 @@ not re-investigated in a later phase. (Note: `null` does *not* delete — it sto
 
 ### Verified accurate — not defects
 
-- **MariaDB 10.3+ claim is consistent and deliberately engineered.**
-  `JobRepository.php:19-20` avoids `SKIP LOCKED` specifically because it needs
-  MariaDB 10.6+, and the deployment target is 10.3+. `migrate.php:36-37` warns below
-  the baseline. The claim in `DEPLOYMENT.md:3` is honest.
+- **The queue claim is consistent across MariaDB versions.**
+  `JobRepository::claimBatch()` uses `FOR UPDATE SKIP LOCKED` when the server
+  reports support (MySQL 8.0.1+, MariaDB 10.6+) and falls back to an atomic
+  `UPDATE ... ORDER BY ... LIMIT` worker-token claim otherwise. `migrate.php:36-37`
+  still warns below the 10.3 baseline. The claim in `DEPLOYMENT.md:3` is honest.
 - **`ST_Distance_Sphere` is absent on MySQL 8.0.40**; `Haversine.php:14` documents
   the PHP fallback, and the healthcheck reports it as `[ok]`. Working as designed.
 - **Service-worker registration works.** The build emits `dist/registerSW.js` and

@@ -204,6 +204,66 @@ final class Validator
         return ['latitude' => $latitude, 'longitude' => $longitude];
     }
 
+    /**
+     * Client-reported GNSS horizontal accuracy, in metres.
+     *
+     * This is a self-reported number and therefore gets a real upper bound
+     * rather than a sanity shrug. Coords.accuracy is documented by the W3C as
+     * non-negative and finite, and it means "radius of 95% confidence" — a
+     * figure in the tens of metres for a warm fix, and a few hundred at worst
+     * for a cold one on consumer hardware. Anything past the configured ceiling
+     * is not a degraded fix, it is a broken one that must be routed to review,
+     * and the only way to know that is to keep the number.
+     *
+     * Three distinct rejection paths, because collapsing them loses the
+     * information the client needs to fix itself:
+     *
+     *   missing        -> null is stored. A capture with no position at all is
+     *                      legal and becomes NO_GPS at verification, so this
+     *                      must not be an error.
+     *   not a number   -> 422 with field accuracy_m. Covers "abc", [], {}, NAN
+     *                      and INF. NAN and INF are the ones that matter:
+     *                      both are is_float() true, so they survive a naive
+     *                      numeric check and then blow up at the DECIMAL(10,2)
+     *                      bound as a 500 on a field the client sent.
+     *   out of range   -> 422 with the ceiling in details. Negative is a broken
+     *                      handset (the W3C spec forbids it), not a wide fix.
+     *
+     * @param  float $maxMeters Configured ceiling; see GPS_ACCURACY_MAX_M.
+     * @return float|null        Metres, or null when the client sent nothing.
+     */
+    public static function accuracy(mixed $value, float $maxMeters, string $field = 'accuracy_m'): ?float
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $accuracy = self::floatOrNull($value);
+
+        if ($accuracy === null || !is_finite($accuracy)) {
+            throw ApiException::validation(
+                'Field "' . $field . '" must be a finite number in metres.',
+                ['field' => $field]
+            );
+        }
+
+        if ($accuracy < 0.0) {
+            throw ApiException::validation(
+                'Field "' . $field . '" must not be negative.',
+                ['field' => $field, 'min' => 0]
+            );
+        }
+
+        if ($accuracy > $maxMeters) {
+            throw ApiException::validation(
+                'Field "' . $field . '" exceeds the maximum accepted accuracy.',
+                ['field' => $field, 'max_m' => $maxMeters]
+            );
+        }
+
+        return $accuracy;
+    }
+
     public static function floatOrNull(mixed $value): ?float
     {
         if (is_float($value) || is_int($value)) {

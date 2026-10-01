@@ -142,6 +142,24 @@ return [
         'earth_radius_m'   => 6371008.8,           // IUGG mean Earth radius
         'bbox_padding_m'   => (int) Env::get('GEOFENCE_BBOX_PADDING_M', '500'),
         'gps_accuracy_m'   => (int) Env::get('GPS_ACCURACY_TOLERANCE_M', '100'),
+
+        /*
+         * Ceiling for the client-reported accuracy_m claim (§10).
+         *
+         * Distinct from gps_accuracy_m above, which is how far a reported
+         * accuracy may extend before the *centre* of the geofence test is
+         * discounted. This one bounds the number the client may store: a fix
+         * whose 95% confidence radius is larger than this is not field evidence
+         * of a location at all, and accepting it would mean writing an
+         * arbitrarily weak claim into the ledger and letting the reviewer find
+         * out later.
+         *
+         * 500 m is comfortably above a cold-start fix on consumer hardware and
+         * comfortably below "I have no idea where I am". Overridable because a
+         * genuinely indoor deployment may need to raise it, and because a test
+         * suite needs to be able to assert the boundary.
+         */
+        'gps_accuracy_max_m' => (int) Env::get('GPS_ACCURACY_MAX_M', '500'),
     ],
 
     'timestamps' => [
