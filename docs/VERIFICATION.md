@@ -421,6 +421,28 @@ Fixtures are built by the suite and removed on exit via a shutdown handler, whic
 runs even on fatal error. An existing `quarantine/` file that the run did not
 create is never touched.
 
+### The queue is verified on both supported engines
+
+`bin/queue.php` — 13 assertions, released against a barrier so several real
+worker subprocesses contend for the same rows at once. It asserts both claim
+strategies, so `bin/db_matrix.php` exercises the native `SKIP LOCKED` path on
+MySQL and on MariaDB 10.11 while the fallback is covered by the test seam. Two
+overlapping cron ticks is the expected production case, not an edge case, and it
+is the one thing an in-process test cannot prove — hence real subprocesses.
+
+`bin/db_matrix.php` runs migrations, the healthcheck, `integrity`, `integration`,
+`verification`, `queue` and `contract` against each engine and exits non-zero if
+any cell is not green.
+
+**A note on how that matrix was nearly worthless.** Two defects sat underneath
+it. `Config::boot()` ignored an explicitly supplied env file and quietly fell
+back to `.env`, and the suites' HTTP child process was never given `--env` at
+all. So a "MariaDB" run had its fixtures written to MySQL and its application
+reads answered from MySQL: two different databases, and every run passed. The
+symptom that finally exposed it was `UNKNOWN_DEVICE` on every signed request,
+which reads exactly like an application bug and was not one. Both are fixed, and
+the failure mode is now named in the code that had it.
+
 ### Coverage was verified by mutation, not by assertion count
 
 78 passing tests prove nothing on their own. Each check below was temporarily

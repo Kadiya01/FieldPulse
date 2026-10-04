@@ -98,6 +98,40 @@ php private_storage/bin/migrate.php --status   # verify
 `migrate.php` is forward-only. Editing an already-applied file is a hard error,
 reported as a checksum mismatch, not a silent no-op.
 
+It takes `--env=/path/to/.env` so a support matrix can apply the same migrations
+to more than one server from one command. Pointing a run at a different engine
+by editing the deployment's `.env` instead would mean a matrix that dies halfway
+leaves the deployment configured against the wrong database.
+
+### Supported versions
+
+| Engine | Supported | Tested |
+|---|---|---|
+| MySQL | 8.0.3+ | **8.0.40** |
+| MariaDB | 10.11+ | **10.11.9** |
+
+`php private_storage/bin/db_matrix.php` is what establishes the right-hand
+column: for each engine it applies every migration from empty, runs the
+healthcheck, and runs the database-facing suites, and exits non-zero if any cell
+is not green.
+
+```bash
+php private_storage/bin/db_matrix.php                       # both engines
+php private_storage/bin/db_matrix.php --engine=mariadb       # one cell
+php private_storage/bin/db_matrix.php --quick               # migrate + healthcheck only
+```
+
+The MariaDB cell reads its own environment file, named by
+`FIELDPULSE_MARIADB_ENV`. There is no default, because a default would be a
+guess and a silently skipped cell reads as a pass.
+
+**On older MariaDB.** The queue takes the native `FOR UPDATE SKIP LOCKED` path
+on 10.6+ and a portable fallback below it, and the schema avoids generated
+columns, MySQL-only JSON operators and spatial types, so 10.3–10.10 will very
+likely work. That has not been tested, so it is not supported here — the floor is
+10.11 because that is the oldest release the matrix has actually run. If you need
+an older one, add it as a matrix cell and let the result decide.
+
 Migrations 001–008 are the contract schema. 009–015 are additive and exist
 because the spec's requirements are only satisfiable with extra columns:
 
@@ -126,8 +160,26 @@ invisible until they matter: a broken DER encoding, an off-by-one at the Monday
 boundary, a DCT that is not scale-invariant. Run it after every deploy.
 
 `healthcheck.php` checks the live environment: PHP version, required extensions,
-`upload_max_filesize` vs `MAX_UPLOAD_BYTES` (the single most common
-misconfiguration), storage permissions, and the presence of every expected table.
+`upload_max_filesize` and `post_max_size` against `MAX_UPLOAD_BYTES` (the single
+most common misconfiguration), `memory_limit`, `max_execution_time`,
+`max_input_time`, storage permissions, the resolved document root, and the
+presence of every expected table.
+
+`post_max_size` must **exceed** `upload_max_filesize`, and it does (6M vs 8M).
+If they are equal, the surplus of the request over the limit — the multipart
+boundaries and the JSON payload — is discarded and `$_FILES` arrives empty, which
+surfaces as `UPLOAD_ERR_INI_SIZE` with nothing to inspect rather than as a clear
+error.
+
+It also reads `.user.ini` directly. That matters because the values in it are
+applied per-request by the web SAPI and are *not* visible to a CLI run, so a
+healthcheck that only asked PHP would report the `php.ini` values and miss a
+document root whose limits had been silently overridden.
+
+**A clean run must print `PASS` with no warnings.** Any warning means a
+misconfiguration is being tolerated rather than fixed; treat a warning as a
+failed deploy. `--env=/path/to/.env` checks a different deployment than the
+default `.env`.
 
 ---
 
@@ -143,41 +195,71 @@ npm test
 npm run build
 ```
 
-Then copy the built output into the document root:
+Then publish it. Use the deploy script, not a `cp`:
 
 ```bash
-cp -r dist/. ~/public_html/
+php private_storage/bin/deploy.php
 ```
 
-`dist/` holds `index.html`, `assets/`, `sw.js`, `manifest.webmanifest` and the
-launcher icons. Two consequences worth knowing before you copy:
+The script runs all four frontend commands itself and stops at the first failure,
+then copies `dist/` into `public_html` file by file and **verifies afterwards
+that `.htaccess`, `.user.ini` and `api/` were not touched**. If any of them
+changed, or was missing both before and after, it exits non-zero.
 
-- **`public_html/.htaccess` and `.user.ini` are not in `dist/` and must not be
-  overwritten by the copy.** The `cp -r dist/.` form cannot remove them, but a
-  `rm -rf ~/public_html/*` beforehand would delete the document-root lockdown and
-  the PHP limits along with the build.
-- **The SPA fallback depends on this step.** `.htaccess` serves `index.html` for
-  a client-side route such as `/queue` or `/login`, which is how the router
-  resolves a deep link or a refresh. Without the copy, the root returns 403 and
-  every deep link does too.
-
-Verify after copying:
+Use these when you need to:
 
 ```bash
-curl -sI https://YOUR-HOST/queue | head -1     # 200, not 403 or 404
-curl -sI https://YOUR-HOST/api/v1/leaderboard.php | head -1   # 403 or 401, not HTML
+php private_storage/bin/deploy.php --dry-run      # print the plan, change nothing
+php private_storage/bin/deploy.php --skip-frontend # publish an existing dist/
+php private_storage/bin/deploy.php --skip-build    # run the gate, publish nothing
+php private_storage/bin/deploy.php --docroot=/home/USER/public_html
 ```
 
-The first must be `200`; the second must never be `200` with `text/html`, since
-that would mean the API 404 is being answered with the PWA shell.
+### Why not `cp -r dist/. ~/public_html/`
 
-### Re-deploying
+That command happens to be safe — it cannot delete files it does not overwrite
+— but the next person's `rm -rf ~/public_html/*` will not be. Deleting
+`.htaccess` takes the entire document-root lockdown with it: no CSP, no dotfile
+denial, no suffix allowlist, no SPA fallback, and every API path answered with
+the PWA shell. `deploy.php` makes that a non-event rather than a warning in a
+document.
 
-Asset filenames are content-hashed, so a new build changes them and the old files
-are dead. Remove the previous `assets/` directory rather than merging into it, so
-stale chunks are not served to a client whose service worker still references
-them. `registerType: 'autoUpdate'` makes the new service worker take over on the
-next load, but only if the old chunks are actually gone from disk.
+It also sweeps `assets/` for files that are not in the build. Asset filenames
+are content-hashed, so the previous build's chunks are dead; `registerType:
+'autoUpdate'` makes the new service worker take over on the next load, but only
+if the old chunks are actually gone from disk.
+
+`.htaccess`, `.user.ini` and `DATABASE` are **not** in `dist/` — the build does
+not produce them — so there is nothing to merge. `deploy.php` lists them as
+protected and proves afterwards that they are intact.
+
+### Verifying the publish
+
+```bash
+curl -sI https://YOUR-HOST/queue | head -1                  # 200
+curl -sI https://YOUR-HOST/sw.js | head -1                 # 200
+curl -sI https://YOUR-HOST/.env | head -1                  # 403
+curl -sI https://YOUR-HOST/assets/does-not-exist.js | head -1   # 404, never 200 HTML
+curl -sI https://YOUR-HOST/api/v1/leaderboard.php | head -1 # 200/401/403, never text/html
+```
+
+A missing chunk must stay a 404. Answering it with 200 and a page of HTML is
+the specific failure the SPA fallback is restricted to avoid, because that is
+what the service worker and the browser both have to diagnose.
+
+Or run the suite, which asserts all of the above plus a staged account, a real
+Apache, and the storage and cron checks:
+
+```bash
+php private_storage/bin/deploy_test.php
+php private_storage/bin/deploy_test.php --httpd=/usr/sbin/httpd   # adds the status-code tier
+```
+
+`deploy_test.php` builds a throwaway account with the real cPanel sibling
+layout, publishes into it with `deploy.php`, and then checks the result over
+HTTP. Pass `--httpd` to also boot a real Apache and assert exact status codes
+for the routing `.htaccess` owns. Without it, the suite prints a warning saying
+that tier did not run rather than quietly passing.
 
 ---
 
@@ -204,9 +286,33 @@ statement takes row locks, and each worker identifies its own claimed rows with 
 unique token. A tick that runs past 60 seconds will overlap the next one; that is
 by design, not a fault.
 
+That is asserted rather than asserted-to: `bin/queue.php` releases several real
+worker subprocesses against a barrier so they contend for the same rows, and
+`bin/deploy_test.php` runs it as part of the Phase 7 gate. It covers both claim
+strategies — native `SKIP LOCKED` and the portable fallback — and both are
+exercised by the MariaDB cell of the support matrix.
+
 Stale-lock recovery runs at the start of every tick, so a worker killed by a
 timeout or an OOM cannot strand a submission — the next tick picks it up once
 `locked_at` exceeds `JOB_LOCK_TIMEOUT_MIN`.
+
+Check a tick without waiting for cron:
+
+```bash
+php private_storage/workers/process_queue.php --stats   # queue depth by status
+php private_storage/workers/process_queue.php --once    # drain once, print a summary
+php private_storage/workers/process_queue.php --prune   # the hourly maintenance run
+```
+
+All three exit `0`, including on an empty queue. A cron entry that exits
+non-zero when there is nothing to do mails the owner every minute.
+
+`--prune` is the one that most often breaks, because it is the only path that
+issues `DELETE`. MySQL rejects `DELETE ... LIMIT n OFFSET 0` with *you have an
+error in your SQL syntax*; both `RefreshTokenRepository::pruneExpired()` and
+`NonceGuard::prune()` had that shape, so maintenance aborted on the first
+expired row while the queue itself looked perfectly healthy. Both now use the
+bounded-delete helper, which emits syntax each engine accepts.
 
 ---
 
@@ -290,9 +396,76 @@ SHA256HEX(BODY)` with a durable
 one-time nonce and ±300s skew. Nothing in the request body is trusted for
 authorisation.
 
+### What the document root refuses
+
+`public_html/.htaccess` is the only thing standing between a misconfigured host
+and a readable account. It is asserted by `bin/deploy_test.php` against a real
+Apache, so it cannot regress unnoticed:
+
+| Request | Result |
+|---|---|
+| `/.env`, `/.git/config`, `/api/.htaccess`, `/.DS_Store`, `/index.html~` | 403 |
+| `/shell.php.bak` (undeclared suffix) | 403 |
+| `/assets/index-missing.js` | 404, never 200 HTML |
+| `/api/v1/renamed-endpoint.php` | the API's own 404, never the SPA shell |
+| `/queue`, `/leaderboard`, `/capture/17` | 200, the shell |
+| `/` with no `index.html` deployed | 403 — see below |
+
+`api/` has its own short-circuit ahead of the SPA fallback, so a renamed or
+missing endpoint keeps returning the API's own 404 instead of a 200 of HTML that
+a client would try to parse as JSON.
+
+Two properties of that file are load-bearing and easy to undo by accident:
+
+- **The suffix allowlist tests `%{REQUEST_FILENAME}`, not a backreference.** An
+  earlier version captured the path into `%1` with a `RewriteCond` and then
+  tested `%1` in the conditions below. On Apache 2.4.55 the negated test
+  evaluated as though `%1` were empty, so every request for a file with a real
+  extension was answered 403 — `/index.html`, every hashed asset, every API entry
+  point. The whole site was offline and nothing in the repository could see it,
+  because the file is only ever read by an Apache that was never running.
+  `deploy_test.php` asserts there is no backreference inside any `RewriteCond`.
+
+- **The suffix allowlist only applies to paths that name a file.** `/queue` has
+  no extension and is a client-side route, not a file. Testing it as one returned
+  403 for every deep link on a deployed host, while `vite dev` served the same
+  URLs happily.
+
+Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, `Permissions-Policy` granting only camera and
+geolocation to self, a CSP with no `unsafe-inline` and no `unsafe-eval`, and HSTS.
+
+The CSP is strict *because* the build is strict: `dist/` contains no `eval`, no
+`new Function`, no inline `<script>`, no inline `<style>` and no inline event
+handler. That is a property of the build, not an assumption, and
+`deploy_test.php` re-checks it on every run — a dev-only `eval()` would start
+violating the policy in production where nothing else would announce it.
+
+`index.html`, `sw.js` and `manifest.webmanifest` are served `no-store`. A cached
+`index.html` pins clients to the previous build's content-hashed asset URLs, and a
+cached service worker cannot be replaced by a new one.
+
 ---
 
 ## Troubleshooting
+
+**Everything returns 403, including `/index.html`.** The suffix allowlist in
+`.htaccess` is denying valid build output. This is the failure described above:
+the allowlist must test `%{REQUEST_FILENAME}` and must not use a backreference
+captured by an earlier `RewriteCond`. Run
+`php private_storage/bin/deploy_test.php --httpd=/usr/sbin/httpd` to confirm on
+your own Apache version — the behaviour differs between releases.
+
+**`/` returns 403 but the build was deployed.** `index.html` is not in the
+document root. `DirectoryIndex index.html` is stated in `.htaccess` rather than
+inherited, so a missing build is a 403 and not a directory listing. Check
+`php private_storage/bin/deploy.php --dry-run`, and confirm the deploy actually
+ran rather than stopping at a failing lint or test.
+
+**`deploy.php` exits non-zero after copying.** It detected that `.htaccess`,
+`.user.ini` or `api/` changed or went missing. Read the message, restore the
+document root, and do not serve traffic until it is verified — a document root
+without `.htaccess` has no CSP, no dotfile denial and no SPA fallback.
 
 **Uploads fail with a generic 500, not `FILE_TOO_LARGE`.** PHP rejected the
 request before the app saw it. `upload_max_filesize` in `.user.ini` is lower than
@@ -314,6 +487,17 @@ plus the thumbnail.
 **Submissions sit in `quarantine/` forever.** The worker is not running. Check
 the cron log with `php private_storage/workers/process_queue.php` by hand, then
 `--stats` to see queue depth.
+
+**The hourly `--prune` cron mails an error while the queue looks fine.** Only
+`--prune` issues `DELETE`, so a maintenance failure is invisible to every other
+signal. Run it by hand and read the SQL error. A `DELETE ... LIMIT n OFFSET 0` is
+not portable — MySQL rejects it — so any bounded delete must go through the
+repository helper.
+
+**The healthcheck warns about `post_max_size`.** It must exceed
+`upload_max_filesize`, not merely meet it. Set them in `public_html/.user.ini`;
+the healthcheck reads that file directly, because the web SAPI applies it
+per-request and a CLI run cannot see it.
 
 **Everything is `REQUIRES_REVIEW` with `SITE_UNASSIGNED`.** The agent has no
 `agent_sites` row, so §12 has nothing to check against. That is the intended

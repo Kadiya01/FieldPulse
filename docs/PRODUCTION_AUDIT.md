@@ -257,8 +257,11 @@ not re-investigated in a later phase. (Note: `null` does *not* delete — it sto
 - **The queue claim is consistent across MariaDB versions.**
   `JobRepository::claimBatch()` uses `FOR UPDATE SKIP LOCKED` when the server
   reports support (MySQL 8.0.1+, MariaDB 10.6+) and falls back to an atomic
-  `UPDATE ... ORDER BY ... LIMIT` worker-token claim otherwise. `migrate.php:36-37`
-  still warns below the 10.3 baseline. The claim in `DEPLOYMENT.md:3` is honest.
+  `UPDATE ... ORDER BY ... LIMIT` worker-token claim otherwise. **Phase 7 closed
+  this gate**: MariaDB 10.11.9 was run through `bin/db_matrix.php` with both
+  strategies, so the fallback is exercised rather than merely present. The
+  supported floor moved from 10.3 to 10.11 in `DEPLOYMENT.md` because 10.11 is
+  the oldest release actually tested; `migrate.php` warns below it.
 - **`ST_Distance_Sphere` is absent on MySQL 8.0.40**; `Haversine.php:14` documents
   the PHP fallback, and the healthcheck reports it as `[ok]`. Working as designed.
 - **Service-worker registration works.** The build emits `dist/registerSW.js` and
@@ -311,8 +314,27 @@ Resolve **F7** (verdict polling) and the offline story.
 Requires Phase 2: polling is bearer-authenticated and needs a working session.
 
 ### Phase 4 — Repository hygiene
-Resolve **F13, F14, F16, F17**, and record the MariaDB 10.3+ compatibility gate as a
-separate test target. Independent of Phases 1–3; can run in parallel.
+Resolve **F13, F14, F16, F17**. Independent of Phases 1–3; can run in parallel.
+
+### Phase 7 — Deployment, security and compatibility gate (closed)
+The MariaDB compatibility gate deferred from Phase 4 was executed here, not
+merely planned. Two defects were found and fixed:
+
+- **`public_html/.htaccess` returned 403 for every file with a real extension**
+  on Apache 2.4.55 — the whole site, offline. The suffix allowlist tested `%1`,
+  a backreference captured by an earlier `RewriteCond`, which evaluated as
+  though empty. Nothing in the repository could see it, because the file is only
+  read by an Apache that was never running. Now uses `%{REQUEST_FILENAME}`, and
+  `bin/deploy_test.php` asserts the status codes against a real Apache.
+- **`DELETE ... LIMIT n OFFSET 0` in two repositories.** MySQL rejects it, so
+  `process_queue.php --prune` aborted on the first expired row while the queue
+  looked healthy. Both now use the bounded-delete helper.
+
+A third defect was a *test* defect, and it had been hiding the first MariaDB
+result: the suites' HTTP child process never received `--env`, so a "MariaDB"
+run had its fixtures written to MySQL. `Config::boot()` also ignored an explicit
+env file, so `--env` was silently a no-op. Both fixed; `db_matrix.php` is the
+artifact that now proves the claim.
 
 ### Ordering constraint
 **Do not begin Phase 1 until this gate is accepted.** F1–F4 are contract failures,

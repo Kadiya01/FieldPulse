@@ -210,16 +210,25 @@ $t->test('private_storage is a sibling of public_html', function (TestRunner $t)
     $t->assertTrue(is_dir(dirname($privateRoot) . '/public_html'), 'the entry points walk up to find this');
 });
 
-$t->test('a clean cPanel-shaped tree survives deploy.php intact', function (TestRunner $t) use (
-    $repoRoot,
-    $privateRoot,
-    $publicRoot,
-    $distDir,
-    $keepSandbox
-): void {
-    global $sandbox;
-
-    $root = sys_get_temp_dir() . '/fieldpulse-deploy-' . substr(bin2hex(random_bytes(5)), 0, 8);
+/**
+ * Build a fresh account root that looks like cPanel presents one.
+ *
+ * Both the deploy tier and the HTTP tiers need one, and each needs it for a
+ * different reason: the deploy tier needs an untouched document root to prove
+ * deploy.php protects what it must, and the HTTP tiers need the built shell to
+ * actually be there. Sharing one staging routine means neither tier can quietly
+ * pass against the repository's own public_html — which has no index.html in it
+ * and would answer 404 for every route, proving nothing.
+ *
+ * @return array{sandbox:string,docroot:string}
+ */
+function stageAccount(
+    string $privateRoot,
+    string $publicRoot,
+    string $distDir,
+    bool $published = true
+): array {
+    $root    = sys_get_temp_dir() . '/fieldpulse-deploy-' . substr(bin2hex(random_bytes(5)), 0, 8);
     $docroot = $root . '/public_html';
 
     mkdir($docroot, 0755, true);
@@ -228,6 +237,38 @@ $t->test('a clean cPanel-shaped tree survives deploy.php intact', function (Test
     copyTree($privateRoot, $root . '/private_storage');
     copyTree($publicRoot, $docroot);
     copyTree($distDir, $root . '/dist');
+
+    register_shutdown_function(static function () use ($root): void {
+        removeTree($root);
+    });
+
+    /*
+     * $published=false gives a pristine document root, which is what the deploy
+     * tier needs to prove deploy.php copies the build in. The default copies it
+     * in here, because an HTTP tier pointed at a root with no index.html in it
+     * would answer 404 for every route and pass or fail for reasons that have
+     * nothing to do with .htaccess. The copy is dist-over-root, the same merge
+     * deploy.php performs, so the tree the HTTP tiers see is the tree a
+     * deployed account actually has.
+     */
+    if ($published) {
+        copyTree($distDir, $docroot);
+    }
+
+    return ['sandbox' => $root, 'docroot' => $docroot];
+}
+
+$t->test('a clean cPanel-shaped tree survives deploy.php intact', function (TestRunner $t) use (
+    $repoRoot,
+    $privateRoot,
+    $publicRoot,
+    $distDir
+): void {
+    global $sandbox;
+
+    $stage   = stageAccount($privateRoot, $publicRoot, $distDir, false);
+    $root    = $stage['sandbox'];
+    $docroot = $stage['docroot'];
 
     $before = [
         'htaccess' => (string) md5_file($docroot . '/.htaccess'),
@@ -282,13 +323,7 @@ $t->test('a clean cPanel-shaped tree survives deploy.php intact', function (Test
         'published index.html differs from the build'
     );
 
-    $sandbox = ['sandbox' => $root, 'docroot' => $docroot, 'files' => []];
-
-    if (!$keepSandbox) {
-        register_shutdown_function(static function () use ($root): void {
-            removeTree($root);
-        });
-    }
+    $sandbox = $stage;
 });
 
 /* ===========================================================================
@@ -499,19 +534,36 @@ $t->test('dotfiles and editor debris are denied without matching submit.php', fu
     $t->assertContains('Require all denied', $text, 'dotfiles must be denied by the file rules too');
 
     /*
-     * A bare "contains a dot" pattern would take the API offline, which is
-     * exactly the regression that must not come back.
+     * A bare "contains a dot" FilesMatch would take the API offline, which is
+     * the regression that must not come back — `<FilesMatch "\.">` matches
+     * submit.php as readily as .env.
      *
-     * The deny rule is allowed to list extensions — "\.(bak|old|...)$" is fine,
-     * because those are anchored at the end and cannot match submit.php. What
-     * is forbidden is a pattern whose FIRST element is an unanchored dot, since
-     * that matches every .php file in the tree. So the check is on the start of
-     * the pattern, not on the presence of a backslash-dot anywhere in it.
+     * So the check is not "does any pattern contain a dot" — several legitimately
+     * do — but "does any DENYING block match on an unanchored dot". Each
+     * FilesMatch block is read with its body, and a block that denies must have
+     * a pattern anchored to the start of the filename or to the end of a known
+     * extension list. The PHP *grant* block starts with `\.php$` on purpose and
+     * is not subject to this, because granting is not the risk.
      */
-    $t->assertFalse(
-        (bool) preg_match('/FilesMatch\s+"\\\\\.[A-Za-z]/', $text),
-        'a FilesMatch whose pattern begins with an unanchored \\. matches every .php file; anchor it to (^\\.)'
-    );
+    preg_match_all('/<FilesMatch\s+"([^"]+)"\s*>(.*?)<\/FilesMatch>/s', $text, $blocks, PREG_SET_ORDER);
+
+    $t->assertTrue($blocks !== [], 'no <FilesMatch> blocks found; the file rules are gone');
+
+    foreach ($blocks as $block) {
+        [, $pattern, $body] = $block;
+
+        $denies = str_contains($body, 'Require all denied') || str_contains($body, 'Deny from all');
+
+        if (!$denies) {
+            continue;
+        }
+
+        $t->assertFalse(
+            (bool) preg_match('/^\s*\\\\\.[A-Za-z]/', $pattern),
+            'the denying FilesMatch "' . $pattern . '" begins with an unanchored \\., '
+                . 'which matches every .php file; anchor it to (^\\.)'
+        );
+    }
 
     $t->assertContains('(^\\.)', $text, 'the dotfile rule must anchor to the start of the filename');
 });
@@ -675,7 +727,12 @@ $t->group('http');
 $t->test('the API answers JSON with hardened headers and never HTML', function (TestRunner $t) use ($keepSandbox): void {
     global $sandbox;
 
-    $docroot = $sandbox !== null ? $sandbox['docroot'] : dirname(__DIR__, 2) . '/public_html';
+    $stage   = $sandbox ?? stageAccount(
+        dirname(__DIR__),
+        dirname(__DIR__, 2) . '/public_html',
+        dirname(__DIR__, 2) . '/dist'
+    );
+    $docroot = $stage['docroot'];
 
     $server = HttpServer::start($keepSandbox, [], [], 16_000_000, $docroot);
 
@@ -707,7 +764,12 @@ $t->test('the API answers JSON with hardened headers and never HTML', function (
 $t->test('an unknown route is a JSON 404, not the SPA shell', function (TestRunner $t) use ($keepSandbox): void {
     global $sandbox;
 
-    $docroot = $sandbox !== null ? $sandbox['docroot'] : dirname(__DIR__, 2) . '/public_html';
+    $stage   = $sandbox ?? stageAccount(
+        dirname(__DIR__),
+        dirname(__DIR__, 2) . '/public_html',
+        dirname(__DIR__, 2) . '/dist'
+    );
+    $docroot = $stage['docroot'];
 
     $server = HttpServer::start($keepSandbox, [], [], 16_000_000, $docroot);
 
@@ -823,6 +885,34 @@ final class ApacheProbe
         mkdir($confDir . '/logs', 0755, true);
         file_put_contents($confDir . '/httpd.conf', $conf);
 
+        /*
+         * Preflight with `httpd -t`. Without it a syntax error is indistinguishable
+         * from a slow start: both look like "nothing is listening", and the test
+         * either fails with no reason or, worse, spends its whole timeout waiting.
+         */
+        $check = proc_open(
+            [$httpd, '-f', $confDir . '/httpd.conf', '-t'],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $checkPipes,
+            dirname($httpd)
+        );
+
+        if (is_resource($check)) {
+            $diagnostic = (string) stream_get_contents($checkPipes[1]) . (string) stream_get_contents($checkPipes[2]);
+
+            fclose($checkPipes[1]);
+            fclose($checkPipes[2]);
+
+            if (proc_close($check) !== 0) {
+                removeTree($workDir);
+
+                throw new \RuntimeException(
+                    'The generated Apache config is invalid:
+' . trim($diagnostic)
+                );
+            }
+        }
+
         $descriptors = [0 => ['pipe', 'r'], 1 => ['file', $log, 'a'], 2 => ['file', $log, 'a']];
 
         $process = proc_open(
@@ -852,7 +942,7 @@ final class ApacheProbe
 
     private function waitForListener(): bool
     {
-        $deadline = microtime(true) + 15.0;
+        $deadline = microtime(true) + 60.0;
 
         while (microtime(true) < $deadline) {
             $sock = @stream_socket_client('tcp://127.0.0.1:' . $this->port, $errno, $errstr, 0.5);
@@ -943,7 +1033,12 @@ $t->test('a real Apache enforces the .htaccess', function (TestRunner $t) use ($
         return;
     }
 
-    $docroot = $sandbox !== null ? $sandbox['docroot'] : dirname(__DIR__, 2) . '/public_html';
+    $stage   = $sandbox ?? stageAccount(
+        dirname(__DIR__),
+        dirname(__DIR__, 2) . '/public_html',
+        dirname(__DIR__, 2) . '/dist'
+    );
+    $docroot = $stage['docroot'];
 
     $apache = ApacheProbe::start($httpd, $docroot);
 

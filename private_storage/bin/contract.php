@@ -91,7 +91,8 @@ $keep    = Cli::hasFlag($argv, 'keep');
 $filter  = Cli::option($argv, 'filter');
 $verbose = Cli::hasFlag($argv, 'verbose');
 
-Config::boot(Cli::option($argv, 'env'));
+$envFile = Cli::option($argv, 'env');
+Config::boot($envFile);
 
 $config   = Config::instance();
 $dbName   = $config->str('db.name');
@@ -247,6 +248,22 @@ declare(strict_types=1);
 
 $_SERVER['HTTPS'] = 'on';
 
+/*
+ * Point configuration at the suite's copy of the environment file. Without
+ * this the child process boots against private_storage/.env while the parent
+ * runs against --env, so the fixtures are written to one database and the
+ * application reads another. Every signed request then fails authentication
+ * with UNKNOWN_DEVICE, which reads exactly like an application bug and is not
+ * one. Config::boot() is called before the app is loaded so the whole request
+ * sees it.
+ */
+$envFile = (string) getenv('FP_ENV_FILE');
+
+if ($envFile !== '') {
+    require_once getenv('FP_DOCROOT') . '/../private_storage/app/bootstrap.php';
+    \FieldPulse\Config\Config::boot($envFile);
+}
+
 $docRoot = (string) getenv('FP_DOCROOT');
 $path    = (string) parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $target  = $docRoot . $path;
@@ -320,7 +337,9 @@ $serverProcess = proc_open(
     $descriptors,
     $pipes,
     $repoRoot,
-    ['FP_DOCROOT' => str_replace('\\', '/', $publicRoot)] + getenv()
+    ['FP_DOCROOT' => str_replace('\\', '/', $publicRoot)]
+        + ['FP_ENV_FILE' => $envFile !== null ? str_replace('\\', '/', $envFile) : '']
+        + getenv()
 );
 
 if (!is_resource($serverProcess)) {
