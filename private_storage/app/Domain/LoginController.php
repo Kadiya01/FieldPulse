@@ -102,6 +102,7 @@ final class LoginController implements ActionInterface
                     'id'         => (int) $agent['id'],
                     'agent_code' => (string) $agent['agent_code'],
                     'full_name'  => (string) $agent['full_name'],
+                    'role'       => (string) ($agent['role'] ?? 'AGENT'),
                 ],
                 /*
                  * Told to the client explicitly, because the next step is

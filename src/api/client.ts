@@ -254,6 +254,15 @@ export interface SessionAgent {
   id: number;
   agent_code: string;
   full_name: string;
+  /**
+   * `AGENT`, `SUPERVISOR` or `ADMIN`.
+   *
+   * Present for presentation only: it decides whether the operator-only review
+   * link is shown. It grants nothing. The server checks the role against the
+   * database row on every request, so a client that edited this string would see
+   * the link and then receive 403 from every review call. See `auth/roles.ts`.
+   */
+  role?: string;
 }
 
 export interface LoginResult {
@@ -350,8 +359,30 @@ export async function registerDevice(pairingCode?: string): Promise<RegisterResu
   return data;
 }
 
+/**
+ * End the session on the server, so the refresh cookie stops being usable.
+ *
+ * Not a signed request and not bearer-only: the credential is the cookie, and
+ * the server revokes the whole token family so the token is dead even if it was
+ * copied. Deliberately not wrapped in `authenticatedFetch` — that helper signs
+ * with the device key and retries on 401, and a logout must never be retried
+ * into a second family revocation or made to depend on a device that may
+ * already be unusable.
+ *
+ * The caller drops the in-memory access token regardless of the outcome; a
+ * logout that failed because the network is down must still leave nothing usable
+ * on this device.
+ */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/logout.php`, { method: 'POST' });
+  } finally {
+    setAccessToken(null);
+  }
+}
+
 export type RestoreResult =
-  | { status: 'authenticated'; agent: SessionAgent }
+  | { status: 'authenticated'; agent: SessionAgent | null }
   | { status: 'anonymous' }
   | { status: 'unregistered' };
 
@@ -373,7 +404,7 @@ export async function restoreSession(): Promise<RestoreResult> {
     return { status: 'anonymous' };
   }
 
-  const data = (await response.json()) as { access_token: string; agent: SessionAgent };
+  const data = (await response.json()) as { access_token: string; agent?: SessionAgent };
   setAccessToken(data.access_token);
   announceAccessToken(data.access_token);
 
@@ -384,5 +415,153 @@ export async function restoreSession(): Promise<RestoreResult> {
     return { status: 'unregistered' };
   }
 
-  return { status: 'authenticated', agent: data.agent };
+  // The agent is normally present. A server that predates it — an unrefreshed
+  // deploy, or a proxy serving a stale response — still authenticates this
+  // session, so this is a working session with an unknown identity rather than a
+  // failure. Every consumer treats a missing agent as "not an operator", which
+  // hides the review link rather than showing a screen the server would refuse.
+  return { status: 'authenticated', agent: data.agent ?? null };
+}
+
+/**
+ * The server's own view of one submission, as reported by
+ * `GET /api/v1/submission.php?uuid=`.
+ *
+ * This is deliberately a separate type from `Submission` in `src/db/db.ts`.
+ * The local record says what this handset still has to do; this says what the
+ * server decided about the evidence it already holds. They are different
+ * questions with different clocks, and collapsing them into one status is how a
+ * client ends up reporting "received by server" as if it were "verified" — the
+ * exact claim the agent must never be able to make on the server's behalf.
+ */
+export interface ServerVerification {
+  submission_uuid: string;
+  status: string;
+  count_claimed: number;
+  received_at: string;
+  captured_at: string | null;
+  verified_at: string | null;
+  counted: boolean;
+  pending: boolean;
+  disposition?: string;
+  reason?: string | null;
+  reasons?: { code: string; detail?: string }[];
+  awaiting_review?: boolean;
+  reviewed_at?: string | null;
+  verification_version?: string | null;
+}
+
+/**
+ * Fetch the server's verdict for one submission.
+ *
+ * `bearer`-only and scoped to the calling agent's own submissions, so no device
+ * signature is needed — which also means it can be called for a submission whose
+ * photo has long since been pruned from the handset. Returns null for a
+ * submission the server has never heard of, which is the normal case for one
+ * that is still queued locally.
+ */
+export async function fetchServerVerification(submissionUuid: string): Promise<ServerVerification | null> {
+  const response = await authenticatedFetch(`/submission.php?uuid=${encodeURIComponent(submissionUuid)}`);
+
+  if (response.status === 404) {
+    // The server has never received this UUID. Not an error: it is the expected
+    // answer for anything still sitting in the local queue.
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: ServerVerification };
+  return envelope.data;
+}
+
+/**
+ * The operator review queue.
+ *
+ * Operator-only on the server (`SUPERVISOR`/`ADMIN`); an `AGENT` receives 403.
+ * The path is `reviews/index.php` rather than `reviews.php` — the shim files
+ * under public_html are one per route, and there is no `reviews.php`.
+ */
+export interface ReviewQueueItem {
+  submission_id: number;
+  submission_uuid: string;
+  agent: { agent_code: string; full_name: string };
+  device: { device_uuid: string | null; imei: string | null };
+  count_claimed: number;
+  received_at: string;
+  image: { width: number; height: number; path: string };
+  position: { latitude: number | null; longitude: number | null };
+  checks: Record<string, string>;
+  review_reason: string | null;
+  evidence: Record<string, unknown> | null;
+  final_disposition: string | null;
+  already_reviewed: boolean;
+  reviewed_at: string | null;
+  review_note: string | null;
+}
+
+export interface ReviewQueue {
+  items: ReviewQueueItem[];
+  meta: {
+    pagination: { total: number; limit: number; offset: number };
+    reasons: { code: string; count: number }[];
+    requested_by: string;
+  };
+}
+
+export async function fetchReviewQueue(
+  reason?: string,
+  agentCode?: string
+): Promise<ReviewQueue> {
+  const params = new URLSearchParams({ limit: '25' });
+  if (reason) {
+    params.set('reason', reason);
+  }
+  if (agentCode) {
+    params.set('agent_code', agentCode);
+  }
+
+  const response = await authenticatedFetch(`/reviews/index.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as {
+    data: ReviewQueueItem[];
+    meta: ReviewQueue['meta'];
+  };
+
+  return { items: envelope.data, meta: envelope.meta };
+}
+
+/**
+ * Record an approve/reject decision against a queued submission.
+ *
+ * `note` is mandatory server-side (5–1000 characters) and deliberately so: a
+ * decision that overrules the automated pass without recording why produces an
+ * audit trail that cannot answer the only question anyone will later ask of it.
+ */
+export async function decideReview(
+  submissionId: number,
+  decision: 'APPROVE' | 'REJECT',
+  note: string
+): Promise<{ submission_id: number; status: string; reviewed_by: string; reviewed_at: string }> {
+  const response = await authenticatedFetch('/reviews/decide.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ submission_id: submissionId, decision, note })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as {
+    data: { submission_id: number; status: string; reviewed_by: string; reviewed_at: string };
+  };
+
+  return envelope.data;
 }

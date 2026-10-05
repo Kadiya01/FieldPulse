@@ -136,6 +136,33 @@ function removeTree(string $dir): void
 }
 
 /**
+ * Remove comments from source text, so a rule about what is *claimed* is not
+ * defeated or satisfied by prose about the rule.
+ *
+ * Non-greedy and DOTALL so a block comment spanning lines goes in one pass, and
+ * the longest opener is tried first so `<!--` is not half-matched as `<`.
+ *
+ * @param array<string,string> $delimiters opener => closer
+ */
+function stripComments(string $source, array $delimiters): string
+{
+    // Longest opener first: with '//' and '/*' both present, the first is a prefix
+    // of neither, but '<!--' and '<!-->' style pairs can be, and getting this
+    // wrong silently truncates the rest of the file.
+    uasort($delimiters, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+
+    foreach ($delimiters as $open => $close) {
+        $source = (string) preg_replace(
+            '/' . preg_quote($open, '/') . '.*?' . preg_quote($close, '/') . '/s',
+            ' ',
+            $source
+        );
+    }
+
+    return $source;
+}
+
+/**
  * Run a PHP script and capture stdout, stderr and the real exit code.
  *
  * proc_open rather than popen: popen returns the exit status of the shell that
@@ -1150,7 +1177,126 @@ $t->test('storage directories are created owner-only where possible', function (
 });
 
 /* ===========================================================================
- * I. CRON, as cPanel invokes it.
+ * I. Branding.
+ * =========================================================================== */
+
+$t->group('branding');
+
+/*
+ * This group exists because of what the repository used to ship.
+ *
+ * The favicon and the two "any" PWA icons were the Vite starter's own artwork: a
+ * purple (#863bff) bolt, mostly transparent, behind a manifest that described the
+ * app as an "Offline-First Biometric Enrollment PWA". Nothing about that was
+ * wrong in a way a test could see, because every file was present, well-formed
+ * and referenced correctly — the browser tab simply said "Vite", every installed
+ * icon was a different colour from the app, and the product described a
+ * capability the product does not have.
+ *
+ * So these assertions are about consistency and about claims, not about pixels
+ * looking nice. The one thing worth stating plainly is that "biometric" is not an
+ * available word: the browser supplies a key it signs with, which is not the same
+ * as hardware attestation, and a description that implies otherwise can be
+ * believed by an agent in a field.
+ */
+$t->test('the app never describes itself as using biometrics', function (TestRunner $t) use ($publicRoot, $privateRoot): void {
+    $root = dirname($privateRoot);
+
+    /*
+     * Comments are stripped before the check, because both files now carry a
+     * comment explaining why the word is absent — and a comment explaining why a
+     * claim is not made is not the claim. Matching on the raw source would make
+     * the rule unsatisfiable except by deleting the explanation.
+     */
+    $sources = [
+        'index.html'     => stripComments(
+            (string) file_get_contents($root . '/index.html'),
+            ['<!--' => '-->']
+        ),
+        'vite.config.ts' => stripComments(
+            (string) file_get_contents($root . '/vite.config.ts'),
+            ['/*' => '*/', '//' => "\n"]
+        ),
+    ];
+
+    foreach ($sources as $file => $visible) {
+        // "Biometric" must not appear as a product claim anywhere in the text a
+        // launcher or a browser tab can show. The simplest rule that cannot be
+        // satisfied by a reworded claim is the bare word.
+        $t->assertFalse(
+            (bool) preg_match('/biometric/i', $visible),
+            $file . ' claims biometric capability the app does not have'
+        );
+    }
+});
+
+$t->test('the manifest and the browser chrome agree on the brand colour', function (TestRunner $t) use ($privateRoot): void {
+    $root = dirname($privateRoot);
+    $html = (string) file_get_contents($root . '/index.html');
+    $vite = (string) file_get_contents($root . '/vite.config.ts');
+
+    $t->assertContains("content=\"#2563eb\"", $html, 'index.html theme-color drifted');
+    $t->assertContains("theme_color: '#2563eb'", $vite, 'manifest theme_color drifted');
+    $t->assertContains("background_color: '#f3f4f6'", $vite, 'manifest background drifted');
+});
+
+$t->test('every brand asset is the FieldPulse mark, not the starter template', function (TestRunner $t) use ($privateRoot): void {
+    $publicDir = dirname($privateRoot) . '/public';
+    $svg = (string) file_get_contents($publicDir . '/favicon.svg');
+
+    // The Vite bolt was #863bff on a 48x46 viewBox. Neither survives here.
+    $t->assertFalse(str_contains($svg, '863bff'), 'favicon.svg still carries the starter purple');
+    $t->assertContains('#2563eb', $svg, 'favicon.svg is not the FieldPulse blue');
+    $t->assertContains('viewBox="0 0 512 512"', $svg, 'favicon.svg is not on the mark grid');
+
+    // Re-render and compare byte-for-byte, so a hand-edited or half-updated PNG
+    // fails here rather than shipping next to a matching SVG.
+    $script = escapeshellarg($privateRoot . '/bin/brand_assets.php') . ' --check';
+    exec(escapeshellarg(PHP_BINARY) . ' ' . $script . ' 2>&1', $out, $code);
+
+    $t->assertSame(0, $code, 'brand_assets.php --check failed: ' . implode(' | ', $out));
+});
+
+$t->test('the shipped icons carry the brand colour as pixels', function (TestRunner $t) use ($privateRoot): void {
+    $publicDir = dirname($privateRoot) . '/public';
+
+    foreach (['pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'] as $file) {
+        $path = $publicDir . '/' . $file;
+
+        if (!function_exists('imagecreatefrompng')) {
+            return;
+        }
+
+        $im = imagecreatefrompng($path);
+        $t->assertNotNull($im, $file . ' is not a readable PNG');
+
+        $found = 0;
+        $step = max(1, (int) (imagesx($im) / 32));
+
+        for ($x = 0; $x < imagesx($im); $x += $step) {
+            for ($y = 0; $y < imagesy($im); $y += $step) {
+                $rgb = imagecolorsforindex($im, imagecolorat($im, $x, $y));
+
+                if ($rgb['alpha'] > 63) {
+                    continue;
+                }
+
+                if ($rgb['red'] === 0x25 && $rgb['green'] === 0x63 && $rgb['blue'] === 0xeb) {
+                    $found++;
+                }
+            }
+        }
+
+        imagedestroy($im);
+
+        // Not an exact ratio: the point is that blue-600 is genuinely present and
+        // is the dominant tone, not that a specific tile area is covered.
+        $t->assertTrue($found > 50, $file . ' contains no FieldPulse blue pixels (' . $found . ' found)');
+    }
+});
+
+/* ===========================================================================
+ * J. CRON, as cPanel invokes it.
  * =========================================================================== */
 
 $t->group('cron');

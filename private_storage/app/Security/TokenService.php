@@ -89,6 +89,7 @@ final class TokenService
             'expires_in'        => $c->int('security.access_ttl'),
             'token_type'        => 'Bearer',
             'device_bound'      => false,
+            'agent'             => self::publicAgent($agent),
         ];
     }
 
@@ -141,6 +142,32 @@ final class TokenService
             'expires_in'        => $c->int('security.access_ttl'),
             'token_type'        => 'Bearer',
             'device_bound'      => true,
+            'agent'             => self::publicAgent($agent),
+        ];
+    }
+
+    /**
+     * The agent fields a client is allowed to see, in the one shape every
+     * session response uses.
+     *
+     * `role` is here because the PWA cannot render an operator-only review queue
+     * without being told who it is speaking to: a client that guessed would show
+     * the link to every agent, and one that never guessed would hide it from
+     * every supervisor. It is presentation only. Whether a role may reach the
+     * review routes is decided by Http\Kernel::assertOperator against the
+     * database row, not by anything in a token or a response body, so a client
+     * that edits this value locally gains nothing and sees 403.
+     *
+     * @param  array<string,mixed> $agent
+     * @return array<string,mixed>
+     */
+    private static function publicAgent(array $agent): array
+    {
+        return [
+            'id'         => (int) $agent['id'],
+            'agent_code' => (string) $agent['agent_code'],
+            'full_name'  => (string) ($agent['full_name'] ?? ''),
+            'role'       => (string) ($agent['role'] ?? 'AGENT'),
         ];
     }
 

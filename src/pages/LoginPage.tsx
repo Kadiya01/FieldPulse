@@ -2,17 +2,27 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogIn, KeyRound, ShieldAlert } from 'lucide-react';
 import { generateAndStoreDeviceIdentity, getDeviceIdentity } from '../crypto/keys';
-import { login, registerDevice, ApiError } from '../api/client';
-import type { SessionAgent } from '../api/client';
+import { login, registerDevice, ApiError, type SessionAgent } from '../api/client';
 
-type Stage = 'credentials' | 'pairing' | 'done';
+type Stage = 'credentials' | 'pairing';
 
-export default function LoginPage() {
+/**
+ * Sign in, then bind this browser's key.
+ *
+ * `onAuthenticated` hands the agent to the session gate. It is a prop rather than
+ * a second restore because the answer is already in hand here: making the gate
+ * re-ask the server for something this call just received would cost a round
+ * trip and a visible pause on the one screen where a pause reads as failure.
+ */
+export default function LoginPage({
+  onAuthenticated
+}: {
+  onAuthenticated: (agent: SessionAgent) => void;
+}) {
   const [stage, setStage] = useState<Stage>('credentials');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [pairingCode, setPairingCode] = useState('');
-  const [agent, setAgent] = useState<SessionAgent | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
@@ -30,7 +40,7 @@ export default function LoginPage() {
    * retried indefinitely: the server counts attempts. A fresh code is required
    * after three, which is why the code field is cleared on every attempt.
    */
-  const completeRegistration = async (code?: string) => {
+  const completeRegistration = async (code?: string): Promise<SessionAgent | null> => {
     // Reuse the stored key if the browser already has one. Re-generating on
     // every login would leave an orphan key per attempt and, worse, would
     // present a different device_uuid to a policy that may only permit the
@@ -42,10 +52,8 @@ export default function LoginPage() {
 
     try {
       const result = await registerDevice(code);
-      setAgent(result.agent);
-      setStage('done');
       setErrorMsg('');
-      navigate('/');
+      return result.agent;
     } catch (err) {
       if (err instanceof ApiError && err.field === 'pairing_code') {
         // The policy wants a code. Show the field and keep the session.
@@ -54,10 +62,11 @@ export default function LoginPage() {
         setErrorMsg(
           'This device must be paired before it can be used. Enter the code issued by an administrator.'
         );
-        return;
+        return null;
       }
 
       setErrorMsg(err instanceof Error ? err.message : 'Device registration failed.');
+      return null;
     }
   };
 
@@ -68,7 +77,12 @@ export default function LoginPage() {
 
     try {
       await login(username, password);
-      await completeRegistration();
+      const agent = await completeRegistration();
+
+      if (agent) {
+        onAuthenticated(agent);
+        navigate('/', { replace: true });
+      }
     } catch (err) {
       // Every credential failure is deliberately identical server-side, so
       // there is nothing more specific to say than the status allows.
@@ -88,7 +102,16 @@ export default function LoginPage() {
     setErrorMsg('');
 
     try {
-      await completeRegistration(pairingCode.trim());
+      const agent = await completeRegistration(pairingCode.trim());
+
+      if (agent) {
+        onAuthenticated(agent);
+        navigate('/', { replace: true });
+      }
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'Pairing failed. Ask for a new code and try again.'
+      );
     } finally {
       setBusy(false);
     }
@@ -98,21 +121,24 @@ export default function LoginPage() {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-          <div className="flex justify-center mb-6 text-amber-600">
-            <ShieldAlert size={48} />
+          <div className="flex justify-center mb-6 text-amber-700">
+            <ShieldAlert size={48} aria-hidden="true" />
           </div>
-          <h1 className="text-2xl font-bold text-center text-gray-800 mb-2">Pair this device</h1>
-          <p className="text-sm text-gray-600 text-center mb-6">
+          <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Pair this device</h1>
+          <p className="text-sm text-gray-700 text-center mb-6">
             Signed in as <span className="font-medium">{username}</span>.
           </p>
 
-          {errorMsg && (
-            <div className="bg-amber-100 text-amber-900 p-3 rounded mb-4 text-sm">{errorMsg}</div>
-          )}
+          {/* An instruction, not an error, so it is announced politely: an alert
+              role here would interrupt a screen reader mid-form for something the
+              agent is being asked to do, not something that went wrong. */}
+          <div role="status" className="bg-amber-100 text-amber-900 p-3 rounded mb-4 text-sm">
+            {errorMsg}
+          </div>
 
           <form onSubmit={handlePairing} className="space-y-4">
             <div>
-              <label htmlFor="pairing" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="pairing" className="block text-sm font-medium text-gray-800">
                 Pairing code
               </label>
               <input
@@ -123,37 +149,21 @@ export default function LoginPage() {
                 required
                 value={pairingCode}
                 onChange={e => setPairingCode(e.target.value)}
-                className="mt-1 w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-amber-500 focus:border-amber-500"
+                aria-describedby="pairing-help"
+                className="mt-1 w-full border-gray-400 rounded-md shadow-sm p-2 border"
               />
+              <p id="pairing-help" className="mt-1 text-xs text-gray-700">
+                Issued out of band by an administrator. Single-use and expiring.
+              </p>
             </div>
             <button
               type="submit"
               disabled={busy || pairingCode.trim() === ''}
-              className="w-full bg-amber-600 text-white p-3 rounded-md font-medium hover:bg-amber-700 flex justify-center items-center gap-2 disabled:opacity-50"
+              className="w-full bg-amber-700 text-white p-3 rounded-md font-medium hover:bg-amber-800 flex justify-center items-center gap-2 disabled:opacity-60"
             >
-              {busy ? 'Pairing...' : <><KeyRound size={20} /> Pair device</>}
+              {busy ? 'Pairing…' : <><KeyRound size={20} aria-hidden="true" /> Pair device</>}
             </button>
           </form>
-
-          <p className="mt-4 text-xs text-gray-500 text-center">
-            Codes are single-use and expire. Ask an administrator for a new one if this one fails.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (stage === 'done' && agent) {
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm text-center">
-          <div className="flex justify-center mb-6 text-green-600">
-            <KeyRound size={48} />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-800">Device registered</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            {agent.full_name} ({agent.agent_code})
-          </p>
         </div>
       </div>
     );
@@ -162,21 +172,21 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-        <div className="flex justify-center mb-6 text-blue-600">
-          <KeyRound size={48} />
+        <div className="flex justify-center mb-6 text-blue-700">
+          <KeyRound size={48} aria-hidden="true" />
         </div>
-        <h1 className="text-2xl font-bold text-center text-gray-800 mb-6">FieldPulse Login</h1>
+        <h1 className="text-2xl font-bold text-center text-gray-900 mb-6">FieldPulse sign in</h1>
 
         {errorMsg && (
-          <div role="alert" className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">
+          <div role="alert" className="bg-red-100 text-red-800 p-3 rounded mb-4 text-sm">
             {errorMsg}
           </div>
         )}
 
         <form onSubmit={handleCredentials} className="space-y-4">
           <div>
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700">
-              Agent Username
+            <label htmlFor="username" className="block text-sm font-medium text-gray-800">
+              Agent username
             </label>
             <input
               id="username"
@@ -185,11 +195,11 @@ export default function LoginPage() {
               required
               value={username}
               onChange={e => setUsername(e.target.value)}
-              className="mt-1 w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500"
+              className="mt-1 w-full border-gray-400 rounded-md shadow-sm p-2 border"
             />
           </div>
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="password" className="block text-sm font-medium text-gray-800">
               Password
             </label>
             <input
@@ -199,19 +209,20 @@ export default function LoginPage() {
               required
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="mt-1 w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500"
+              className="mt-1 w-full border-gray-400 rounded-md shadow-sm p-2 border"
             />
           </div>
           <button
             type="submit"
             disabled={busy}
-            className="w-full bg-blue-600 text-white p-3 rounded-md font-medium hover:bg-blue-700 flex justify-center items-center gap-2 disabled:opacity-50"
+            className="w-full bg-blue-700 text-white p-3 rounded-md font-medium hover:bg-blue-800 flex justify-center items-center gap-2 disabled:opacity-60"
           >
-            {busy ? 'Signing in...' : <><LogIn size={20} /> Sign in</>}
+            {busy ? 'Signing in…' : <><LogIn size={20} aria-hidden="true" /> Sign in</>}
           </button>
         </form>
-        <p className="mt-4 text-xs text-gray-500 text-center">
-          This device gets its own cryptographic key on first sign-in. The key never leaves it.
+        <p className="mt-4 text-xs text-gray-700 text-center">
+          This device gets its own cryptographic key on first sign-in. The key never leaves it,
+          and it is not sent to the server in any form.
         </p>
       </div>
     </div>

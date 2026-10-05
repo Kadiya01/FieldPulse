@@ -326,7 +326,7 @@ cron. Run any of them with no arguments to see usage.
 | `healthcheck.php` | Live environment, schema, and storage check |
 | `selftest.php` | Offline unit tests; `--filter=phash`, `--verbose` |
 | `migrate.php` | Apply migrations; `--status` to inspect |
-| `provision_agent.php` | Create an agent, role, IMEI binding, site |
+| `provision_agent.php` | Enrol an agent: code, name, optional role, optional site |
 | `pair_device.php` | Issue a one-time device pairing code |
 | `prune.php` | TTL housekeeping; `--dry-run` first |
 | `reaggregate.php` | Rebuild leaderboard summaries; `--period=`, `--all` |
@@ -370,16 +370,23 @@ file, so this is a correctness check, not a hardening preference.
 
 ## 9. Security model in one paragraph
 
-Login is a **username and password** (bcrypt). IMEI **identifies**; it never
-authenticates and is not accepted anywhere in the auth flow — it is printed on
-the handset and the box, is recycled between owners, and a browser cannot read
-it at all, so it is a user-typed string with the assurance of a serial number.
+Login is a **username and password** (bcrypt). An IMEI may be recorded against an
+agent by `provision_agent.php --imei=` as an administrative inventory note, and
+it is deliberately not an authentication input: it is not accepted by any
+endpoint, not required to register a device, and cannot be read by a browser at
+all — a handset does not expose it to web code, so anything typed into a field is
+a string a user copied from a box. The factor that does stand between a stolen
+password and a new device is the one-time pairing code (`Security\PairingCode`),
+which is delivered by whoever supervises the enrolment and is not guessable from
+anything the handset exposes.
+
 Every login failure is byte-identical, and the password hash is verified even
 when the username does not exist, so neither the body nor the response time is
 an account-enumeration oracle.
 
 Login returns a deliberately weak **bootstrap** JWT (`scope=bootstrap`,
-`device_uuid=null`). The only route it may reach is `/device/register`, which
+`device_uuid=null`). The only route it may reach is
+`/api/v1/device/register.php`, which
 binds a browser-generated non-extractable ECDSA P-256 public JWK to the agent and
 upgrades the session to a device-bound token. Binding is authorised by an
 operator-issued one-time pairing code, and it revokes the bootstrap refresh
@@ -407,7 +414,7 @@ Apache, so it cannot regress unnoticed:
 | `/.env`, `/.git/config`, `/api/.htaccess`, `/.DS_Store`, `/index.html~` | 403 |
 | `/shell.php.bak` (undeclared suffix) | 403 |
 | `/assets/index-missing.js` | 404, never 200 HTML |
-| `/api/v1/renamed-endpoint.php` | the API's own 404, never the SPA shell |
+| `/api/v1/renamed-endpoint.php` (a path deliberately not in the route table) | the API's own 404, never the SPA shell |
 | `/queue`, `/leaderboard`, `/capture/17` | 200, the shell |
 | `/` with no `index.html` deployed | 403 — see below |
 
@@ -448,6 +455,25 @@ cached service worker cannot be replaced by a new one.
 ---
 
 ## Troubleshooting
+
+**Nothing in `.htaccess` takes effect — dotfiles are downloadable, `/queue`
+404s, no CSP header.** The host is not honouring per-directory configuration.
+Every denial this document relies on lives in `.htaccess`, so if that file is
+ignored the document root serves `private_storage` if it was uploaded inside it,
+and there is no second line of defence.
+
+Confirm with `php private_storage/bin/healthcheck.php`, which verifies the
+*deployed* PHP limits in `.user.ini` rather than trusting the copy in the
+repository, and check the host has `AllowOverride All` for the document root. On
+cPanel that is **Domains → Domain → Apache Handlers → Override All**; the label
+varies by cPanel theme. To prove whether the rules are actually in force rather
+than merely present, run
+`php private_storage/bin/deploy_test.php --httpd=/usr/sbin/httpd` against your
+own Apache version and confirm the status-code tier reports no warning — that
+tier requests `/.env` and `/shell.php.bak` over a real socket and asserts 403.
+
+If you cannot get `AllowOverride All`, `.htaccess` is inert and this application
+cannot be deployed on that host as configured.
 
 **Everything returns 403, including `/index.html`.** The suffix allowlist in
 `.htaccess` is denying valid build output. This is the failure described above:

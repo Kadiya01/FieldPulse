@@ -395,6 +395,7 @@ final class DeviceController implements ActionInterface
                 'id'         => $context->agentId(),
                 'agent_code' => $context->agentCode(),
                 'full_name'  => (string) ($context->agent()['full_name'] ?? ''),
+                'role'       => (string) ($context->agent()['role'] ?? 'AGENT'),
             ],
         ])->withCookie(array_merge(
             [

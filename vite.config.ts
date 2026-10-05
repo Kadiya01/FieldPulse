@@ -34,9 +34,13 @@ export default defineConfig({
       manifest: {
         name: 'FieldPulse',
         short_name: 'FieldPulse',
-        description: 'Offline-First Biometric Enrollment PWA',
-        theme_color: '#2563eb', // blue-600
-        background_color: '#f3f4f6', // gray-100
+        // Not "biometric": nothing in this app reads a fingerprint or a face, and
+        // a browser cannot attest to hardware. What it does is record a claimed
+        // count with a photo and position, then let a server verify it — so that
+        // is what the launcher says.
+        description: 'Record field counts offline; the server verifies them.',
+        theme_color: '#2563eb', // blue-600: the header, the nav and the icons
+        background_color: '#f3f4f6', // gray-100: the page background behind the cards
         display: 'standalone',
         orientation: 'portrait',
         icons: [

@@ -20,16 +20,25 @@ All errors share one envelope, so a client only needs one error parser.
   "error": {
     "code": "VALIDATION_FAILED",
     "message": "Human-readable summary.",
-    "field": "count_claimed",
-    "request_id": "3f9a1c2e-..."
+    "request_id": "3f9a1c2e-...",
+    "details": {
+      "field": "count_claimed"
+    }
   }
 }
 ```
 
 `error.code` is stable and safe to branch on. `error.message` is not — it may be
-reworded. `error.field` appears only for validation failures. `request_id` is
-also written to the application log, so a user reporting a failure can quote it
-and you can find the exact request.
+reworded. `error.details` is present only when there is a client-safe field to
+name, and `error.details.field` is the offending input for validation failures.
+`request_id` is also written to the application log, so a user reporting a failure
+can quote it and you can find the exact request.
+
+Note the nesting: the field name is inside `details`, not a sibling of `code` and
+`message`. `src/api/client.ts` reads `body.error.details?.field` for the same
+reason — an envelope documented one level flatter than the code emits is the kind
+of mismatch that makes a client report "no field" for every validation failure and
+leaves an agent staring at a form that refuses to say which box is wrong.
 
 | Code | Status | Meaning |
 |---|---|---|
@@ -55,11 +64,17 @@ Two independent factors on nearly every call:
 2. **Device signature** — required on state-changing agent calls. Headers:
 
 ```
-X-Device-Id: <device uuid>
-X-Timestamp: <unix seconds>
-X-Nonce: <random base64url, never reused>
-X-Signature: <base64url signature>
+X-Device-UUID: <device uuid>
+X-Request-Timestamp: <unix seconds>
+X-Request-Nonce: <random base64url, never reused>
+X-Request-Signature: <base64url signature>
 ```
+
+The `Request` infix is part of the name, not decoration: the exact strings are
+`X-Device-UUID`, `X-Request-Timestamp`, `X-Request-Nonce` and
+`X-Request-Signature`, and the signature covers the timestamp and nonce under
+those names. An unrecognised header is treated as absent, so a client that sends
+`X-Signature` is not weakly authenticated — it is unsigned, and gets 401.
 
 The signed string is exactly:
 
@@ -85,7 +100,7 @@ correct. `file_sha256` is a separate digest, computed over the file bytes, and i
 
 ### CSRF
 
-`POST /auth/refresh` and `POST /auth/logout` are the only endpoints
+`POST /api/v1/auth/refresh.php` and `POST /api/v1/auth/logout.php` are the only endpoints
 cookie-authenticated, so only these enforce an `Origin` check. Everything else
 uses a bearer header, which a browser will not attach cross-origin.
 
@@ -95,19 +110,25 @@ uses a bearer header, which a browser will not attach cross-origin.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/auth/login` | public, username + password |
-| POST | `/auth/refresh` | refresh cookie + Origin |
-| POST | `/auth/logout` | refresh cookie + Origin |
-| POST | `/device/register` | bootstrap token + pairing code |
+| POST | `/api/v1/auth/login.php` | public, username + password |
+| POST | `/api/v1/auth/refresh.php` | refresh cookie + Origin |
+| POST | `/api/v1/auth/logout.php` | refresh cookie + Origin |
+| POST | `/api/v1/device/register.php` | bootstrap token + pairing code |
 | POST | `/api/v1/submit.php` | **signed** |
 | GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
 | GET | `/api/v1/leaderboard.php` | bearer |
-| GET | `/api/v1/reviews.php` | operator |
+| GET | `/api/v1/reviews/index.php` | operator |
 | POST | `/api/v1/reviews/decide.php` | operator |
+
+Every path is the literal file on disk, `.php` suffix included. There is no
+extensionless rewrite in `.htaccess`, so `/api/v1/auth/login` is a 404 and not a
+convenience — which is worth stating because a client that strips the suffix
+appears to work in development behind a fronting proxy that guesses, and 404s on
+the first cPanel request.
 
 ---
 
-### POST /auth/login
+### POST /api/v1/auth/login.php
 
 Exchanges a username and password for a **bootstrap** session.
 
@@ -127,15 +148,16 @@ Exchanges a username and password for a **bootstrap** session.
 }
 ```
 
-This response is **flat, not wrapped in `data`**, and so are `/auth/refresh`,
-`/auth/logout` and `/device/register`.
+This response is **flat, not wrapped in `data`**, and so are
+`/api/v1/auth/refresh.php`, `/api/v1/auth/logout.php` and
+`/api/v1/device/register.php`.
 
 A `Set-Cookie: fp_refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`
 accompanies it. The PWA cannot read it, which is the point.
 
 The access token is a *bootstrap* token: `scope=bootstrap`, `device_uuid=null`.
-It is deliberately weak and will only reach `/device/register`. Following it with
-`/device/register` replaces it with a device-bound token. `device_bound` is
+It is deliberately weak and will only reach `/api/v1/device/register.php`. Following
+it with that call replaces it with a device-bound token. `device_bound` is
 returned explicitly so a client never has to infer it from a scope claim.
 
 **Every failure is the same `401 UNAUTHENTICATED` with the same body**, and
@@ -153,7 +175,7 @@ authentication factor and is not used as one.
 
 ---
 
-### POST /auth/refresh
+### POST /api/v1/auth/refresh.php
 
 Body is empty. Reads the cookie, rotates the token, and issues a new one. **A
 refresh token is single-use.** Presenting a token that was already rotated means
@@ -163,7 +185,7 @@ only way reuse is detectable.
 
 ---
 
-### POST /device/register
+### POST /api/v1/device/register.php
 
 Binds a browser-generated ECDSA P-256 public key to the agent, upgrading the
 bootstrap session. Authenticated by the **bootstrap** access token; the Kernel
@@ -291,13 +313,21 @@ fails loudly instead of appearing to succeed.
     "self": "/api/v1/submission.php?uuid=9f1c…",
     "count_claimed": 12,
     "received_at": "2026-09-28T09:41:07Z",
-    "estimated_review_seconds": 900
+    "estimated_review_seconds": 120
   }
 }
 ```
 
 `submission_id` is a JSON **number**, not a string. It is the server's row id and
 is stable for the life of the submission; poll `self` for the verdict.
+
+`202` means **accepted and queued**, nothing more. The body describes receipt,
+not a result: the image has not been looked at yet, and `count_claimed` is still
+an unverified claim. `estimated_review_seconds` is a queue-throughput estimate for
+displaying a rough wait, not a deadline and not a promise. Clients that treat
+`202` as "verified" will eventually show a rejected count as a confirmed one,
+which is the exact failure the separate `status` and `disposition` fields in the
+polling response exist to prevent.
 
 **`200` — idempotent replay**
 
@@ -403,15 +433,15 @@ that is not already public within the field programme.
 
 ---
 
-### GET /reviews  ·  POST /reviews/decide
+### GET /api/v1/reviews/index.php  ·  POST /api/v1/reviews/decide.php
 
 Operator-only (`SUPERVISOR` or `ADMIN`). An `AGENT` role receives `403`.
 
-`GET /reviews` returns the queue with the evidence needed to decide: the image,
+`GET /api/v1/reviews/index.php` returns the queue with the evidence needed to decide: the image,
 EXIF, geofence result, nearest duplicate and its distance, and the full list of
 reasons the automated pass recorded.
 
-`POST /reviews/decide`:
+`POST /api/v1/reviews/decide.php`:
 
 ```json
 { "submission_id": 41, "decision": "APPROVE", "note": "timestamp discrepancy explained" }
@@ -426,21 +456,21 @@ supervisor who made it.
 
 ## Client integration order
 
-1. `POST /auth/login` with username and password. Keep the returned access token
+1. `POST /api/v1/auth/login.php` with username and password. Keep the returned access token
    in memory only — never in `localStorage` or `sessionStorage` — and let the
    `HttpOnly` refresh cookie be stored by the browser.
 2. Generate a non-extractable ECDSA P-256 key pair in the browser
    (`crypto.subtle.generateKey(..., false, ['sign','verify'])`), persist the
    `CryptoKey` handle and its public JWK in IndexedDB, and never send the
    private half anywhere.
-3. `POST /device/register` with the bootstrap token, `device_uuid`,
+3. `POST /api/v1/device/register.php` with the bootstrap token, `device_uuid`,
    `public_key_jwk`, and a pairing code if the server asks for one. This returns
    the device-bound token that replaces the bootstrap one.
-4. On a page load with no token in memory, call `/auth/refresh` once to restore
+4. On a page load with no token in memory, call `/api/v1/auth/refresh.php` once to restore
    it. If that succeeds but IndexedDB has no private key, the state is
    `UNREGISTERED` — the cookie is fine, the browser cannot prove the device —
    and the user re-registers rather than logging in again.
-5. On any `401`, call `/auth/refresh` and retry **once**. Serialise refreshes
+5. On any `401`, call `/api/v1/auth/refresh.php` and retry **once**. Serialise refreshes
    with `navigator.locks`: the refresh token is single-use, so two tabs (or two
    concurrent requests) refreshing independently present a rotated token and the
    server revokes the family. Broadcast the new access token to sibling tabs

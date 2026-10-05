@@ -13,3 +13,90 @@ html, body {
 #root {
   min-height: 100vh;
 }
+
+/*
+ * Keyboard focus.
+ *
+ * Every interactive control in this app is a Tailwind-styled button, link or
+ * input, and not one of them declared a focus style. A control with no declared
+ * focus style falls back to the browser default, which this stylesheet is free
+ * to suppress and which several of these backgrounds make hard to see anyway.
+ * Declaring the ring here makes it unconditional and consistent: 3px of
+ * blue-700 with an offset, on white cards and on the blue header alike.
+ *
+ * `:focus-visible` rather than `:focus`, so pressing the mouse does not draw a
+ * ring on every control while the keyboard always does.
+ */
+:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/*
+ * On the blue header the dark blue would be invisible, so the ring is inverted
+ * there. Scoped to the header rather than to a colour class, because the nav
+ * links alternate between a blue background (inactive) and a light one (active)
+ * within the same element.
+ */
+header :focus-visible {
+  outline-color: #ffffff;
+}
+
+/*
+ * The `main` element is focusable so the skip link can move the keyboard there.
+ * It is not an interactive control, and a ring drawn around the whole page
+ * because a screen reader moved focus would obscure the content the user asked
+ * to reach.
+ */
+.main-focus-target:focus {
+  outline: none;
+}
+
+/*
+ * The skip link.
+ *
+ * Off-screen until focused, then pinned to the top-left. `sr-only` was not used
+ * because that utility clips to 1px and some screen readers treat a clipped
+ * element as still hidden until it is moved by focus; this moves it far enough
+ * to be genuinely off-canvas instead, and never animates it into view.
+ */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 50;
+  background-color: #ffffff;
+  color: #1e3a8a;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  border: 2px solid #1d4ed8;
+  border-radius: 0 0 0.5rem 0;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+.main-focus-target:focus {
+  outline: none;
+}
+
+/*
+ * Motion.
+ *
+ * Two spinners in this app animate continuously — the sync indicator and the
+ * per-card check — and both are decorative repetition of text that already says
+ * what is happening. Honouring a reduced-motion preference means they hold still
+ * rather than pulsing forever.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

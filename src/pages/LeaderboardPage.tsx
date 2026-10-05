@@ -1,7 +1,14 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { authenticatedFetch } from '../api/client';
-import { Trophy, Home, AlertCircle, RefreshCw } from 'lucide-react';
+import {
+  Trophy,
+  AlertCircle,
+  RefreshCw,
+  CheckCircle2,
+  Clock,
+  XCircle,
+  Loader2
+} from 'lucide-react';
 
 interface LeaderboardData {
   verified: number;
@@ -11,107 +18,241 @@ interface LeaderboardData {
   updated_at: number;
 }
 
+const CACHE_KEY = 'fieldpulse_leaderboard';
+
+/**
+ * The agent's own totals, as the server counts them.
+ *
+ * Every figure here is a *server* number. Nothing on this screen is derived from
+ * the local queue, because a total that mixed the two would move when a handset
+ * synced and would look like a correction. The four tiles are the same four
+ * dispositions the queue page reports per submission, aggregated.
+ *
+ * The numbers are cached in `localStorage` so the screen survives a dead
+ * connection. That is safe because the response is aggregate counts and site
+ * metadata — no token, and nothing the server would treat as a claim. It stays
+ * keyed to whoever last fetched it, so a shared handset can see a stale board,
+ * but a shared handset cannot spend a session: no credential is written here.
+ */
 export default function LeaderboardPage() {
-  const [data, setData] = useState<LeaderboardData | null>(null);
+  const [data, setData] = useState<LeaderboardData | null>(() => readCache());
+  // True from the start: the first thing this screen does is fetch.
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const fetchLeaderboard = async () => {
+  /*
+   * Fetch on mount, which is a synchronisation with a remote system rather than
+   * derived state — that is what an effect is for.
+   *
+   * Written as an inline async body rather than a `useCallback` invoked from the
+   * effect because the callback shared with the Refresh button would be entered
+   * synchronously, and a setState on that path is the cascading render
+   * `react/set-state-in-effect` exists to prevent. `live` guards the unmount,
+   * which the callback version had to do with the same flag anyway.
+   */
+  useEffect(() => {
+    let live = true;
+
+    (async () => {
+      try {
+        const fresh = await fetchBoard();
+
+        if (live) {
+          setData(fresh);
+          setErrorMsg('');
+        }
+      } catch {
+        if (live) {
+          const cached = readCache();
+
+          if (cached) {
+            setData(cached);
+            setErrorMsg('Showing the last figures this device received. They may be out of date.');
+          } else {
+            setErrorMsg('You are offline and this device has no saved figures yet.');
+          }
+        }
+      } finally {
+        if (live) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /** The manual refresh: a button press, so setting state up front is correct here. */
+  const refresh = async () => {
     setLoading(true);
-    setErrorMsg('');
+
     try {
-      const res = await authenticatedFetch('/leaderboard.php');
-      if (!res.ok) throw new Error('Failed to fetch leaderboard');
-      const json = await res.json();
-      setData(json);
-      // Cached for offline viewing. Safe in localStorage because this response
-      // is aggregate counts and site metadata — no token, and nothing the
-      // server would treat as a claim. It stays keyed to whoever last fetched
-      // it, so a shared handset can see a stale board, but a shared handset
-      // cannot spend a session: no credential is written here.
-      localStorage.setItem('fieldpulse_leaderboard', JSON.stringify(json));
+      setData(await fetchBoard());
+      setErrorMsg('');
     } catch {
-      /*
-       * Fall back to the cache. This deliberately swallows the reason: a 401,
-       * a 500 and a dropped connection all resolve to the same stale board, and
-       * telling the agent "showing cached data" is true in every case. The auth
-       * failure is not hidden, though — authenticatedFetch has already raised
-       * auth_failure and the gate has moved the user to the login screen.
-       */
-      const cached = localStorage.getItem('fieldpulse_leaderboard');
-      if (cached) {
-        setData(JSON.parse(cached));
-        setErrorMsg('Showing offline cached leaderboard.');
+      // The cached board is still the best answer available, and authenticatedFetch
+      // has already raised auth_failure if the session is the problem, so the gate
+      // is moving this screen to the login form on its own.
+      if (readCache()) {
+        setErrorMsg('Showing the last figures this device received. They may be out of date.');
       } else {
-        setErrorMsg('You are offline and no cached data is available.');
+        setErrorMsg('You are offline and this device has no saved figures yet.');
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetches on mount, which is a synchronisation with a remote system rather
-  // than derived state, so this is what an effect is for.
-  useEffect(() => {
-    void fetchLeaderboard();
-  }, []);
-
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
-      <header className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Trophy size={20} /> Leaderboard
+    <section>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+        <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+          <Trophy size={20} aria-hidden="true" /> Leaderboard
         </h1>
-        <Link to="/" className="flex items-center gap-2 bg-blue-700 px-3 py-1 rounded">
-          <Home size={18} /> Home
-        </Link>
-      </header>
+        <button
+          type="button"
+          onClick={() => {
+            setLoading(true);
+            void refresh();
+          }}
+          disabled={loading}
+          className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-2 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-60"
+        >
+          {loading
+            ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+            : <RefreshCw size={14} aria-hidden="true" />}
+          {loading ? 'Refreshing' : 'Refresh'}
+        </button>
+      </div>
 
-      <main className="flex-1 p-4 max-w-lg mx-auto w-full">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="font-semibold text-gray-700">Your Performance</h2>
-          <button 
-            onClick={fetchLeaderboard}
-            disabled={loading}
-            className="text-blue-600 text-sm font-medium flex items-center gap-1 bg-blue-50 px-2 py-1 rounded border border-blue-200 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
-          </button>
-        </div>
+      <p className="text-sm text-gray-700 mb-4">
+        Counts the server has verified. A capture still waiting on upload or verification does
+        not appear here.
+      </p>
 
+      <div aria-live="polite">
         {errorMsg && (
-          <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4 flex items-start gap-2 text-sm">
-            <AlertCircle className="shrink-0 mt-0.5" size={16} />
+          <p className="bg-amber-100 border border-amber-400 text-amber-900 px-4 py-3 rounded mb-4 flex items-start gap-2 text-sm">
+            <AlertCircle className="shrink-0 mt-0.5" size={16} aria-hidden="true" />
             <span>{errorMsg}</span>
-          </div>
+          </p>
         )}
+      </div>
 
-        {data ? (
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white p-4 rounded-lg shadow border-t-4 border-green-500">
-              <p className="text-sm text-gray-500 font-medium">Verified</p>
-              <p className="text-3xl font-bold text-gray-800">{data.verified}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg shadow border-t-4 border-blue-500">
-              <p className="text-sm text-gray-500 font-medium">Submitted</p>
-              <p className="text-3xl font-bold text-gray-800">{data.submitted}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg shadow border-t-4 border-orange-500">
-              <p className="text-sm text-gray-500 font-medium">Pending Review</p>
-              <p className="text-3xl font-bold text-gray-800">{data.pending}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg shadow border-t-4 border-red-500">
-              <p className="text-sm text-gray-500 font-medium">Rejected</p>
-              <p className="text-3xl font-bold text-gray-800">{data.rejected}</p>
-            </div>
-            <div className="col-span-2 text-center text-xs text-gray-400 mt-2">
-              Last updated: {new Date(data.updated_at * 1000).toLocaleString()}
-            </div>
-          </div>
-        ) : (
-          !loading && <div className="text-center text-gray-500">No data available.</div>
-        )}
-      </main>
+      {data ? (
+        <>
+          <dl className="grid grid-cols-2 gap-4">
+            <Tile
+              label="Verified"
+              value={data.verified}
+              hint="Counted in totals"
+              icon={<CheckCircle2 size={16} aria-hidden="true" />}
+              className="border-green-700 text-green-800"
+            />
+            <Tile
+              label="Submitted"
+              value={data.submitted}
+              hint="Received by the server"
+              icon={<Clock size={16} aria-hidden="true" />}
+              className="border-blue-700 text-blue-800"
+            />
+            <Tile
+              label="Pending review"
+              value={data.pending}
+              hint="Not counted yet"
+              icon={<Clock size={16} aria-hidden="true" />}
+              className="border-amber-600 text-amber-800"
+            />
+            <Tile
+              label="Rejected"
+              value={data.rejected}
+              hint="Not counted"
+              icon={<XCircle size={16} aria-hidden="true" />}
+              className="border-red-700 text-red-800"
+            />
+          </dl>
+
+          <p className="text-center text-xs text-gray-600 mt-4">
+            {loading
+              ? 'Updating…'
+              : `Server figures as at ${new Date(data.updated_at * 1000).toLocaleString()}`}
+          </p>
+        </>
+      ) : (
+        loading && (
+          <p role="status" className="text-center text-gray-700 flex items-center justify-center gap-2 py-8">
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            Loading your figures…
+          </p>
+        )
+      )}
+    </section>
+  );
+}
+
+/**
+ * One figure.
+ *
+ * The number is the content; the border, the icon and the hint line repeat it in
+ * other forms. Two tiles are never told apart by hue alone — each carries a
+ * distinct icon and a plain-language hint, so the grid survives greyscale,
+ * colour blindness and a phone in direct sun.
+ */
+function Tile({
+  label,
+  value,
+  hint,
+  icon,
+  className
+}: {
+  label: string;
+  value: number;
+  hint: string;
+  icon: React.ReactNode;
+  className: string;
+}) {
+  return (
+    <div className={`bg-white p-4 rounded-lg shadow border-t-4 ${className}`}>
+      <dt className="text-sm text-gray-700 font-medium flex items-center gap-1">
+        {icon}
+        {label}
+      </dt>
+      <dd className="text-3xl font-bold text-gray-900">{value}</dd>
+      <dd className="text-xs text-gray-600 mt-1">{hint}</dd>
     </div>
   );
+}
+
+function readCache(): LeaderboardData | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as LeaderboardData) : null;
+  } catch {
+    // A corrupt or unreadable cache is not worth surfacing: the only thing it
+    // can cost is a stale board, and a parse failure is not the agent's problem.
+    return null;
+  }
+}
+
+/**
+ * One round trip, plus the write to the offline cache.
+ *
+ * Kept at module scope and free of any setState so that both callers — the mount
+ * effect and the Refresh button — can share it without either one dragging a
+ * render into the other's stack. It throws rather than returning a result object
+ * so the two failure messages stay where they are worded for their own context.
+ */
+async function fetchBoard(): Promise<LeaderboardData> {
+  const res = await authenticatedFetch('/leaderboard.php');
+
+  if (!res.ok) {
+    throw new Error('Failed to fetch leaderboard');
+  }
+
+  const json = (await res.json()) as LeaderboardData;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(json));
+
+  return json;
 }

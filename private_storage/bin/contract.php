@@ -775,6 +775,120 @@ $t->test('docs/API.md does not still claim a 201 is the success code', function 
     );
 });
 
+/*
+ * The four assertions below exist because each one was actually wrong in this
+ * document at some point, and each was wrong in a way that a reader could not
+ * detect by reading it: the prose was confident and internally consistent, just
+ * not about the code. That is the failure mode prose has and an assertion has
+ * not — so each is now pinned against the source it describes rather than
+ * against a copy of itself.
+ */
+
+$t->test('docs/API.md names the signature headers the code reads', function () use ($t, $repoRoot) {
+    $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
+
+    foreach (['X-Device-UUID', 'X-Request-Timestamp', 'X-Request-Nonce', 'X-Request-Signature'] as $header) {
+        $t->assertContains($header, $doc, $header . ' is documented');
+    }
+
+    /*
+     * The shorter forms are what the documentation used to claim. They are not
+     * merely undocumented extras: an unrecognised header is treated as absent,
+     * so a client written from the old text sends no signature it thinks it
+     * sent, and gets 401 with nothing to explain it.
+     */
+    foreach (['X-Device-Id', 'X-Timestamp:', 'X-Nonce:', 'X-Signature:'] as $stale) {
+        $t->assertTrue(
+            strpos($doc, $stale) === false,
+            'docs/API.md still documents the non-existent header ' . $stale
+        );
+    }
+
+    // And the names must be the ones the request actually authenticates with.
+    $authenticator = (string) file_get_contents($repoRoot . '/private_storage/app/Security/Authenticator.php');
+    foreach (['X-Device-UUID', 'X-Request-Timestamp', 'X-Request-Nonce', 'X-Request-Signature'] as $header) {
+        $t->assertContains($header, $authenticator, $header . ' is the header the code reads');
+    }
+});
+
+$t->test('docs/API.md nests the error field the way the envelope emits it', function () use ($t, $repoRoot) {
+    $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
+
+    /*
+     * Response::error() puts client-safe details under error.details, and
+     * src/api/client.ts reads body.error.details?.field. A document showing
+     * "field" beside "code" teaches an integrator to read a key that is never
+     * there, which surfaces as a form that cannot say which input was wrong.
+     */
+    $t->assertContains('"details"', $doc, 'the envelope documents a details object');
+
+    $t->assertTrue(
+        preg_match('/"field"\s*:/', $doc) === 1
+        && preg_match('/"details"\s*:\s*\{[^}]*"field"\s*:/s', $doc) === 1,
+        'the example nests field inside details'
+    );
+
+    $response = (string) file_get_contents($repoRoot . '/private_storage/app/Http/Response.php');
+    $t->assertContains("\$body['error']['details']", $response, 'the envelope really does nest details');
+});
+
+$t->test('every route docs/API.md lists exists on disk', function () use ($t, $repoRoot) {
+    $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
+    $apiDir = $repoRoot . '/public_html/api/v1';
+
+    /*
+     * A path in the table that is not a file is a 404 for whoever writes the
+     * client, and there is no extensionless rewrite to rescue them: .htaccess
+     * sends anything under api/ straight to the API. So this reads the routes
+     * out of the table and checks each one against the filesystem, which is the
+     * only source that cannot drift silently.
+     */
+    preg_match_all('/^\| (?:GET|POST) \| `([^`]+)`/m', $doc, $matches);
+
+    $checked = 0;
+
+    foreach ($matches[1] as $path) {
+        if (strpos($path, '/api/v1/') !== 0) {
+            continue;
+        }
+
+        $file = $repoRoot . '/public_html' . explode('?', $path)[0];
+
+        $t->assertTrue(
+            is_file($file),
+            'docs/API.md documents ' . $path . ', which is not a file (expected ' . $file . ')'
+        );
+        $checked++;
+    }
+
+    $t->assertTrue($checked >= 9, 'expected the full route table, checked ' . $checked);
+});
+
+$t->test('the review queue routes in the table are the ones the router serves', function () use ($t, $repoRoot) {
+    $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
+
+    /*
+     * The review queue moved into a directory and the docs kept naming the flat
+     * file. That is the worst kind of staleness here: /api/v1/reviews.php was
+     * never a real path, .htaccess sends everything under api/ to the API rather
+     * than the SPA fallback, and the client would get a bare 404 for a screen
+     * the documentation promised was operator-only.
+     */
+    $t->assertContains('/api/v1/reviews/index.php', $doc, 'the queue route is documented');
+    $t->assertTrue(
+        strpos($doc, '/api/v1/reviews.php') === false,
+        'docs/API.md still lists the flat /api/v1/reviews.php, which does not exist'
+    );
+
+    // The path and the route name are two separate claims; both have to hold.
+    $shim = (string) file_get_contents($repoRoot . '/public_html/api/v1/reviews/index.php');
+    $t->assertContains("Kernel::handle('reviews.index')", $shim, 'the shim serves the documented path');
+
+    $kernel = (string) file_get_contents($repoRoot . '/private_storage/app/Http/Kernel.php');
+    $t->assertContains("'reviews.index'", $kernel, 'the kernel registers the route the shim names');
+    $t->assertContains("'reviews.index'    => 'operator'", $kernel, 'and requires an operator');
+});
+
 /* ---------------------------------------------------------------------------
  * Exit
  * --------------------------------------------------------------------------- */

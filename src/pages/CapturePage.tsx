@@ -2,8 +2,7 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { db } from '../db/db';
 import { processImageCapture } from '../camera/compress';
 import { triggerSync } from '../sync/coordinator';
-import { Link } from 'react-router-dom';
-import { Camera, Send, Database, AlertTriangle } from 'lucide-react';
+import { Camera, Send, AlertTriangle } from 'lucide-react';
 import { getDeviceIdentity, sha256Hex } from '../crypto/keys';
 
 export default function CapturePage() {
@@ -147,77 +146,101 @@ export default function CapturePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col relative">
-      <header className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
-        <h1 className="text-xl font-bold">FieldPulse</h1>
-        <Link to="/queue" className="flex items-center gap-2 bg-blue-700 px-3 py-1 rounded">
-          <Database size={18} /> Queue
-        </Link>
-      </header>
+    <section className="flex flex-col">
+      <h1 className="text-xl font-bold text-gray-900 mb-1">Capture</h1>
+      <p className="text-sm text-gray-700 mb-3">
+        Takes a photo on this device first. Nothing is sent until there is a connection, and a
+        count is not verified until the server has checked it.
+      </p>
 
-      <main className="flex-1 flex flex-col p-4 max-w-lg mx-auto w-full">
+      <div aria-live="assertive">
         {errorMsg && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex items-start gap-2">
-            <AlertTriangle className="shrink-0 mt-0.5" size={18} />
+          <div role="alert" className="bg-red-100 border border-red-400 text-red-800 px-4 py-3 rounded mb-4 flex items-start gap-2">
+            <AlertTriangle className="shrink-0 mt-0.5" size={18} aria-hidden="true" />
             <span>{errorMsg}</span>
           </div>
         )}
+      </div>
 
-        {!photoUrl ? (
-          <div className="flex-1 flex flex-col relative rounded overflow-hidden bg-black shadow-lg">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
-              className="w-full h-full object-cover absolute inset-0"
+      {!photoUrl ? (
+        <div className="flex-1 flex flex-col relative rounded overflow-hidden bg-gray-900 shadow-lg min-h-[16rem]">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            aria-label="Live camera preview"
+            className="w-full h-full object-cover absolute inset-0"
+          />
+          <div className="absolute bottom-6 left-0 right-0 flex justify-center">
+            {/*
+              An icon-only control. `aria-label` is what names it for anyone who
+              cannot see the glyph, and it says what the button does rather than
+              what it looks like.
+            */}
+            <button
+              type="button"
+              onClick={capturePhoto}
+              disabled={!stream}
+              aria-label="Take photo"
+              className="bg-white text-blue-700 rounded-full p-4 shadow-xl active:scale-95 transition disabled:opacity-60"
+            >
+              <Camera size={32} aria-hidden="true" />
+            </button>
+          </div>
+          {!stream && (
+            <p className="absolute inset-0 flex items-center justify-center text-center text-white text-sm px-6">
+              The camera is not available. Grant camera access in your browser settings, then
+              reload. Captures can still be queued once it is working.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col gap-4">
+          <div className="rounded overflow-hidden bg-gray-900 shadow-lg">
+            <img src={photoUrl} alt="Photo just captured, awaiting confirmation" className="w-full h-auto" />
+          </div>
+
+          <div className="bg-white p-4 rounded shadow">
+            <label htmlFor="count" className="block text-sm font-medium text-gray-800 mb-1">
+              Count claimed
+            </label>
+            <input
+              id="count"
+              type="number"
+              min="1"
+              inputMode="numeric"
+              value={countClaimed}
+              onChange={(e) => setCountClaimed(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              aria-describedby="count-help"
+              className="w-full border-gray-400 rounded-md shadow-sm p-2 border"
             />
-            <div className="absolute bottom-6 left-0 right-0 flex justify-center">
-              <button 
-                onClick={capturePhoto}
-                className="bg-white text-blue-600 rounded-full p-4 shadow-xl active:scale-95 transition"
-              >
-                <Camera size={32} />
-              </button>
-            </div>
+            <p id="count-help" className="mt-1 text-xs text-gray-700">
+              This is your claim. The server verifies it independently before it counts.
+            </p>
           </div>
-        ) : (
-          <div className="flex-1 flex flex-col gap-4">
-            <div className="rounded overflow-hidden bg-black shadow-lg">
-              <img src={photoUrl} alt="Capture preview" className="w-full h-auto" />
-            </div>
-            
-            <div className="bg-white p-4 rounded shadow">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Count Claimed
-              </label>
-              <input 
-                type="number" 
-                min="1"
-                value={countClaimed}
-                onChange={(e) => setCountClaimed(parseInt(e.target.value) || 1)}
-                className="w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
 
-            <div className="flex gap-4">
-              <button 
-                onClick={() => { setPhotoBlob(null); setPhotoUrl(null); }}
-                className="flex-1 bg-gray-200 text-gray-800 py-3 rounded font-medium active:bg-gray-300"
-              >
-                Retake
-              </button>
-              <button 
-                onClick={saveSubmission}
-                disabled={isSaving}
-                className="flex-1 bg-blue-600 text-white py-3 rounded font-medium active:bg-blue-700 flex justify-center items-center gap-2 disabled:opacity-50"
-              >
-                {isSaving ? 'Saving...' : <><Send size={20} /> Save Offline</>}
-              </button>
-            </div>
+          <div className="flex gap-4">
+            <button
+              type="button"
+              onClick={() => { setPhotoBlob(null); setPhotoUrl(null); }}
+              className="flex-1 bg-gray-200 text-gray-900 py-3 rounded font-medium active:bg-gray-300"
+            >
+              Retake
+            </button>
+            <button
+              type="button"
+              onClick={saveSubmission}
+              disabled={isSaving}
+              className="flex-1 bg-blue-700 text-white py-3 rounded font-medium active:bg-blue-800 flex justify-center items-center gap-2 disabled:opacity-60"
+            >
+              {isSaving
+                ? 'Saving to this device…'
+                : <><Send size={20} aria-hidden="true" /> Save offline</>}
+            </button>
           </div>
-        )}
-      </main>
-    </div>
+        </div>
+      )}
+    </section>
   );
 }

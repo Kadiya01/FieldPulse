@@ -2,15 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- FieldPulse blue, matching the app header, the PWA icons and theme-color
+         below. Regenerate the icons with: php private_storage/bin/brand_assets.php -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- iOS ignores the SVG favicon and falls back to a screenshot unless a PNG
          apple-touch-icon is declared. -->
     <link rel="apple-touch-icon" href="/pwa-192x192.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Must match theme_color in vite.config.ts, or the browser chrome and the
          installed app's chrome disagree. -->
     <meta name="theme-color" content="#2563eb" />
-    <meta name="description" content="Offline-First Biometric Enrollment" />
+
+    <!-- No "biometric" claim here either. A browser can supply a photo, a
+         position and a key it will sign with; it cannot attest to the hardware,
+         and a description that implies otherwise is one an agent could take at
+         face value in a field where the stakes are the count. -->
+    <meta
+      name="description"
+      content="FieldPulse records field counts with a photo and position, queues them offline, and has the server verify each one."
+    />
     <title>FieldPulse</title>
   </head>
   <body>

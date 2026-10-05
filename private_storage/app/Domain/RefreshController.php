@@ -52,6 +52,14 @@ final class RefreshController implements ActionInterface
             // refreshed bootstrap session still has no device, and one that
             // claimed otherwise would silently never reach registration.
             'device_bound'        => $tokens['device_bound'],
+            // Who the session belongs to, including the role.
+            //
+            // The access token is memory-only, so every page load rebuilds the
+            // session through this route. Without the agent here a client that
+            // reloads has no idea who it is: it can authenticate, but it cannot
+            // name the operator, so an operator-only screen is unreachable after
+            // a refresh and would have to guess its way back in.
+            'agent'               => $tokens['agent'],
         ])->withCookie(array_merge(
             [
                 'name'  => $cookieName,
