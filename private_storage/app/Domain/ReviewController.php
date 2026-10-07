@@ -42,9 +42,7 @@ final class ReviewController implements ActionInterface
 
     public function __invoke(Request $request): Response
     {
-        $path = $request->path();
-
-        return str_ends_with($path, '/decide')
+        return $request->endpoint() === 'decide'
             ? $this->decide($request)
             : $this->index($request);
     }

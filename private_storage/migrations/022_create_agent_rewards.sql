@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS agent_rewards (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     period_start_date DATE NOT NULL,
     agent_id BIGINT UNSIGNED NOT NULL,
-    rank INT UNSIGNED NOT NULL,
+    `rank` INT UNSIGNED NOT NULL,
     total_verified_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
 
     tier_id BIGINT UNSIGNED NULL,
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS agent_rewards (
     PRIMARY KEY (id),
     UNIQUE KEY uniq_reward_agent_period (agent_id, period_start_date),
     KEY idx_rewards_period_status (period_start_date, status),
-    KEY idx_rewards_period_rank (period_start_date, rank),
+    KEY idx_rewards_period_rank (period_start_date, `rank`),
     -- Exactly the shape of fk_reward_ranking below: InnoDB wants an index whose
     -- leading columns follow the FK's column order, and uniq_reward_agent_period
     -- is the other way round.

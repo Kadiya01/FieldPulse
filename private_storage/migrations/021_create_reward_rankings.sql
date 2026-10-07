@@ -41,14 +41,14 @@
 
 CREATE TABLE IF NOT EXISTS reward_rankings (
     period_start_date DATE NOT NULL,
-    rank INT UNSIGNED NOT NULL,
+    `rank` INT UNSIGNED NOT NULL,
     agent_id BIGINT UNSIGNED NOT NULL,
     total_verified_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
     total_pending BIGINT UNSIGNED NOT NULL DEFAULT 0,
     total_rejected BIGINT UNSIGNED NOT NULL DEFAULT 0,
     agent_status_at_close ENUM('ACTIVE','INACTIVE','SUSPENDED') NOT NULL DEFAULT 'ACTIVE',
     snapshot_at DATETIME NOT NULL,
-    PRIMARY KEY (period_start_date, rank),
+    PRIMARY KEY (period_start_date, `rank`),
     UNIQUE KEY uniq_ranking_agent (period_start_date, agent_id),
     KEY idx_ranking_agent (agent_id, period_start_date),
     CONSTRAINT fk_ranking_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE

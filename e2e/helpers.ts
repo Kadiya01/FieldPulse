@@ -1,6 +1,6 @@
 import { expect, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
 import { chromium, devices } from '@playwright/test';
-import { readCredentials, REPO_ROOT } from './fixtures';
+import { readCredentials, readOperatorCredentials, REPO_ROOT, type Credentials } from './fixtures';
 import path from 'node:path';
 import { rmSync } from 'node:fs';
 
@@ -102,9 +102,7 @@ export async function firstPage(context: BrowserContext): Promise<Page> {
  * skipped this would never exercise the gate that decides whether the app is
  * usable at all.
  */
-export async function signIn(page: Page): Promise<void> {
-  const creds = readCredentials();
-
+export async function signIn(page: Page, creds: Credentials = readCredentials()): Promise<void> {
   await page.goto('/login');
 
   await expect(page.getByRole('heading', { name: 'FieldPulse sign in' })).toBeVisible();
@@ -133,6 +131,23 @@ export async function signIn(page: Page): Promise<void> {
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading', { name: 'Capture' })).toBeVisible();
+}
+
+/** Sign in as the provisioned SUPERVISOR rather than the agent. */
+export async function signInOperator(page: Page, creds: Credentials = readOperatorCredentials()): Promise<void> {
+  await signIn(page, creds);
+}
+
+/**
+ * Open the Rewards screen from the primary navigation.
+ *
+ * Clicking the nav entry rather than `goto('/rewards')` is deliberate: it proves
+ * the destination is reachable for this role, which is the part of "the agent
+ * can see their rewards" that a direct URL would skip.
+ */
+export async function openRewards(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Rewards' }).click();
+  await expect(page.getByRole('heading', { name: 'Rewards', exact: true })).toBeVisible();
 }
 
 /**
@@ -178,6 +193,41 @@ export async function captureAndSave(page: Page, countClaimed: number): Promise<
    */
   await expect(preview).toBeHidden({ timeout: 30_000 });
   await expect(page.getByRole('button', { name: 'Take photo' })).toBeEnabled({ timeout: 30_000 });
+}
+
+/**
+ * Capture the device-bound access token from the registration response.
+ *
+ * The token is held in memory by the app and never written anywhere a test can
+ * read it, which is the point. Capturing it off the wire lets a test make the
+ * same authenticated call the app would, so an authorization assertion tests
+ * the server's rule rather than the UI's. Attach this before signIn, which is
+ * what drives POST /device/register.php; await the returned promise later.
+ */
+export function captureDeviceToken(page: Page): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('device registration response never carried an access token')),
+      30_000
+    );
+
+    page.on('response', async (response) => {
+      if (!response.url().includes('/device/register.php') || !response.ok()) {
+        return;
+      }
+
+      try {
+        const body = (await response.json()) as { access_token?: string };
+
+        if (body.access_token) {
+          clearTimeout(timer);
+          resolve(body.access_token);
+        }
+      } catch {
+        // Not the response we are waiting for; keep listening.
+      }
+    });
+  });
 }
 
 /** The uuid of the most recently created local submission. */

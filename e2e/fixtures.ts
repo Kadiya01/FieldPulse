@@ -31,12 +31,27 @@ const PHP = process.env.FIELDPULSE_PHP ?? 'php';
 const CREDS_PATH = path.join(REPO_ROOT, '.e2e_creds.json');
 const FAULTS_PATH = path.join(REPO_ROOT, '.e2e_faults.json');
 
+export type CredentialRole = 'AGENT' | 'SUPERVISOR' | 'ADMIN';
+
 export type Credentials = {
   agentCode: string;
   username: string;
   password: string;
   pairingCode: string;
+  role: CredentialRole;
 };
+
+/**
+ * The suite needs two identities, not one.
+ *
+ * Rewards are decided by an operator and seen by the agent who earned them, and
+ * those are different people by construction — the server refuses a decision
+ * from anyone but a SUPERVISOR or ADMIN. A single fixture would have to log in
+ * as both through one profile, which would prove much less: the whole point of
+ * the operator spec is that a separate session, with a separate role, is the one
+ * that moves the entitlement.
+ */
+type CredentialStore = { agent?: Credentials; operator?: Credentials };
 
 /** Locally unique per run, so a crashed run cannot poison the next one. */
 function runId(): string {
@@ -77,12 +92,48 @@ function php(args: string[], input?: string): string {
  * running as the same user.
  */
 export function provisionAgent(): Credentials {
+  const creds = provision('AGENT');
+  writeCreds('agent', creds);
+
+  return creds;
+}
+
+/**
+ * Create the SUPERVISOR who decides rewards.
+ *
+ * Provisioned exactly like an agent, because the deployment has one identity
+ * concept: an operator is an agent row whose role is SUPERVISOR. Everything
+ * else — the password, the device pairing, the session — is the same path an
+ * agent walks, which is what lets the operator spec sign in through the real
+ * login form rather than seeding a role into storage.
+ */
+export function provisionOperator(): Credentials {
+  const creds = provision('SUPERVISOR');
+  writeCreds('operator', creds);
+
+  return creds;
+}
+
+/**
+ * Provision one identity and hand back its credentials without writing them to
+ * the shared file.
+ *
+ * The reward specs each provision their own agent and operator rather than
+ * sharing global setup's. A pairing code is redeemable exactly once and every
+ * fresh browser profile needs its own device, so a single shared identity would
+ * only work for the first launch that used it.
+ */
+export function provisionCredentials(role: CredentialRole): Credentials {
+  return provision(role);
+}
+
+function provision(role: CredentialRole): Credentials {
   const agentCode = 'e2e_' + runId();
   const username = 'e2e_' + runId();
   const password = 'E2e-' + runId() + '-pw';
   const bin = ['bin/provision_agent.php'];
 
-  php([...bin, `--code=${agentCode}`, '--name=E2E Agent', '--role=AGENT']);
+  php([...bin, `--code=${agentCode}`, `--name=E2E ${role}`, `--role=${role}`]);
   php(['bin/set_credentials.php', `--code=${agentCode}`, `--username=${username}`, '--password-stdin'], password);
 
   const pairing = php(['bin/pair_device.php', `--code=${agentCode}`, '--label=e2e']);
@@ -95,18 +146,140 @@ export function provisionAgent(): Credentials {
     throw new Error('could not read the pairing code from pair_device.php output:\n' + pairing);
   }
 
-  const creds: Credentials = { agentCode, username, password, pairingCode: match[1] };
-  writeFileSync(CREDS_PATH, JSON.stringify(creds, null, 2));
+  return { agentCode, username, password, pairingCode: match[1], role };
+}
+
+function writeCreds(slot: 'agent' | 'operator', creds: Credentials): void {
+  let store: CredentialStore = {};
+
+  if (existsSync(CREDS_PATH)) {
+    try {
+      store = JSON.parse(readFileSync(CREDS_PATH, 'utf8')) as CredentialStore;
+    } catch {
+      store = {};
+    }
+  }
+
+  store[slot] = creds;
+  writeFileSync(CREDS_PATH, JSON.stringify(store, null, 2));
+}
+
+function readCreds(slot: 'agent' | 'operator'): Credentials {
+  if (!existsSync(CREDS_PATH)) {
+    throw new Error('No .e2e_creds.json - global setup did not run.');
+  }
+
+  const store = JSON.parse(readFileSync(CREDS_PATH, 'utf8')) as CredentialStore;
+  const creds = store[slot];
+
+  if (!creds) {
+    throw new Error(`No ${slot} credentials in .e2e_creds.json - global setup did not provision one.`);
+  }
 
   return creds;
 }
 
 export function readCredentials(): Credentials {
-  if (!existsSync(CREDS_PATH)) {
-    throw new Error('No .e2e_creds.json - global setup did not run.');
+  return readCreds('agent');
+}
+
+export function readOperatorCredentials(): Credentials {
+  return readCreds('operator');
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reward state for the browser suite                                         */
+/* -------------------------------------------------------------------------- */
+
+export type SeededReward = {
+  id: number;
+  rank: number;
+  status: string;
+  tier_label: string | null;
+  reward_amount: string | null;
+  currency: string | null;
+  total_verified_count: number;
+};
+
+export type SeedResult = {
+  action: 'seed';
+  period: string;
+  agent: string;
+  agent_id: number;
+  closed: boolean;
+  reason: string;
+  frozen: number;
+  published: number;
+  reward: SeededReward | null;
+};
+
+/**
+ * Arrange a closed reward week for an agent.
+ *
+ * Delegates to bin/e2e_state.php, which writes the standing and closes the
+ * period through the real RewardService. The returned `period` is the week that
+ * was arranged and `reward.id` is the entitlement, so a spec asserts against
+ * the exact row the engine published rather than recomputing either.
+ */
+export function seedReward(agentCode: string, options: {
+  weeksAgo?: number;
+  period?: string;
+  verified?: number;
+  amount?: number | string;
+  currency?: string;
+} = {}): SeedResult {
+  const args = ['bin/e2e_state.php', 'seed', `--agent=${agentCode}`];
+
+  if (options.period) {
+    args.push(`--period=${options.period}`);
+  } else {
+    args.push(`--weeks-ago=${options.weeksAgo ?? 2}`);
   }
 
-  return JSON.parse(readFileSync(CREDS_PATH, 'utf8')) as Credentials;
+  if (options.verified !== undefined) {
+    args.push(`--verified=${options.verified}`);
+  }
+
+  // An explicit omission leaves the tier amount NULL; that is a state the UI
+  // has to render as "not set" rather than as zero, so it must be reachable.
+  if (options.amount !== undefined) {
+    args.push(`--amount=${options.amount}`);
+  }
+
+  if (options.currency !== undefined) {
+    args.push(`--currency=${options.currency}`);
+  }
+
+  return parseLastJson(php(args)) as SeedResult;
+}
+
+/**
+ * Rewrite the live summary after the period froze.
+ *
+ * The mutation the cutoff rule exists to neutralise: a late verification, or
+ * bin/reaggregate.php, rewriting a historical week. The published entitlement
+ * must not move when this runs.
+ */
+export function bumpLiveSummary(agentCode: string, period: string, verified: number): void {
+  php(['bin/e2e_state.php', 'bump', `--agent=${agentCode}`, `--period=${period}`, `--verified=${verified}`]);
+}
+
+/**
+ * The last line of a CLI's stdout is its machine-readable result. bootstrapping
+ * and logging noise precede it, and none of it is JSON.
+ */
+function parseLastJson(output: string): unknown {
+  const lines = output.trim().split(/\r?\n/).filter((line) => line.trim() !== '');
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim();
+
+    if (line.startsWith('{') && line.endsWith('}')) {
+      return JSON.parse(line);
+    }
+  }
+
+  throw new Error('no JSON result in CLI output:\n' + output);
 }
 
 /* -------------------------------------------------------------------------- */

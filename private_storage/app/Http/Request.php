@@ -223,6 +223,26 @@ final class Request
         return $this->path;
     }
 
+    /**
+     * The endpoint the shim dispatched to: the final path segment, without any
+     * PHP extension.
+     *
+     * Routing must not test path() for a suffix such as "/decide". The deployed
+     * URI is /api/v1/rewards/decide.php, which ends in ".php", so a suffix test
+     * never matched: every action fell through to the controller's index action,
+     * an operator's POST was answered 405, and an agent's /self was served the
+     * whole period board instead of their own entitlement. path() itself cannot
+     * be normalised — the signature and the nonce replay guard are verified
+     * against it verbatim (Security\Authenticator), so this is a routing-only
+     * view of the same request.
+     */
+    public function endpoint(): string
+    {
+        $leaf = basename($this->path);
+
+        return str_ends_with($leaf, '.php') ? substr($leaf, 0, -4) : $leaf;
+    }
+
     public function isMultipart(): bool
     {
         return str_contains(strtolower($this->contentType()), 'multipart/form-data');

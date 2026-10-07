@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { launchApp, firstPage, signIn, captureAndSave, latestUuid } from './helpers';
+import { launchApp, firstPage, signIn, captureAndSave, latestUuid, captureDeviceToken } from './helpers';
 import { readSubmissions, clearFaults } from './fixtures';
 
 /**
@@ -31,7 +31,13 @@ test.describe('offline capture lifecycle', () => {
      * Sign in while the network is up. Authentication needs the server, and
      * pretending otherwise would mean provisioning a session by hand — which
      * is the kind of shortcut that makes an offline test prove nothing.
+     *
+     * The access token is captured here, off the registration response, because
+     * the final assertion queries the API directly and the token is otherwise
+     * held in memory by the app and never written anywhere a test can read it.
+     * It stays valid for the life of this test (the access TTL is 15 minutes).
      */
+    const token = captureDeviceToken(page);
     await signIn(page);
 
     // --- Cut the network -------------------------------------------------
@@ -135,7 +141,9 @@ test.describe('offline capture lifecycle', () => {
      * this exact identifier. A local SENT proves the client believed the server
      * answered; only this proves the server did.
      */
-    const lookup = await page2.request.get(`/api/v1/submission.php?uuid=${uuid}`);
+    const lookup = await page2.request.get(`/api/v1/submission.php?uuid=${uuid}`, {
+      headers: { Authorization: `Bearer ${await token}` }
+    });
 
     expect(lookup.status(), 'the server knows this submission').toBe(200);
 

@@ -43,12 +43,10 @@ final class RewardController implements ActionInterface
 
     public function __invoke(Request $request): Response
     {
-        $path = $request->path();
-
-        return match (true) {
-            str_ends_with($path, '/decide') => $this->decide($request),
-            str_ends_with($path, '/self')   => $this->self($request),
-            default                         => $this->index($request),
+        return match ($request->endpoint()) {
+            'decide' => $this->decide($request),
+            'self'   => $this->self($request),
+            default  => $this->index($request),
         };
     }
 

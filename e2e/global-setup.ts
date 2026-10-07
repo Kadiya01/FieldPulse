@@ -33,10 +33,12 @@ export default async function globalSetup(): Promise<void> {
    */
   process.env.FIELDPULSE_REPO_ROOT = ROOT;
 
-  console.log('[e2e] provisioning an agent...');
+  console.log('[e2e] provisioning an agent and an operator...');
 
-  const { provisionAgent } = await import('./fixtures');
-  const creds = provisionAgent();
+  const { provisionAgent, provisionOperator } = await import('./fixtures');
+  const agent = provisionAgent();
+  const operator = provisionOperator();
 
-  console.log(`[e2e] agent ${creds.agentCode} ready as ${creds.username}`);
+  console.log(`[e2e] agent ${agent.agentCode} ready as ${agent.username}`);
+  console.log(`[e2e] operator ${operator.agentCode} ready as ${operator.username}`);
 }

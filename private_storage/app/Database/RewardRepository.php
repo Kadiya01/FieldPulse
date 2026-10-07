@@ -99,7 +99,7 @@ final class RewardRepository extends Repository
 
             $written += $this->exec(
                 'INSERT IGNORE INTO reward_rankings (
-                    period_start_date, rank, agent_id,
+                    period_start_date, `rank`, agent_id,
                     total_verified_count, total_pending, total_rejected,
                     agent_status_at_close, snapshot_at
                  ) VALUES ' . implode(', ', $values),
@@ -180,7 +180,7 @@ final class RewardRepository extends Repository
             // duplicate-key branch; see the docblock above.
             $written += $this->exec(
                 'INSERT INTO agent_rewards (
-                    period_start_date, agent_id, rank, total_verified_count,
+                    period_start_date, agent_id, `rank`, total_verified_count,
                     tier_id, tier_label, reward_amount, currency,
                     status, published_at, created_at, updated_at
                  ) VALUES ' . implode(', ', $values) . '
@@ -225,7 +225,7 @@ final class RewardRepository extends Repository
                FROM agent_rewards r
                JOIN agents a ON a.id = r.agent_id
               WHERE r.period_start_date = :period
-              ORDER BY r.rank' . self::limitClause($limit, 100, $offset),
+              ORDER BY r.`rank`' . self::limitClause($limit, 100, $offset),
             ['period' => $periodStartDate]
         );
     }
