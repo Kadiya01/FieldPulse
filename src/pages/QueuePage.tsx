@@ -72,7 +72,8 @@ export default function QueuePage() {
 
       <p className="text-sm text-gray-700 mb-4">
         Local sync state is what this handset has done. Server verification state is what the
-        server has decided, and only the latter can make a count verified.
+        server has decided, and only the latter can make a report verified — which is the
+        only thing that moves your weekly standing.
       </p>
 
       {!online && (

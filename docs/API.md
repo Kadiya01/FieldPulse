@@ -119,6 +119,9 @@ uses a bearer header, which a browser will not attach cross-origin.
 | GET | `/api/v1/leaderboard.php` | bearer |
 | GET | `/api/v1/reviews/index.php` | operator |
 | POST | `/api/v1/reviews/decide.php` | operator |
+| GET | `/api/v1/rewards/self.php` | bearer, own entitlements only |
+| GET | `/api/v1/rewards/index.php` | operator |
+| POST | `/api/v1/rewards/decide.php` | operator |
 
 Every path is the literal file on disk, `.php` suffix included. There is no
 extensionless rewrite in `.htaccess`, so `/api/v1/auth/login` is a 404 and not a
@@ -451,6 +454,78 @@ Every decision is appended to an immutable `review_decisions` row recording who
 acted, when, the note, and the `VERIFICATION_VERSION` in force. Nothing
 overwrites a prior decision, so the audit trail cannot be edited away by the same
 supervisor who made it.
+
+---
+
+### GET /api/v1/rewards/self.php
+
+Bearer, and only ever the caller's own entitlements: the controller queries on
+the caller's `agent_id` and there is no parameter that can widen it. Query:
+`limit` (1–120, default 24).
+
+```json
+{
+  "data": [
+    {
+      "id": 12,
+      "period_start_date": "2026-09-28",
+      "rank": 3,
+      "total_verified_count": 41,
+      "tier": { "id": 2, "label": "Runner-up" },
+      "amount": null,
+      "currency": null,
+      "status": "PENDING",
+      "is_paid": false,
+      "published_at": "2026-10-06 00:00:11",
+      "approved_at": null,
+      "paid_at": null,
+      "voided_at": null,
+      "void_reason": null
+    }
+  ],
+  "meta": { "agent_code": "AG-001", "grace_hours": 24, "payment_note": "…" }
+}
+```
+
+`amount` and `currency` are `null` until the organisation sets a figure for the
+band; `null` means "not yet decided", never zero. `status` is one of `PENDING`,
+`APPROVED`, `PAID`, `VOID` — **publication is not payment**. `PENDING` and
+`APPROVED` are entitlements the server published; only `PAID` means the
+organisation has settled the reward. `is_paid` states that explicitly so no
+client has to infer it.
+
+Every figure was copied onto the entitlement at period close and is served from
+there unchanged. Later changes to live performance summaries do not change an
+already published reward.
+
+### GET /api/v1/rewards/index.php  ·  POST /api/v1/rewards/decide.php
+
+Operator-only (`SUPERVISOR` or `ADMIN`). An `AGENT` role receives `403`.
+
+`GET /api/v1/rewards/index.php` lists one period's published entitlements in
+frozen-rank order. Query: `period` (`YYYY-MM-DD`, default the newest closed
+period), `limit` (1–100, default 25), `offset`. `meta.tiers` carries the current
+schedule and `meta.closed` says whether that period has been frozen yet;
+`meta.available_periods` drives a period selector without hardcoding dates.
+
+`POST /api/v1/rewards/decide.php`:
+
+```json
+{ "reward_id": 12, "action": "APPROVE" }
+{ "reward_id": 12, "action": "VOID", "reason": "duplicate of week 2026-09-21" }
+```
+
+`action` is `APPROVE`, `PAY` or `VOID`. The states move `PENDING` → `APPROVED` →
+`PAID`, with `VOID` reachable from `PENDING` or `APPROVED` and from nowhere else.
+A transition that is not legal from the row's current status is `409
+STATE_CONFLICT`, as is losing a race with another operator. `reason` is mandatory
+for `VOID`.
+
+`approved_by_operator_id`, `paid_by_operator_id` and `voided_by_operator_id`
+record the acting operator. They reference `agents(id)` — this deployment has one
+identity concept, an agent row holding a supervisor or admin role — and they are
+deliberately not named `*_by_agent_id`, which next to `agent_id` (the recipient)
+would read as though the payee had approved their own payment.
 
 ---
 

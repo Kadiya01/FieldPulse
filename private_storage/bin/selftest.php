@@ -1128,5 +1128,99 @@ $t->test('an unrecognised decision is refused, not coerced', function (TestRunne
     );
 });
 
+/* ---------------------------------------------------------------------------
+ * Rewards
+ * ------------------------------------------------------------------------- */
+
+$t->group('reward');
+
+$t->test('the status ENUM in 022 accepts every status the code writes', function (TestRunner $t): void {
+    // Mirrors the review test above: the migration literal and the PHP constants
+    // are two independent statements of the same vocabulary, and a schema change
+    // that adds or removes a state must break this loudly rather than silently
+    // truncating a status under strict mode.
+    $sql = (string) file_get_contents(dirname(__DIR__) . '/migrations/022_create_agent_rewards.sql');
+
+    preg_match('/status ENUM\(([^)]+)\)/', $sql, $m);
+    $t->assertNotSame('', $m[1] ?? '', 'migration 022 declares the status ENUM');
+
+    $declared = array_map(
+        static fn (string $v): string => trim($v, " '\""),
+        explode(',', $m[1] ?? '')
+    );
+
+    $written = [
+        \FieldPulse\Database\RewardRepository::STATUS_PENDING,
+        \FieldPulse\Database\RewardRepository::STATUS_APPROVED,
+        \FieldPulse\Database\RewardRepository::STATUS_PAID,
+        \FieldPulse\Database\RewardRepository::STATUS_VOID,
+    ];
+
+    foreach ($written as $status) {
+        $t->assertTrue(in_array($status, $declared, true), "the status ENUM accepts $status");
+    }
+
+    $t->assertSame(count($declared), count($written), 'the ENUM holds no state the code never writes');
+    $t->assertSame(count($declared), count(array_unique($declared)), 'the ENUM holds no duplicate state');
+});
+
+$t->test('the cutoff rule is stated verbatim in docs/REWARDS.md', function (TestRunner $t): void {
+    /*
+     * The rule is the contract of the feature, and prose is the only place it
+     * can be stated for a human. Asserting it verbatim means someone changing
+     * the behaviour has to delete a sentence they had to read first.
+     */
+    $doc = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/REWARDS.md');
+
+    $t->assertContains(
+        'At period close, only the frozen verified weekly ranking determines reward eligibility '
+            . 'and rank; later changes to live performance summaries do not change an already '
+            . 'published reward entitlement.',
+        $doc,
+        'the cutoff rule appears verbatim'
+    );
+});
+
+$t->test('a reward is bound to a frozen ranking, not to a live summary', function (TestRunner $t): void {
+    $sql = (string) file_get_contents(dirname(__DIR__) . '/migrations/022_create_agent_rewards.sql');
+
+    $t->assertContains(
+        'REFERENCES reward_rankings',
+        $sql,
+        'agent_rewards references the freeze, so an entitlement cannot exist without one'
+    );
+
+    // The read side must serve what was frozen. If either reaches for the live
+    // summary, an entitlement could move after it was published, which is the
+    // one thing the whole design exists to prevent. Comments are stripped
+    // first: the prose in RewardService deliberately names the summary it is
+    // *not* reading.
+    foreach (['/app/Reward/RewardService.php', '/app/Domain/RewardController.php'] as $file) {
+        $code = (string) php_strip_whitespace(dirname(__DIR__) . $file);
+
+        $t->assertFalse(
+            str_contains($code, 'agent_performance_summary'),
+            $file . ' must not read the live performance summary'
+        );
+
+        $t->assertFalse(
+            str_contains($code, 'LeaderboardRepository') && str_contains($code, 'SELECT'),
+            $file . ' must not carry its own ranking query'
+        );
+    }
+});
+
+$t->test('publication does not depend on the rewards screen being opened', function (TestRunner $t): void {
+    $worker = (string) file_get_contents(dirname(__DIR__) . '/workers/process_queue.php');
+
+    $t->assertContains('closeDuePeriods', $worker, 'the cron worker closes due periods');
+    $t->assertContains('rewards.auto_close', $worker, 'and is gated by rewards.auto_close');
+
+    $service = (string) file_get_contents(dirname(__DIR__) . '/app/Reward/RewardService.php');
+
+    $t->assertContains('closeIfDue', $service, 'the read path keeps an idempotent fallback');
+    $t->assertContains('rewards.close_on_read', $service, 'the fallback is configurable too');
+});
+
 // --- Exit -------------------------------------------------------------------
 exit($t->run($verbose));

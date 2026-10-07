@@ -24,7 +24,7 @@ const AGENT: SessionAgent = {
 };
 
 /** Every destination the app routes to, as the nav should list them. */
-const ALL_ROUTES = ['/', '/queue', '/leaderboard', '/reviews'] as const;
+const ALL_ROUTES = ['/', '/queue', '/leaderboard', '/rewards', '/reviews'] as const;
 
 describe('operator roles', () => {
   it.each(OPERATOR_ROLES)('treats %s as an operator', (role) => {
@@ -61,12 +61,14 @@ describe('session-derived navigation', () => {
    * and the DOM test asserts the component agrees with it.
    */
   const routesFor = (agent: SessionAgent | null): string[] => {
-    const base = ['/', '/queue', '/leaderboard'];
+    // Rewards is public because every agent has a standing; only the operator
+    // controls inside the page are role-gated.
+    const base = ['/', '/queue', '/leaderboard', '/rewards'];
     return isOperatorRole(agent?.role) ? [...base, '/reviews'] : base;
   };
 
   it('offers every public destination to an agent', () => {
-    expect(routesFor(AGENT)).toEqual(['/', '/queue', '/leaderboard']);
+    expect(routesFor(AGENT)).toEqual(['/', '/queue', '/leaderboard', '/rewards']);
   });
 
   it('adds reviews for an operator', () => {
@@ -74,7 +76,7 @@ describe('session-derived navigation', () => {
   });
 
   it('leaves an unidentified session with the narrow set', () => {
-    expect(routesFor(null)).toEqual(['/', '/queue', '/leaderboard']);
+    expect(routesFor(null)).toEqual(['/', '/queue', '/leaderboard', '/rewards']);
   });
 
   it('never lists a route the app does not route to', () => {

@@ -191,6 +191,26 @@ return [
     ],
 
     /*
+     * Reward period close.
+     *
+     * A period becomes closable once its UTC window plus the grace window has
+     * passed: the grace is the margin given to stragglers whose last report is
+     * still in the queue when the week ends.
+     *
+     * auto_close is what makes publication independent of anyone visiting the
+     * rewards screen — the cPanel cron worker calls closeDuePeriods() on every
+     * tick, and bin/close_rewards.php does the same thing by hand. close_on_read
+     * keeps a fallback for a deployment whose cron has stopped: both paths run
+     * the same idempotent closePeriod(), so whichever gets there first wins and
+     * the other one finds nothing left to do.
+     */
+    'rewards' => [
+        'close_grace_hours' => (int) Env::get('REWARD_CLOSE_GRACE_HOURS', '24'),
+        'auto_close'        => filter_var(Env::get('REWARD_AUTO_CLOSE', 'true'), FILTER_VALIDATE_BOOL),
+        'close_on_read'     => filter_var(Env::get('REWARD_CLOSE_ON_READ', 'true'), FILTER_VALIDATE_BOOL),
+    ],
+
+    /*
      * Retention windows, used by bin/prune.php. Audit history is the only
      * independent record of who reviewed what, so it is deliberately the longest
      * of the three; the others are operational noise.

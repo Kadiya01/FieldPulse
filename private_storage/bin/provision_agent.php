@@ -3,13 +3,13 @@
 declare(strict_types=1);
 
 /**
- * Enrol an agent.
+ * Provision an agent.
  *
  *   php private_storage/bin/provision_agent.php --code=AG-001 --name="Ada Okafor" --imei=353456789012345
  *   php private_storage/bin/provision_agent.php --code=AG-002 --name="Bo Nwosu" --imei=353456789012346 --role=SUPERVISOR
  *
  * This is the only way an agent comes into existence, and it is deliberately an
- * operator action on a server console rather than an API endpoint: enrolment
+ * operator action on a server console rather than an API endpoint: provisioning
  * creates the identity that every other credential is derived from, so it must
  * never be reachable over HTTP.
  *
@@ -72,7 +72,7 @@ try {
     }
 
     if ($agents->findByCode($code) !== null) {
-        Cli::fail('agent_code "' . $code . '" is already enrolled');
+        Cli::fail('agent_code "' . $code . '" is already provisioned');
         exit(1);
     }
 
@@ -88,7 +88,7 @@ try {
         ['role' => $role, 'id' => $agentId]
     );
 
-    Cli::heading('Enrolled');
+    Cli::heading('Provisioned');
     Cli::ok('agent_id:   ' . $agentId);
     Cli::ok('agent_code: ' . $code);
     Cli::ok('name:       ' . trim($name));

@@ -35,6 +35,9 @@ final class Kernel
         'leaderboard'      => \FieldPulse\Domain\LeaderboardController::class,
         'reviews.index'    => \FieldPulse\Domain\ReviewController::class,
         'reviews.decide'   => \FieldPulse\Domain\ReviewController::class,
+        'rewards.self'     => \FieldPulse\Domain\RewardController::class,
+        'rewards.index'    => \FieldPulse\Domain\RewardController::class,
+        'rewards.decide'   => \FieldPulse\Domain\RewardController::class,
     ];
 
     /**
@@ -75,6 +78,13 @@ final class Kernel
         'leaderboard'      => 'bearer',
         'reviews.index'    => 'operator',
         'reviews.decide'   => 'operator',
+        // An agent sees their own entitlement and nobody else's: bearer is
+        // enough because the controller only ever queries on the caller's own
+        // agent_id. Reading a period's full list, or changing an entitlement's
+        // state, is operator work.
+        'rewards.self'     => 'bearer',
+        'rewards.index'    => 'operator',
+        'rewards.decide'   => 'operator',
     ];
 
     private static bool $booted = false;

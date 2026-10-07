@@ -3,6 +3,16 @@ import { authenticatedFetch } from '../api/client';
 
 const SYNC_LOCK_ID = 'main_sync_lock';
 const LOCK_TTL = 30000; // 30 seconds
+
+/**
+ * How often the lease is pushed forward while work is in flight.
+ *
+ * A third of the TTL, so two consecutive missed beats (a throttled timer in a
+ * background tab, a long GC) still leave the lease valid rather than letting it
+ * lapse mid-upload.
+ */
+const LOCK_RENEW_INTERVAL = LOCK_TTL / 3;
+
 const SYNC_CHANNEL = new BroadcastChannel('fieldpulse_sync_channel');
 
 let isSyncRunning = false;
@@ -68,6 +78,9 @@ async function attemptSync() {
 
   isSyncRunning = true;
   try {
+    // Anything left mid-flight by a previous run belongs back in the queue.
+    await recoverStrandedSubmissions();
+
     // Ping API to check reachability before starting queue
     if (!(await checkApiReachability())) {
       return;
@@ -77,6 +90,62 @@ async function attemptSync() {
     isSyncRunning = false;
     await releaseLock();
   }
+}
+
+/**
+ * Return submissions stranded in SYNCING to the queue.
+ *
+ * WHY THIS IS NEEDED
+ *
+ * processQueue marks a record SYNCING before uploading it, and only ever
+ * selects PENDING or a due RETRY_WAIT. So SYNCING is a terminal state for that
+ * record: if the tab is killed mid-upload — a crash, a force-quit, the browser
+ * reclaiming the process, the phone losing power — the record stays SYNCING
+ * forever. The queue will never pick it up again, the photo is never sent, and
+ * the user sees "Uploading now" indefinitely for a submission that is never
+ * being uploaded. Nothing else in the app clears it.
+ *
+ * WHY RETRYING IS SAFE
+ *
+ * The retry is not a guess at what happened. The server deduplicates on
+ * submission_uuid, so if the original upload did land, the retry comes back 200
+ * ALREADY_RECEIVED and the client treats it as terminal success; if it did not
+ * land, the retry is the first successful send. Either way the outcome is
+ * correct and at worst one redundant request.
+ *
+ * WHY IT RUNS UNDER THE LOCK
+ *
+ * Called only after acquireLock() succeeded, so this tab is the coordinator and
+ * no other tab is mid-queue. Resetting SYNCING records while another tab is
+ * genuinely uploading them would be harmless in outcome — the idempotency key
+ * absorbs it — but holding the lock means it cannot happen at all.
+ *
+ * @returns how many records were recovered
+ */
+export async function recoverStrandedSubmissions(): Promise<number> {
+  const stranded = await db.submissions.where('status').equals('SYNCING').toArray();
+
+  if (stranded.length === 0) {
+    return 0;
+  }
+
+  await db.transaction('rw', db.submissions, async () => {
+    for (const record of stranded) {
+      // Back to PENDING rather than RETRY_WAIT: the attempt may never have
+      // started, and PENDING is due immediately, which is the honest state.
+      await db.submissions.update(record.submission_uuid, {
+        status: 'PENDING',
+        next_retry_at: 0,
+        // Preserved, not cleared: retry_count is the user's only clue about how
+        // many times this has failed, and hiding it would make a photo that
+        // keeps failing look like a fresh one.
+        last_error_code: null,
+        last_error_message: null
+      });
+    }
+  });
+
+  return stranded.length;
 }
 
 async function acquireLock(): Promise<boolean> {
@@ -104,6 +173,29 @@ async function releaseLock() {
       await db.sync_lock.delete(SYNC_LOCK_ID);
     }
   });
+}
+
+/**
+ * Holds the sync lease open for as long as a run is genuinely in flight.
+ *
+ * Returns the stop function so the caller can end it deterministically when the
+ * request settles, rather than relying on the sync flag alone.
+ *
+ * Re-acquiring is safe to do this way: acquireLock() refuses to steal a lease
+ * another tab still holds, so a beat can only ever extend our own lease or do
+ * nothing. It never lets a heartbeat make a second tab steal the lock.
+ */
+function startLockHeartbeat(): () => void {
+  const beat = setInterval(() => {
+    // Once the run is winding down, stop extending the lease. attemptSync()
+    // clears isSyncRunning before it calls releaseLock(); a beat still in
+    // flight past that point could otherwise re-create the very lock release is
+    // about to delete, and the next tab would idle out a full TTL for nothing.
+    if (!isSyncRunning) return;
+    void acquireLock();
+  }, LOCK_RENEW_INTERVAL);
+
+  return () => clearInterval(beat);
 }
 
 async function checkApiReachability(): Promise<boolean> {
@@ -141,9 +233,6 @@ async function processQueue() {
 
     // Mark local state SYNCING
     await db.submissions.update(record.submission_uuid, { status: 'SYNCING' });
-
-    // Renew lock to ensure we don't lose it during a long upload
-    await acquireLock();
 
     try {
       await uploadSubmission(record);
@@ -204,11 +293,26 @@ export async function uploadSubmission(record: Submission): Promise<void> {
 
   let response: Response;
   try {
-    response = await authenticatedFetch('/submit.php', {
-      method: 'POST',
-      body: form,
-      signedBody: payloadJson
-    });
+    // A large photo on a slow link can hold this fetch open for longer than the
+    // lease is valid. Renewing once before the upload (as processQueue does)
+    // does not cover the upload itself, so without a heartbeat the lease lapses
+    // mid-request and a second tab can claim the lock and start a concurrent
+    // sync of the same queue.
+    //
+    // The beat interval is shorter than the TTL, and it does not require the
+    // upload to be making progress: a stalled socket still holds the lease,
+    // because this tab genuinely intends to finish the request.
+    const stopBeat = startLockHeartbeat();
+
+    try {
+      response = await authenticatedFetch('/submit.php', {
+        method: 'POST',
+        body: form,
+        signedBody: payloadJson
+      });
+    } finally {
+      stopBeat();
+    }
   } catch (error: any) {
     // Network failure / Timeout, or an auth failure the client layer already
     // classified. Either way the submission is still retryable.

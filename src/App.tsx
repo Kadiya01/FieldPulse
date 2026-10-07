@@ -5,6 +5,7 @@ import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
+import RewardsPage from './pages/RewardsPage';
 import Layout from './components/Layout';
 import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
 import { SessionContext, useSessionValue } from './auth/sessionContext';
@@ -122,6 +123,13 @@ export default function App() {
           <Route path="/" element={<CapturePage />} />
           <Route path="/queue" element={<QueuePage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
+          {/*
+            Rewards is mounted for every authenticated session. /self is
+            `bearer`, so an agent sees only their own published entitlements, and
+            the operator half of the page is gated by the role the page reads —
+            with the server checking the same thing on every call.
+          */}
+          <Route path="/rewards" element={<RewardsPage />} />
           {/*
             The route is mounted for every authenticated session and the page
             checks the role itself, rather than the route being conditionally

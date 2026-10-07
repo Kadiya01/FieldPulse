@@ -148,10 +148,11 @@ export default function CapturePage() {
   return (
     <section className="flex flex-col">
       <h1 className="text-xl font-bold text-gray-900 mb-1">Capture</h1>
-      <p className="text-sm text-gray-700 mb-3">
-        Takes a photo on this device first. Nothing is sent until there is a connection, and a
-        count is not verified until the server has checked it.
-      </p>
+        <p className="text-sm text-gray-700 mb-3">
+          Takes a photo on this device first. Nothing is sent until there is a connection, and a
+          report is not verified until the server has checked it. Only verified work counts
+          toward your weekly standing.
+        </p>
 
       <div aria-live="assertive">
         {errorMsg && (
@@ -216,7 +217,8 @@ export default function CapturePage() {
               className="w-full border-gray-400 rounded-md shadow-sm p-2 border"
             />
             <p id="count-help" className="mt-1 text-xs text-gray-700">
-              This is your claim. The server verifies it independently before it counts.
+              This is your claim. The server verifies it independently before it counts
+              toward your weekly standing.
             </p>
           </div>
 

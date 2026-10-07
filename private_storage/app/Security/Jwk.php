@@ -35,8 +35,31 @@ final class Jwk
 
     private const COORDINATE_BYTES = 32;
 
-    /** Fields permitted in a submitted public JWK. */
-    private const ALLOWED_MEMBERS = ['kty', 'crv', 'x', 'y', 'kid', 'alg', 'use'];
+    /**
+     * Fields permitted in a submitted public JWK.
+     *
+     * 'ext' and 'key_ops' are here because every real browser sends them:
+     * crypto.subtle.exportKey('jwk', ...) returns
+     * {kty, crv, x, y, ext, key_ops}. Their absence from this list meant a
+     * browser could never register a device at all — the request was rejected
+     * with "Unexpected JWK member: ext". Nothing that builds a JWK by hand ever
+     * emits them, which is how it went unnoticed: the PHP suites construct
+     * their own keys and so were always already compliant.
+     *
+     * They are checked rather than ignored, because 'key_ops' is a claim about
+     * what the key may be used for and a claim worth holding to a standard.
+     */
+    private const ALLOWED_MEMBERS = ['kty', 'crv', 'x', 'y', 'kid', 'alg', 'use', 'ext', 'key_ops'];
+
+    /**
+     * key_ops values a P-256 *public* verification key may advertise.
+     *
+     * 'verify' is the point of the key. The others are what a public key must
+     * never claim: 'sign' would invite the server to trust this handle for
+     * signing, and the decrypt/derive operations belong to a key pair that is
+     * not being submitted.
+     */
+    private const ALLOWED_PUBLIC_KEY_OPS = ['verify'];
 
     private function __construct()
     {
@@ -79,6 +102,30 @@ final class Jwk
 
         if (isset($jwk['alg']) && $jwk['alg'] !== 'ES256') {
             throw new ApiException(422, \FieldPulse\Http\ErrorCode::DEVICE_KEY_INVALID, 'Key algorithm must be ES256.');
+        }
+
+        if (array_key_exists('ext', $jwk) && !is_bool($jwk['ext'])) {
+            throw new ApiException(422, \FieldPulse\Http\ErrorCode::DEVICE_KEY_INVALID, 'JWK "ext" must be a boolean.');
+        }
+
+        if (array_key_exists('key_ops', $jwk)) {
+            if (!is_array($jwk['key_ops'])) {
+                throw new ApiException(
+                    422,
+                    \FieldPulse\Http\ErrorCode::DEVICE_KEY_INVALID,
+                    'JWK "key_ops" must be an array.'
+                );
+            }
+
+            foreach ($jwk['key_ops'] as $op) {
+                if (!is_string($op) || !in_array($op, self::ALLOWED_PUBLIC_KEY_OPS, true)) {
+                    throw new ApiException(
+                        422,
+                        \FieldPulse\Http\ErrorCode::DEVICE_KEY_INVALID,
+                        'A public key may only declare the "' . self::ALLOWED_PUBLIC_KEY_OPS[0] . '" key operation.'
+                    );
+                }
+            }
         }
 
         $x = self::coordinate($jwk['x'] ?? null, 'x');

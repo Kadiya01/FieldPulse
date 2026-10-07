@@ -12,7 +12,7 @@ declare(strict_types=1);
  * With no --password and no --password-stdin, the password is read from the
  * terminal with echo disabled, which is why the command is an interactive CLI
  * rather than an HTTP endpoint. It is an operator action on a server console,
- * for the same reason enrolment is (see provision_agent.php): it sets the
+ * for the same reason provisioning is (see provision_agent.php): it sets the
  * factor everything else is derived from.
  *
  * The plaintext password is never echoed, never logged, and never written

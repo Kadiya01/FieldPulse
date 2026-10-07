@@ -120,14 +120,19 @@ if (function_exists('exif_read_data')) {
  *      or against a documented floor.
  *
  *   2. Are the values that this process is actually enforcing the ones the web
- *      SAPI enforces?  Under CLI, PHP reports max_execution_time=0 because the
- *      CLI SAPI does not implement the directive at all. Reporting that as a
- *      warning on every run was noise that trained operators to ignore the
- *      warnings, which is how the real ones get missed — and it made "PASS with
- *      1 warning" the permanent state of a healthy deployment. Time limits are
- *      therefore verified against the deployed web configuration (.user.ini, and
- *      any php_value block in .htaccess) instead of the CLI runtime, and the CLI
- *      value is reported as informational.
+ *      SAPI enforces?  A directive the current SAPI does not implement has no
+ *      bearing on production, and failing on it is noise. Under CLI, PHP reports
+ *      max_execution_time=0 because the CLI SAPI does not implement the directive
+ *      at all, and upload_max_filesize=2M because CLI has no multipart upload for
+ *      it to cap. Reporting either as a failure on every run was noise that
+ *      trained operators to ignore the output, which is how the real failures get
+ *      missed — and it made "FAIL" the permanent state of a correctly deployed
+ *      install. Directives this SAPI does not enforce are therefore verified
+ *      against the deployed web configuration (.user.ini, and any php_value block
+ *      in .htaccess) instead of the runtime, and the runtime value is reported as
+ *      informational. Directives the current SAPI genuinely enforces — memory_limit
+ *      above all, which the CLI queue worker really does have to live within — stay
+ *      hard failures wherever they run.
  *
  * post_max_size is checked against max_upload_bytes rather than being assumed
  * to follow upload_max_filesize. The two are independent directives; a host
@@ -146,16 +151,44 @@ $ok('configured max_upload_bytes = ' . $configMax);
 /** Multipart envelope: boundaries, the part headers, and any extra form fields. */
 const MULTIPART_ENVELOPE_BYTES = 2 * 1024 * 1024;
 
-/** Documented floors, independent of the contract ceiling. */
+/**
+ * Documented floors, independent of the contract ceiling.
+ *
+ * The fourth element says whether this SAPI enforces the directive at all.
+ *
+ * upload_max_filesize is NOT enforced by the CLI SAPI: there is no HTTP request
+ * and therefore no multipart upload for it to cap, so the number the CLI reports
+ * is php.ini's stock value and has no bearing on what the deployed web tier will
+ * do. PHP ships that stock value at 2M, below the 5 MB contract, so failing on it
+ * made healthcheck exit 1 on every machine whose php.ini had never been hand
+ * edited — an operator following the documented deployment exactly. The number
+ * that governs an upload is the one .user.ini declares, and that is checked
+ * against the contract below. Failing on a value that is not enforced, cannot be
+ * raised by the operator without editing a php.ini the app never uses, and does
+ * not reflect production, is the same noise-by-default the time limits had.
+ *
+ * memory_limit IS enforced here: the queue worker runs under this SAPI and
+ * decodes a photo in-process, so a low ceiling is a real out-of-memory risk and
+ * stays a hard failure.
+ */
 $checks = [
-    ['upload_max_filesize', $configMax, 'PHP rejects the photo before the app sees it'],
-    ['post_max_size', $configMax + MULTIPART_ENVELOPE_BYTES, 'PHP truncates the request and $_POST arrives empty'],
-    ['memory_limit', 128 * 1024 * 1024, 'pHash DCT holds a 32x32 float matrix; 128M is comfortable'],
+    ['upload_max_filesize', $configMax, 'PHP rejects the photo before the app sees it', false],
+    ['post_max_size', $configMax + MULTIPART_ENVELOPE_BYTES, 'PHP truncates the request and $_POST arrives empty', true],
+    ['memory_limit', 128 * 1024 * 1024, 'pHash DCT holds a 32x32 float matrix; 128M is comfortable', true],
 ];
 
-foreach ($checks as [$ini, $required, $why]) {
+foreach ($checks as [$ini, $required, $why, $enforcedHere]) {
     $value = ini_get($ini);
     $bytes = toBytes((string) $value);
+
+    if (PHP_SAPI === 'cli' && !$enforcedHere) {
+        $ok(sprintf(
+            '%-22s = %-10s not enforced by the CLI SAPI; the web limit is the .user.ini value above',
+            $ini,
+            $value
+        ));
+        continue;
+    }
 
     if ($bytes === 0) {
         // 0 means unlimited, which satisfies every minimum.
@@ -406,6 +439,9 @@ try {
     $ok('phash threshold ' . $c->int('phash.hamming_threshold') . ', possible margin ' . $c->int('phash.possible_margin'));
     $ok('weekly cap ' . $c->int('limits.weekly_cap') . ' per agent');
     $ok('verification_version ' . $c->str('verification.version'));
+    $ok('reward close: grace ' . $c->int('rewards.close_grace_hours') . 'h'
+        . ', auto_close=' . ($c->bool('rewards.auto_close') ? 'on' : 'off')
+        . ', close_on_read=' . ($c->bool('rewards.close_on_read') ? 'on' : 'off'));
 } catch (Throwable $e) {
     $fail('configuration invalid: ' . $e->getMessage());
 }
@@ -460,6 +496,18 @@ try {
 
     $nonce = (int) Connection::fetchValue('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', ['request_nonces']);
     $nonce === 1 ? $ok('request_nonces present (replay protection active)') : $fail('request_nonces missing — replay protection unavailable');
+
+    // The three reward tables ship together; two of the three is a half-applied
+    // close and would fail on the FK from agent_rewards to reward_rankings.
+    foreach (['reward_tiers', 'reward_rankings', 'agent_rewards'] as $rewardTable) {
+        $present = (int) Connection::fetchValue(
+            'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+            [$rewardTable]
+        );
+        $present === 1
+            ? $ok($rewardTable . ' present')
+            : $fail($rewardTable . ' missing — run bin/migrate.php');
+    }
 } catch (Throwable $e) {
     $fail('database: ' . $e->getMessage());
 }

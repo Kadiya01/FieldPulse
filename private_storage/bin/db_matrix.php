@@ -6,8 +6,11 @@ declare(strict_types=1);
  * Supported-database matrix.
  *
  *   php private_storage/bin/db_matrix.php
- *   php private_storage/bin/db_matrix.php --engine=mysql:8.0.40:3307
- *   php private_storage/bin/db_matrix.php --quick        # migrate + healthcheck only
+ *   php private_storage/bin/db_matrix.php --engine=mariadb # one cell
+ *   php private_storage/bin/db_matrix.php --quick          # migrate + healthcheck only
+ *
+ *   FIELDPULSE_MARIADB_ENV=private_storage/.env.mariadb    # the MariaDB cell
+ *   FIELDPULSE_MYSQL_ENV=private_storage/.env.mysql        # the MySQL cell
  *
  * WHY THIS EXISTS RATHER THAN A RUNBOOK
  *
@@ -40,36 +43,55 @@ $argv  = Cli::argv();
 $quick = Cli::hasFlag($argv, 'quick');
 
 /**
- * @return list<array{label:string,env:string}>
+ * Every cell this runner knows how to test.
+ *
+ * A cell is named by the environment file it reads, and an engine cell other
+ * than the application's own has no default: `getenv()` returning '' is a cell
+ * the operator has not declared, and an undeclared cell is reported as NOT
+ * CERTIFIED rather than quietly dropped. Quietly dropping it is how a matrix
+ * ends up green while proving nothing about the engine it names.
+ *
+ * The ENGINE column printed in the matrix is not this list's key — it is read
+ * back from `SELECT VERSION()` below, so a file called `.env` that happens to
+ * point at MariaDB cannot be reported as MySQL.
+ *
+ * @return list<array{key:string,name:string,var:string|null,env:string|null}>
  */
 function engines(): array
 {
     global $argv;
 
+    $var = static fn (string $name): string => (string) (getenv($name) ?: '');
+
     $defined = [
-        ['mysql',   dirname(__DIR__) . '/.env'],
-        ['mariadb', null],
+        // The server this checkout is configured against, and therefore the
+        // one every other suite already runs against. It always exists.
+        ['app', 'application configuration', null, dirname(__DIR__) . '/.env'],
+        ['mariadb', 'MariaDB 11.4.13', 'FIELDPULSE_MARIADB_ENV', $var('FIELDPULSE_MARIADB_ENV')],
+        ['mysql', 'MySQL 8.0.40', 'FIELDPULSE_MYSQL_ENV', $var('FIELDPULSE_MYSQL_ENV')],
     ];
 
-    /*
-     * The MariaDB cell reads its own environment file. There is no default
-     * because a default would be a guess: the whole point of this runner is
-     * that each engine is named explicitly, so a missing file is an error the
-     * operator sees rather than a silently skipped cell that reads as PASS.
-     */
-    $mariadbEnv = (string) (getenv('FIELDPULSE_MARIADB_ENV') ?: '');
+    $filter = Cli::option($argv, 'engine');
+    $cells  = [];
 
-    $defined[1][1] = $mariadbEnv !== '' ? $mariadbEnv : null;
-
-    $cells = [];
-
-    foreach ($defined as [$label, $env]) {
-        if (Cli::option($argv, 'engine') !== null && !str_contains(Cli::option($argv, 'engine') ?? '', $label)) {
+    foreach ($defined as [$key, $name, $varName, $env]) {
+        if ($filter !== null && !str_contains($filter, $key)) {
             continue;
         }
 
-        if ($env === null) {
-            Cli::warn('skipping ' . $label . ': set FIELDPULSE_MARIADB_ENV to its environment file');
+        if ($varName !== null && $env === '') {
+            /*
+             * Asking for a cell by name and getting nothing back is an error,
+             * not a skip: `--engine=mysql` with no server is an attempt to
+             * certify something that cannot be certified here.
+             */
+            if ($filter !== null) {
+                Cli::err($name . ' is not configured: set ' . $varName);
+
+                exit(1);
+            }
+
+            $cells[] = ['key' => $key, 'name' => $name, 'var' => $varName, 'env' => null];
 
             continue;
         }
@@ -80,7 +102,7 @@ function engines(): array
             exit(1);
         }
 
-        $cells[] = ['label' => $label, 'env' => $env];
+        $cells[] = ['key' => $key, 'name' => $name, 'var' => $varName, 'env' => $env];
     }
 
     if ($cells === []) {
@@ -90,6 +112,26 @@ function engines(): array
     }
 
     return $cells;
+}
+
+/**
+ * Turn a server version string into the engine family it actually is.
+ *
+ * `SELECT VERSION()` returns `11.4.13-MariaDB` on MariaDB and `8.0.40` on
+ * MySQL; anything unrecognisable is reported verbatim rather than guessed at,
+ * because a wrong guess here is the whole reason this function exists.
+ */
+function engineFamily(string $version): string
+{
+    if (stripos($version, 'mariadb') !== false) {
+        return 'MariaDB';
+    }
+
+    if (preg_match('/^\d+\.\d+\.\d+/', $version) === 1) {
+        return 'MySQL';
+    }
+
+    return $version;
 }
 
 /**
@@ -131,17 +173,42 @@ $results = [];
 $failed  = false;
 
 foreach (engines() as $engine) {
-    $label = $engine['label'];
-    $env   = $engine['env'];
+    $key  = $engine['key'];
+    $env  = $engine['env'];
+    $name = $engine['name'];
 
-    Cli::heading('Engine: ' . $label);
+    Cli::heading('Engine: ' . $name);
+
+    if ($env === null) {
+        /*
+         * Nothing was run against this cell, so it is reported as NOT
+         * CERTIFIED rather than dropped from the table. Dropping it is what
+         * lets a matrix advertise two engines while only ever testing one.
+         */
+        Cli::warn('NOT CERTIFIED — ' . $engine['var'] . ' is not set');
+
+        $results[$key] = [
+            'name'      => $name,
+            'var'       => $engine['var'],
+            'server'    => null,
+            'family'    => null,
+            'steps'     => [],
+            'floor'     => true,
+            'certified' => false,
+        ];
+
+        continue;
+    }
 
     $version = runSuite($bin . '/healthcheck.php', [], $env);
 
     preg_match('/connected:\s*([^\s]+)/', $version['out'], $m);
 
     $reported = $m[1] ?? 'unknown';
-    Cli::out('  server reports ' . $reported);
+    $family   = engineFamily($reported);
+
+    // The family is read back from the server, never taken from the cell name.
+    Cli::out('  server reports ' . $reported . ' (' . $family . ')');
 
     $steps = [
         'migrations'  => [$bin . '/migrate.php', []],
@@ -162,21 +229,29 @@ foreach (engines() as $engine) {
         $steps['contract']      = [$bin . '/contract.php', []];
     }
 
-    $cell = ['server' => $reported, 'steps' => []];
+    $cell = [
+        'name'      => $name,
+        'var'       => $engine['var'],
+        'server'    => $reported,
+        'family'    => $family,
+        'steps'     => [],
+        'floor'     => true,
+        'certified' => true,
+    ];
 
-    foreach ($steps as $name => [$script, $args]) {
+    foreach ($steps as $step => [$script, $args]) {
         $res = runSuite($script, $args, $env);
         $ok  = $res['code'] === 0;
 
-        $cell['steps'][$name] = $ok;
+        $cell['steps'][$step] = $ok;
 
         if ($ok) {
-            Cli::ok($name);
+            Cli::ok($step);
             continue;
         }
 
         $failed = true;
-        Cli::fail($name . ' (exit ' . $res['code'] . ')');
+        Cli::fail($step . ' (exit ' . $res['code'] . ')');
 
         // Only echo the tail: the suites are verbose and the failing part is
         // always at the end.
@@ -199,24 +274,61 @@ foreach (engines() as $engine) {
         Cli::fail('engine is below the documented baseline');
     }
 
-    $results[$label] = $cell;
+    $results[$key] = $cell;
 }
 
 Cli::heading('Matrix');
 
-$width = max(array_map('strlen', array_keys($results))) + 2;
+$width = max(array_map(static fn (array $r): int => strlen($r['name']), $results)) + 2;
 
-printf("  %-{$width}s %-12s %s\n", 'ENGINE', 'SERVER', 'RESULT');
+printf("  %-{$width}s %-16s %s\n", 'CELL', 'SERVER', 'RESULT');
 
-foreach ($results as $label => $cell) {
+foreach ($results as $cell) {
+    if (!$cell['certified']) {
+        printf("  %-{$width}s %-16s %s\n", $cell['name'], '-', 'NOT CERTIFIED (' . $cell['var'] . ' not set)');
+
+        continue;
+    }
+
     $names = array_keys($cell['steps']);
     $bad   = array_keys(array_filter($cell['steps'], static fn (bool $ok): bool => !$ok));
 
-    $line = $bad === [] && ($cell['floor'] ?? true)
+    $line = $bad === [] && $cell['floor']
         ? 'PASS (' . implode(', ', $names) . ')'
         : 'FAIL (' . implode(', ', $bad === [] ? ['below baseline'] : $bad) . ')';
 
-    printf("  %-{$width}s %-12s %s\n", $label, $cell['server'], $line);
+    printf("  %-{$width}s %-16s %s\n", $cell['name'], $cell['server'], $line);
+}
+
+Cli::heading('Certification');
+
+$passing = [];
+$missing = [];
+
+foreach ($results as $cell) {
+    if (!$cell['certified']) {
+        $missing[$cell['name']] = $cell['var'];
+
+        continue;
+    }
+
+    $bad = array_keys(array_filter($cell['steps'], static fn (bool $ok): bool => !$ok));
+
+    if ($bad !== [] || !$cell['floor']) {
+        continue;
+    }
+
+    $version = preg_replace('/-(mariadb|mysql)$/i', '', $cell['server']);
+
+    $passing[$cell['family'] . ' ' . $version][] = $cell['name'];
+}
+
+foreach ($passing as $label => $cells) {
+    printf("  %-22s PASS (%s)\n", $label, implode(', ', $cells));
+}
+
+if ($passing === []) {
+    Cli::out('  no engine was certified');
 }
 
 Cli::heading('Verdict');
@@ -227,6 +339,18 @@ if ($failed) {
     exit(1);
 }
 
-Cli::out('  PASS — ' . count($results) . ' engine(s), migrations applied and suites green');
+if ($passing === []) {
+    Cli::err('no engine was certified, so nothing was proven');
+
+    exit(1);
+}
+
+$line = '  PASS — ' . count($passing) . ' engine(s) certified: ' . implode(', ', array_keys($passing));
+
+if ($missing !== []) {
+    $line .= PHP_EOL . '  cells not run, and therefore NOT CERTIFIED: ' . implode(', ', array_keys($missing));
+}
+
+Cli::out($line);
 
 exit(0);

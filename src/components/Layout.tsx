@@ -68,8 +68,10 @@ export default function Layout() {
 
       <footer className="max-w-3xl mx-auto px-4 pb-6 pt-2">
         <p className="text-xs text-gray-600">
-          Upload status is not verification. A count is only verified once the server has
-          checked it — see the server state on each queued submission.
+          Upload status is not verification. A report is only verified once the server has
+          checked it — see the server state on each queued submission. Only verified work
+          counts toward weekly standing, and a reward is decided from the standing frozen
+          when the period closed — never from this screen.
         </p>
       </footer>
     </div>

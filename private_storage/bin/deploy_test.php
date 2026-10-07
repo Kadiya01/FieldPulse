@@ -196,6 +196,50 @@ function runPhp(string $script, string $cwd, array $args = [], array $env = []):
     return ['code' => proc_close($process), 'out' => $out];
 }
 
+/**
+ * Run a PHP script with ini overrides applied.
+ *
+ * Separate from runPhp because the overrides have to precede the script on the
+ * command line — PHP stops parsing -d once it reaches the script name, so an
+ * override passed as a plain argument is handed to the script instead of being
+ * applied. That ordering is the whole reason this exists: it is the only way to
+ * put the process into a known configuration and then observe what the code does
+ * with it.
+ *
+ * @param  list<string> $iniArgs e.g. ['-d', 'upload_max_filesize=2M']
+ * @param  list<string> $args
+ * @param  array<string,string> $env
+ * @return array{code:int,out:string}
+ */
+function runPhpWithIni(string $script, string $cwd, array $iniArgs, array $args = [], array $env = []): array
+{
+    $command = [PHP_BINARY, '-d', 'error_reporting=E_ALL', '-d', 'display_errors=1'];
+
+    foreach ($iniArgs as $arg) {
+        $command[] = $arg;
+    }
+
+    $command[] = $script;
+
+    foreach ($args as $arg) {
+        $command[] = $arg;
+    }
+
+    $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $process     = proc_open($command, $descriptors, $pipes, $cwd, $env === [] ? null : ($env + getenv()));
+
+    if (!is_resource($process)) {
+        return ['code' => -1, 'out' => 'could not start ' . $script];
+    }
+
+    $out = (string) stream_get_contents($pipes[1]) . (string) stream_get_contents($pipes[2]);
+
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return ['code' => proc_close($process), 'out' => $out];
+}
+
 $t = new TestRunner(Cli::option($argv, 'filter'));
 
 /* ===========================================================================
@@ -745,6 +789,104 @@ $t->test('the healthcheck parses these same limits', function (TestRunner $t): v
     );
 });
 
+/*
+ * Regression: PHP's CLI SAPI ships upload_max_filesize=2M and does not enforce
+ * the directive at all (there is no multipart upload for it to cap). The
+ * healthcheck used to fail on that stock value, so it exited 1 on any machine
+ * whose php.ini had never been hand edited — including one that deployed
+ * exactly as documented, with a correct .user.ini. An operator who could not
+ * make healthcheck pass without editing a php.ini the application never reads
+ * would eventually stop running it, and then it would stop catching anything.
+ *
+ * The control case below is what keeps this from being a fix that simply turns
+ * the check off.
+ */
+$t->test('the CLI upload_max_filesize default does not fail a correct deployment', function (TestRunner $t): void {
+    $res = runPhpWithIni(
+        dirname(__DIR__) . '/bin/healthcheck.php',
+        dirname(__DIR__),
+        ['-d', 'upload_max_filesize=2M']
+    );
+
+    $t->assertSame(0, $res['code'], "healthcheck failed on the stock CLI upload_max_filesize:\n" . $res['out']);
+    $t->assertMatches('/\bPASS\b/', $res['out'], 'healthcheck must pass');
+    $t->assertFalse(
+        str_contains($res['out'], 'warning(s)'),
+        'healthcheck reported a warning: ' . $res['out']
+    );
+
+    // The directive must be reported as informational, not silently dropped.
+    $t->assertMatches(
+        '/upload_max_filesize\s+=\s+2M\s+not enforced by the CLI SAPI/',
+        $res['out'],
+        'the unenforced CLI value must be shown and explained, not hidden'
+    );
+
+    // And the authoritative value must still be the deployed one.
+    $t->assertMatches(
+        '/\.user\.ini upload_max_filesize = \d+M\s+\(>= \d+ bytes required\)/',
+        $res['out'],
+        'the .user.ini upload limit must still be checked against the contract'
+    );
+});
+
+$t->test('an undersized .user.ini upload limit is still a hard failure', function (TestRunner $t) use ($userIniPath): void {
+    /*
+     * The control for the test above. The CLI value is ignored because the CLI
+     * does not enforce it; the .user.ini value is what governs a real upload, so
+     * a docroot that declares too little must fail loudly.
+     *
+     * This briefly swaps the shipped .user.ini for an undersized one. That is the
+     * only way to reach the gate: Paths::webConfigFiles() keys the file by
+     * basename across every document root, and public_html is always a candidate,
+     * so a scratch docroot cannot override it without a production change to the
+     * path resolution this suite is meant to be testing. The original bytes are
+     * restored in the finally block, and the restoration is itself asserted.
+     */
+    $original = file_get_contents($userIniPath);
+
+    if ($original === false) {
+        $t->assertTrue(false, 'could not read the shipped .user.ini');
+
+        return;
+    }
+
+    $undersized = "upload_max_filesize = 2M\npost_max_size = 8M\nmemory_limit = 256M\n"
+        . "max_execution_time = 60\nmax_input_time = 60\n";
+
+    try {
+        file_put_contents($userIniPath, $undersized);
+
+        // The CLI value is deliberately correct: with it correct and .user.ini
+        // wrong, only the .user.ini gate can produce the failure.
+        $res = runPhpWithIni(
+            dirname(__DIR__) . '/bin/healthcheck.php',
+            dirname(__DIR__),
+            ['-d', 'upload_max_filesize=6M']
+        );
+
+        $t->assertMatches(
+            '/\.user\.ini upload_max_filesize\s+=\s+2M\s+too small/',
+            $res['out'],
+            'an undersized .user.ini upload_max_filesize must fail the healthcheck: ' . $res['out']
+        );
+
+        $t->assertSame(
+            1,
+            $res['code'],
+            'an undersized .user.ini must make the healthcheck exit non-zero: ' . $res['out']
+        );
+    } finally {
+        file_put_contents($userIniPath, $original);
+    }
+
+    $t->assertSame(
+        $original,
+        file_get_contents($userIniPath),
+        'the shipped .user.ini must be byte-identical after this test'
+    );
+});
+
 /* ===========================================================================
  * G. Over the wire, against a real server.
  * =========================================================================== */
@@ -1230,6 +1372,52 @@ $t->test('the app never describes itself as using biometrics', function (TestRun
     }
 });
 
+$t->test('the product describes itself as an agent reward platform', function (TestRunner $t) use ($privateRoot): void {
+    $root = dirname($privateRoot);
+
+    $sources = [
+        'index.html'     => stripComments(
+            (string) file_get_contents($root . '/index.html'),
+            ['<!--' => '-->']
+        ),
+        'vite.config.ts' => stripComments(
+            (string) file_get_contents($root . '/vite.config.ts'),
+            ['/*' => '*/', '//' => "\n"]
+        ),
+        'README.md'      => (string) file_get_contents($root . '/README.md'),
+    ];
+
+    /*
+     * The test above only forbids what FieldPulse is not. This one requires what
+     * it is: agents report weekly activity, the server verifies it, and rewards
+     * are decided from the weekly standing that a period close froze. Without it
+     * the copy could drift back to describing an offline field-count tool and
+     * every other gate here would stay green while the product was misdescribed.
+     */
+    foreach ($sources as $file => $visible) {
+        $lower = strtolower($visible);
+
+        $t->assertTrue(str_contains($lower, 'reward'), $file . ' never mentions rewards');
+        $t->assertTrue(str_contains($lower, 'standing'), $file . ' never mentions weekly standing');
+    }
+
+    // The two claims the product must disown in writing, not just omit.
+    $readme = strtolower($sources['README.md']);
+
+    $t->assertTrue(
+        str_contains($readme, 'responsive web application'),
+        'README does not state that FieldPulse is a responsive web application'
+    );
+    $t->assertTrue(
+        str_contains($readme, 'does not pay'),
+        'README does not disown moving money on the organisation’s behalf'
+    );
+    $t->assertTrue(
+        str_contains($readme, 'does not perform enrollment'),
+        'README does not disown performing enrollment'
+    );
+});
+
 $t->test('the manifest and the browser chrome agree on the brand colour', function (TestRunner $t) use ($privateRoot): void {
     $root = dirname($privateRoot);
     $html = (string) file_get_contents($root . '/index.html');
@@ -1239,7 +1427,6 @@ $t->test('the manifest and the browser chrome agree on the brand colour', functi
     $t->assertContains("theme_color: '#2563eb'", $vite, 'manifest theme_color drifted');
     $t->assertContains("background_color: '#f3f4f6'", $vite, 'manifest background drifted');
 });
-
 $t->test('every brand asset is the FieldPulse mark, not the starter template', function (TestRunner $t) use ($privateRoot): void {
     $publicDir = dirname($privateRoot) . '/public';
     $svg = (string) file_get_contents($publicDir . '/favicon.svg');

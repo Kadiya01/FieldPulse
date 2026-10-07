@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { parseSubmitAccepted, buildSubmitForm, uploadSubmission } from './coordinator';
+import {
+  parseSubmitAccepted,
+  buildSubmitForm,
+  uploadSubmission,
+  recoverStrandedSubmissions
+} from './coordinator';
 import type { Submission } from '../db/db';
 
 /**
@@ -31,8 +36,18 @@ vi.mock('../db/db', async () => {
     ...actual,
     db: {
       submissions: {
-        update: vi.fn()
+        update: vi.fn(),
+        // recoverStrandedSubmissions() selects stranded rows through
+        // where().equals().toArray(), and writes them back inside a
+        // transaction. Both are configured per-test below.
+        where: vi.fn()
       },
+      sync_lock: {
+        get: vi.fn(),
+        put: vi.fn(),
+        delete: vi.fn()
+      },
+      transaction: vi.fn(),
       // authenticatedFetch reads the device identity before it will sign
       // anything, so the table has to answer. The key itself is not used:
       // the crypto primitives are mocked below, and the signature scheme is
@@ -255,8 +270,11 @@ describe('uploadSubmission response handling', () => {
       })
     );
 
-  const lastUpdate = () =>
-    vi.mocked(db.submissions.update).mock.calls.at(-1)![1] as Record<string, unknown>;
+  /**
+ * The patch written to the submissions table by the most recent update().
+ */
+const lastUpdate = () =>
+  vi.mocked(db.submissions.update).mock.calls.at(-1)![1] as Record<string, unknown>;
 
   it('marks a 202 SENT and prunes the photo', async () => {
     respondWith(202, QUEUED_202);
@@ -317,5 +335,108 @@ describe('uploadSubmission response handling', () => {
     await uploadSubmission(makeSubmission({ photo_blob: undefined }));
 
     expect(lastUpdate().status).toBe('FAILED_PERMANENT');
+  });
+});
+
+
+const recoveredPatch = () =>
+  vi.mocked(db.submissions.update).mock.calls.at(-1)![1] as Partial<Submission>;
+
+/**
+ * A submission stranded in SYNCING, as a killed tab leaves it.
+ */
+function stranded(overrides: Partial<Submission> = {}): Submission {
+  return makeSubmission({
+    status: 'SYNCING',
+    last_attempt_at: 1_757_000_100_000,
+    last_error_message: null,
+    ...overrides
+  });
+}
+
+/**
+ * Point the mocked submissions table at a fixed set of rows.
+ */
+function withSubmissions(rows: Submission[]) {
+  vi.mocked(db.submissions.where).mockReturnValue({
+    equals: () => ({
+      toArray: async () => rows
+    })
+  } as never);
+
+  // Run the callback the way Dexie would, so the writes really happen.
+  vi.mocked(db.transaction).mockImplementation((_mode: string, _table: unknown, fn: () => unknown) =>
+    Promise.resolve(fn())
+  );
+}
+
+describe('recovery of submissions stranded mid-upload', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withSubmissions([]);
+  });
+
+  /**
+   * The defect this guards against is silent and permanent: SYNCING is written
+   * before an upload and never selected again, so a tab that dies mid-request
+   * leaves the only copy of that photo in a state the queue will never pick up.
+   * The user sees "Uploading now" forever and the evidence is never sent.
+   *
+   * Asserting the stuck record itself is what pins the behaviour; asserting the
+   * function's return value alone would pass even if it rewrote the wrong rows.
+   */
+  it('returns a SYNCING submission to PENDING so the queue can pick it up', async () => {
+    withSubmissions([stranded()]);
+
+    const recovered = await recoverStrandedSubmissions();
+
+expect(recovered).toBe(1);
+
+    // The row that was rewritten, identified by its key...
+    expect(vi.mocked(db.submissions.update).mock.calls[0][0]).toBe(
+      '9f1c0a2b-3d4e-4f50-8a6b-7c8d9e0f1a2b'
+    );
+    // ...and the state it was put into.
+    expect(recoveredPatch()).toEqual(
+      expect.objectContaining({
+        status: 'PENDING',
+        next_retry_at: 0
+      })
+    );
+  });
+
+  it('does not touch submissions that are not stranded', async () => {
+    withSubmissions([]);
+
+    expect(await recoverStrandedSubmissions()).toBe(0);
+    // A recovery pass must be inert on a healthy queue, or it would reset work
+    // that is legitimately waiting on a backoff timer.
+    expect(db.submissions.update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * retry_count is how many times this photo has already failed. Resetting it
+   * would reset the user's only evidence that something is wrong with it.
+   */
+  it('preserves retry_count and clears the stale error', async () => {
+    withSubmissions([stranded({ retry_count: 3 })]);
+
+    await recoverStrandedSubmissions();
+
+    const patch = recoveredPatch();
+
+    expect(patch).not.toHaveProperty('retry_count');
+    expect(patch.last_error_code).toBeNull();
+    expect(patch.last_error_message).toBeNull();
+  });
+
+  it('recovers every stranded submission, not just the first', async () => {
+    withSubmissions([
+      stranded({ submission_uuid: 'a0000000-0000-4000-8000-000000000001' }),
+      stranded({ submission_uuid: 'a0000000-0000-4000-8000-000000000002' })
+    ]);
+
+    expect(await recoverStrandedSubmissions()).toBe(2);
+    expect(db.submissions.update).toHaveBeenCalledTimes(2);
   });
 });

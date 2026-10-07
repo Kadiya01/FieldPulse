@@ -16,13 +16,22 @@ declare(strict_types=1);
  *   --max-jobs=N     stop after N jobs (useful for a manual run)
  *   --prune          only run TTL housekeeping, then exit
  *   --stats          print queue depth and exit
+ *
+ * Every tick also publishes any reward period that has passed its window plus
+ * the configured grace (rewards.auto_close). Publication must not depend on
+ * somebody opening the rewards screen, and this is the process that is already
+ * running every minute on the host, so it is where the close belongs. The close
+ * is idempotent, so the cost on an ordinary tick is one indexed query that
+ * finds nothing.
  */
 
 require_once dirname(__DIR__) . '/app/bootstrap.php';
 
+use FieldPulse\Config\Config;
 use FieldPulse\Console\Cli;
 use FieldPulse\Console\QueueWorker;
 use FieldPulse\Database\JobRepository;
+use FieldPulse\Reward\RewardService;
 
 Cli::init(__FILE__);
 
@@ -54,6 +63,17 @@ try {
     }
 
     $summary = $worker->run($maxJobs === null ? null : max(1, (int) $maxJobs));
+
+    if (Config::instance()->bool('rewards.auto_close', true)) {
+        $closed = (new RewardService())->closeDuePeriods();
+
+        if ($closed !== []) {
+            Cli::heading('Rewards');
+            foreach ($closed as $period) {
+                Cli::out('  closed ' . $period . ' and published its entitlements');
+            }
+        }
+    }
 
     Cli::heading('Worker ' . $summary['worker']);
     Cli::out('  claimed:   ' . $summary['claimed']);

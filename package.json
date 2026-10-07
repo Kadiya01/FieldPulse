@@ -9,6 +9,9 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:chromium": "playwright test --project=chromium",
+    "test:e2e:edge": "playwright test --project=edge",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -22,6 +25,7 @@
     "vite-plugin-pwa": "^1.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

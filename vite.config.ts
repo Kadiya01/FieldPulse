@@ -34,11 +34,12 @@ export default defineConfig({
       manifest: {
         name: 'FieldPulse',
         short_name: 'FieldPulse',
-        // Not "biometric": nothing in this app reads a fingerprint or a face, and
-        // a browser cannot attest to hardware. What it does is record a claimed
-        // count with a photo and position, then let a server verify it — so that
-        // is what the launcher says.
-        description: 'Record field counts offline; the server verifies them.',
+        // Not an attestation claim: nothing in this app reads a fingerprint or a
+        // face, and a browser cannot attest to hardware. What it does is take a
+        // report of weekly activity, let a server verify it, and freeze the
+        // weekly standing that rewards are decided from — so that is what the
+        // launcher says.
+        description: 'Report weekly activity; the server verifies it and freezes the standing rewards come from.',
         theme_color: '#2563eb', // blue-600: the header, the nav and the icons
         background_color: '#f3f4f6', // gray-100: the page background behind the cards
         display: 'standalone',

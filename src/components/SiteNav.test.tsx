@@ -45,6 +45,7 @@ function renderNav(isOperator: boolean, initialPath = '/') {
           <Route path="/" element={<p>Capture screen</p>} />
           <Route path="/queue" element={<p>Queue screen</p>} />
           <Route path="/leaderboard" element={<p>Leaderboard screen</p>} />
+          <Route path="/rewards" element={<p>Rewards screen</p>} />
           <Route path="/reviews" element={<p>Reviews screen</p>} />
         </Route>
       </Routes>
@@ -64,6 +65,7 @@ describe('primary navigation', () => {
   it.each([
     ['Queue', /queue/i, 'Queue screen'],
     ['Leaderboard', /leaderboard/i, 'Leaderboard screen'],
+    ['Rewards', /rewards/i, 'Rewards screen'],
     ['Reviews', /reviews/i, 'Reviews screen']
   ])('navigates to %s', async (_name, linkName, expected) => {
     renderNav(true);

@@ -416,6 +416,7 @@ $t->test('every table the code writes to exists', function (TestRunner $t): void
         'submission_verifications', 'processing_jobs', 'agent_performance_summary',
         'audit_logs', 'request_nonces', 'agent_sites',
         'login_attempts', 'pairing_codes',
+        'reward_tiers', 'reward_rankings', 'agent_rewards',
     ];
 
     foreach ($tables as $table) {

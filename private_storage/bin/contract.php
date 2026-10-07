@@ -861,7 +861,7 @@ $t->test('every route docs/API.md lists exists on disk', function () use ($t, $r
         $checked++;
     }
 
-    $t->assertTrue($checked >= 9, 'expected the full route table, checked ' . $checked);
+    $t->assertTrue($checked >= 12, 'expected the full route table, checked ' . $checked);
 });
 
 $t->test('the review queue routes in the table are the ones the router serves', function () use ($t, $repoRoot) {
@@ -887,6 +887,51 @@ $t->test('the review queue routes in the table are the ones the router serves', 
     $kernel = (string) file_get_contents($repoRoot . '/private_storage/app/Http/Kernel.php');
     $t->assertContains("'reviews.index'", $kernel, 'the kernel registers the route the shim names');
     $t->assertContains("'reviews.index'    => 'operator'", $kernel, 'and requires an operator');
+});
+
+$t->test('the reward routes are documented, shimmed, and gated as claimed', function () use ($t, $repoRoot) {
+    $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
+
+    foreach (['self', 'index', 'decide'] as $leaf) {
+        $t->assertContains(
+            '/api/v1/rewards/' . $leaf . '.php',
+            $doc,
+            'the rewards/' . $leaf . ' route is documented'
+        );
+
+        $shim = (string) file_get_contents($repoRoot . '/public_html/api/v1/rewards/' . $leaf . '.php');
+        $t->assertContains(
+            "Kernel::handle('rewards." . $leaf . "')",
+            $shim,
+            'the rewards/' . $leaf . ' shim serves the documented path'
+        );
+    }
+
+    /*
+     * The auth split is the security claim of this feature, so it is asserted
+     * here rather than trusted: an agent may read their own entitlement and
+     * nothing else, while reading a whole period or moving any entitlement to
+     * APPROVED/PAID is operator work. If someone later relaxes one of these the
+     * documentation above would be quietly wrong.
+     */
+    $kernel = (string) file_get_contents($repoRoot . '/private_storage/app/Http/Kernel.php');
+
+    $t->assertMatches("/'rewards\.self'\s*=>\s*'bearer'/", $kernel, 'self is bearer');
+    $t->assertMatches("/'rewards\.index'\s*=>\s*'operator'/", $kernel, 'index is operator-only');
+    $t->assertMatches("/'rewards\.decide'\s*=>\s*'operator'/", $kernel, 'decide is operator-only');
+
+    // The cutoff rule is the contract of the feature. It lives verbatim in the
+    // rewards documentation so a later reader cannot "fix" the behaviour
+    // without contradicting a sentence they had to read.
+    $rewardsDoc = $repoRoot . '/docs/REWARDS.md';
+    $t->assertTrue(is_file($rewardsDoc), 'docs/REWARDS.md exists');
+
+    $t->assertContains(
+        'At period close, only the frozen verified weekly ranking determines reward eligibility and rank; '
+            . 'later changes to live performance summaries do not change an already published reward entitlement.',
+        (string) file_get_contents($rewardsDoc),
+        'docs/REWARDS.md states the cutoff rule verbatim'
+    );
 });
 
 /* ---------------------------------------------------------------------------

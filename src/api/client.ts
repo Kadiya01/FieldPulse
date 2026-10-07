@@ -120,6 +120,22 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
 
   const bodyHash = await hashRequestBody(signedContent);
 
+  // The signed path must be the path exactly as the router resolves it, not
+  // the bare route. The server signs against Request::path(), which is the
+  // full incoming path — /api/v1/submit.php for a request the browser sent to
+  // that route — with the query string stripped, duplicate slashes collapsed
+  // and a trailing slash removed. Signing the bare route (submit.php) produced
+  // a canonical string whose digest matched nothing the server ever computes,
+  // so every authenticated request failed with an indistinguishable signature
+  // mismatch. Mirroring the server's normalization keeps the byte string the
+  // two sides build identical by construction.
+  let signedPath = `${API_BASE}${path.split('?')[0]}`;
+  if (!signedPath.startsWith('/')) signedPath = `/${signedPath}`;
+  signedPath = signedPath.replace(/\/+/g, '/');
+  if (signedPath.length > 1 && signedPath.endsWith('/')) {
+    signedPath = signedPath.slice(0, -1);
+  }
+
   // The canonical signing payload MUST include:
   // HTTP_METHOD
   // REQUEST_PATH
@@ -128,13 +144,21 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
   // SHA256(REQUEST_BODY)
   const canonicalPayload = [
     method.toUpperCase(),
-    path,
+    signedPath,
     timestamp,
     nonce,
     bodyHash
   ].join('\n');
 
   const signature = await signPayload(canonicalPayload, device.private_key);
+
+    // Diagnostic: lets a failing run be compared against the server's own
+    // digest of what it verified against, so a mismatch can be attributed to
+    // the canonical string rather than guessed at.
+    if (typeof console !== 'undefined') {
+      const dbg = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalPayload)));
+      console.log('[SIG] sha256=' + Array.from(dbg).map((b) => b.toString(16).padStart(2, '0')).join(''));
+    }
 
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', `Bearer ${accessToken}`);
@@ -564,4 +588,181 @@ export async function decideReview(
   };
 
   return envelope.data;
+}
+
+/**
+ * Rewards (§14).
+ *
+ * A published entitlement, not a live figure. Every number here was copied onto
+ * the row when the period closed and is served from the frozen ranking, so it
+ * does not move when later submissions are verified — see `docs/REWARDS.md`.
+ *
+ * `status` and `is_paid` are deliberately separate fields. `PENDING` and
+ * `APPROVED` are published entitlements; only `PAID` means the organisation has
+ * settled the reward. Reading `APPROVED` as "paid" would tell an agent they had
+ * been paid when they had not, so the UI branches on `is_paid`, never on the
+ * absence of `PENDING`.
+ */
+export type RewardStatus = 'PENDING' | 'APPROVED' | 'PAID' | 'VOID';
+
+export interface Reward {
+  id: number;
+  period_start_date: string;
+  rank: number;
+  total_verified_count: number;
+  tier: { id: number | null; label: string | null };
+  /** null means the organisation has not set a figure for this band yet. */
+  amount: number | null;
+  currency: string | null;
+  status: RewardStatus;
+  is_paid: boolean;
+  published_at: string;
+  approved_at: string | null;
+  paid_at: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  notes: string | null;
+}
+
+/** The operator view adds the recipient and the acting operator ids. */
+export interface OperatorReward extends Reward {
+  agent: { agent_code: string; full_name: string };
+  approved_by_operator_id: number | null;
+  paid_by_operator_id: number | null;
+  voided_by_operator_id: number | null;
+}
+
+export interface MyRewards {
+  rewards: Reward[];
+  meta: { agent_code: string; grace_hours: number; payment_note: string };
+}
+
+export async function fetchMyRewards(limit = 24): Promise<MyRewards> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await authenticatedFetch(`/rewards/self.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as {
+    data: Reward[];
+    meta: MyRewards['meta'];
+  };
+
+  return { rewards: envelope.data, meta: envelope.meta };
+}
+
+export interface RewardPeriod {
+  rewards: OperatorReward[];
+  meta: {
+    period: string;
+    closed: boolean;
+    available_periods: string[];
+    tiers: { id: number; min_rank: number; max_rank: number; tier_label: string }[];
+    pagination: { total: number; limit: number; offset: number };
+  };
+}
+
+export async function fetchPeriodRewards(period?: string, limit = 100): Promise<RewardPeriod> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (period) {
+    params.set('period', period);
+  }
+
+  const response = await authenticatedFetch(`/rewards/index.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as {
+    data: OperatorReward[];
+    meta: RewardPeriod['meta'];
+  };
+
+  return { rewards: envelope.data, meta: envelope.meta };
+}
+
+export async function decideReward(
+  rewardId: number,
+  action: 'APPROVE' | 'PAY' | 'VOID',
+  reason?: string
+): Promise<OperatorReward> {
+  const response = await authenticatedFetch('/rewards/decide.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reason ? { reward_id: rewardId, action, reason } : { reward_id: rewardId, action })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: OperatorReward };
+  return envelope.data;
+}
+
+/**
+ * The weekly standing (§13).
+ *
+ * Served entirely from the summary table, never by aggregating submissions, so
+ * the shape is a ranked list plus the caller's own row even when that row is off
+ * the visible page. `you.rank` is what the reward for the week is frozen from,
+ * which is why this screen says the standing is live and the reward is not.
+ */
+export interface LeaderboardEntry {
+  rank: number;
+  agent_id: number;
+  agent_code: string;
+  display_name: string;
+  total_verified_count: number;
+  total_submissions: number;
+  total_pending: number;
+  total_rejected: number;
+}
+
+export interface LeaderboardSelf {
+  rank: number | null;
+  agent_id: number;
+  agent_code: string;
+  display_name: string;
+  total_verified_count: number;
+  total_pending: number;
+}
+
+export interface Leaderboard {
+  period_start_date: string;
+  scope: 'GLOBAL' | 'SITE';
+  site_id: number | null;
+  entries: LeaderboardEntry[];
+  pagination: { total: number; limit: number; offset: number };
+  you: LeaderboardSelf | null;
+  available_periods: string[];
+}
+
+export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
+  const qs = period ? `?period=${encodeURIComponent(period)}` : '';
+  const response = await authenticatedFetch(`/leaderboard.php${qs}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as {
+    data: {
+      period_start_date: string;
+      scope: 'GLOBAL' | 'SITE';
+      site_id: number | null;
+      entries: LeaderboardEntry[];
+      pagination: { total: number; limit: number; offset: number };
+      you: LeaderboardSelf | null;
+    };
+    meta: { available_periods: string[] };
+  };
+
+  return {
+    ...envelope.data,
+    available_periods: envelope.meta.available_periods
+  };
 }

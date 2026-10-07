@@ -52,14 +52,25 @@ export async function signPayload(payload: string, privateKey: CryptoKey): Promi
     data
   );
 
-  // Convert ArrayBuffer to Base64
   const bytes = new Uint8Array(signatureBuffer);
   const len = bytes.byteLength;
   let binary = '';
   for (let i = 0; i < len; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
-  return btoa(binary);
+
+  // Standard base64, then rewritten to unpadded base64url.
+  //
+  // The rewrite is mandatory, not cosmetic. Str::base64UrlDecode() on the
+  // server is strict — /^[A-Za-z0-9_-]+$/ — so it rejects '+', '/' and '='
+  // outright and returns null. A DER-encoded P-256 signature is ~70 bytes, which
+  // is ~96 base64 characters, and btoa() emits '+' or '/' at roughly one
+  // position in 32, so an unconverted signature fails verification almost
+  // every time. The PHP suites never caught this because they build their
+  // signatures server-side with Str::base64UrlEncode() and therefore encode the
+  // signature the way the decoder expects; only a real browser key can produce
+  // the mismatch.
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 export async function hashRequestBody(body: string | ArrayBuffer): Promise<string> {

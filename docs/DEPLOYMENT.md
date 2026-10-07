@@ -314,6 +314,20 @@ error in your SQL syntax*; both `RefreshTokenRepository::pruneExpired()` and
 expired row while the queue itself looked perfectly healthy. Both now use the
 bounded-delete helper, which emits syntax each engine accepts.
 
+### Closing reward periods
+
+The same minute tick also closes any reward period that has come due: once a
+week's UTC window plus `REWARD_CLOSE_GRACE_HOURS` has passed, the worker freezes
+that week's verified ranking and publishes one entitlement per ranked agent, in
+`status = 'PENDING'`. This is deliberately not driven by anyone opening the
+rewards screen — publication is a cron responsibility, and the read-path close is
+only an idempotent fallback for a deployment whose cron has stopped.
+
+So the worker must run for rewards as well as verification: a stopped worker
+means no new entitlements, and `PENDING` is what an agent sees as "published but
+not yet paid". Set `REWARD_AUTO_CLOSE=false` only if periods are closed some
+other way (`bin/close_rewards.php`).
+
 ---
 
 ## 7. Operator tools
@@ -326,10 +340,11 @@ cron. Run any of them with no arguments to see usage.
 | `healthcheck.php` | Live environment, schema, and storage check |
 | `selftest.php` | Offline unit tests; `--filter=phash`, `--verbose` |
 | `migrate.php` | Apply migrations; `--status` to inspect |
-| `provision_agent.php` | Enrol an agent: code, name, optional role, optional site |
+| `provision_agent.php` | Provision an agent: code, name, optional role, optional site |
 | `pair_device.php` | Issue a one-time device pairing code |
 | `prune.php` | TTL housekeeping; `--dry-run` first |
 | `reaggregate.php` | Rebuild leaderboard summaries; `--period=`, `--all` |
+| `close_rewards.php` | Close due reward periods; `--period=`, `--all`, `--dry-run` |
 | `../workers/process_queue.php` | Run the verification queue; `--stats`, `--prune` |
 
 Two of these are worth explaining because they are the ones you will reach for
@@ -377,7 +392,7 @@ endpoint, not required to register a device, and cannot be read by a browser at
 all — a handset does not expose it to web code, so anything typed into a field is
 a string a user copied from a box. The factor that does stand between a stolen
 password and a new device is the one-time pairing code (`Security\PairingCode`),
-which is delivered by whoever supervises the enrolment and is not guessable from
+which is delivered by whoever supervises the agent and is not guessable from
 anything the handset exposes.
 
 Every login failure is byte-identical, and the password hash is verified even

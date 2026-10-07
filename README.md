@@ -1,11 +1,18 @@
 # FieldPulse
 
-Offline-first field count reporting with server-side verification.
+Responsive web application for agent activity reporting, verification, weekly
+standing, and rewards.
 
-Agents photograph a physical count in the field, on handsets that may have no
-signal for hours. FieldPulse keeps capturing when the network is gone, and treats
-everything the device sends as a *claim* until a server-side pipeline has checked
-it. That split — capture on trust, verification on evidence — is the product.
+Field agents report the enrollment activity they perform in the field. Every
+report a device sends is a *claim* until a server-side pipeline has checked it,
+and only verified work counts toward an agent's weekly standing. At period
+close that verified weekly standing is frozen, and the organisation rewards
+agents from that frozen standing — never from a client assertion, and never
+from a standing that has since moved on.
+
+Offline capture and installability are features of this web application. They
+are not what the product is: FieldPulse is a responsive web app, not a native
+mobile application.
 
 ---
 
@@ -18,6 +25,7 @@ it. That split — capture on trust, verification on evidence — is the product
 - [The offline and verification flow](#the-offline-and-verification-flow)
 - [Security model](#security-model)
 - [What this is not evidence of](#what-this-is-not-evidence-of)
+- [What FieldPulse does not do](#what-fieldpulse-does-not-do)
 - [Verification](#verification)
 - [Deploying to cPanel](#deploying-to-cpanel)
 - [Documentation](#documentation)
@@ -28,26 +36,31 @@ it. That split — capture on trust, verification on evidence — is the product
 
 ## The problem
 
-Field programmes report counts — stock taken, trees tagged, people surveyed —
-from places with no reliable connectivity. The existing options are both bad in
-the same way:
+Organisations with field agents have to decide, every week, who did what and
+what they are owed for it. The existing options fail in the same way:
 
 - A paper form is reliable and unverifiable. It arrives days late, and a number
-  on paper has no provenance anyone can check afterwards.
+  on paper has no provenance anyone can check afterwards, so the weekly reward
+  decision rests on whoever wrote it down.
 - A form that requires a connection fails at exactly the wrong moment. The agent
   is standing in front of the thing being counted, with the phone in one hand,
-  and the app refuses because there is no bar of signal. The count is not lost —
-  it is recorded later from memory, or not at all.
+  and the app refuses because there is no bar of signal. The activity is not
+  recorded — or it is recalled later from memory, and a number recalled from
+  memory is not something to reward on either.
 
-The gap in the middle is the actual problem: capture that works offline *and* a
-verification step that can be trusted later. Most attempts collapse one of those
-two into the other — either they upload whatever the client asserts and call it
-verified, or they make verification so strict that a legitimate agent working a
-noisy site is treated as a fraud.
+The gap in the middle is the actual problem: reporting that works offline *and*
+a verification step that can be trusted later, so that a weekly standing can be
+computed and rewarded without asking anyone to take a number on faith. Most
+attempts collapse one of those two into the other — either they upload whatever
+the client asserts and call it verified, or they make verification so strict
+that a legitimate agent working a noisy site is treated as a fraud.
 
 ## The solution
 
-FieldPulse separates the two, and is explicit about the boundary.
+FieldPulse separates the report from the verification, and is explicit about the
+boundary. It does not perform enrollment; it records what agents report having
+done, checks it, and turns the checked result into a standing that an
+organisation can reward from.
 
 **On the handset.** Capture works with no network at all. The image, the count,
 and the claimed location and time are written to IndexedDB with a local queue
@@ -63,14 +76,32 @@ agent's assigned sites, the server's own receive time, and the agent's weekly
 cap. Only then does the row get a disposition — `VERIFIED`, `REQUIRES_REVIEW`,
 or `REJECTED`.
 
+**At period close.** When a weekly period's grace window has elapsed, closing it
+freezes the verified weekly ranking into an immutable row and writes each
+agent's reward entitlement from that frozen row. The entitlement is *published*
+so the agent can see it; publication is not payment. An operator approves it,
+and only the organisation's own confirmation marks it paid. Later corrections to
+live performance summaries cannot move an entitlement that has already been
+published from a frozen ranking.
+
 The UI never collapses these into one status. A queued row reads *"Queued"*, not
 *"Sent"*, because "sent" invites the reading "received and confirmed". A
 received row reads *"Received — not yet verified"* until the server says otherwise.
-See [docs/VERIFICATION.md](docs/VERIFICATION.md) for every threshold and why it
-sits where it does.
+A published reward reads *"awaiting approval"*, not *"paid"*, because approval
+and payment are separate acts by separate people. See
+[docs/VERIFICATION.md](docs/VERIFICATION.md) for every threshold and why it
+sits where it does, and [docs/REWARDS.md](docs/REWARDS.md) for the close and
+publication rules.
 
 ## Features
 
+- **Reporting, not enrollment.** FieldPulse does not perform enrollment. Agents
+  report the enrollment activity they did in the field; the application
+  captures the evidence for that report and lets the server verify it.
+- **Weekly standing and rewards.** Closing a period freezes the verified weekly
+  ranking and writes reward entitlements from that frozen ranking, ranked by
+  verified count only. Publishing an entitlement tells the agent what they are
+  owed — it does not pay them.
 - **Offline capture.** Photo, count and metadata persist to IndexedDB and sync
   later. A failed upload is a state, not an error the agent has to solve.
 - **Idempotent submission.** Client-generated UUIDs mean a retry after a timeout
@@ -93,7 +124,8 @@ sits where it does.
 - **Device-bound sessions.** A non-extractable ECDSA P-256 key in the browser
   signs state-changing requests. Device registration needs an operator-issued
   one-time pairing code.
-- **Installable PWA.** Manifest, icons, and an offline service worker.
+- **Installable PWA.** Manifest, icons, and an offline service worker — a
+  capability of a responsive web application, not the product's identity.
 - **Leaderboard** over verified counts only.
 - **Privacy by omission.** The leaderboard returns no email, no device data, and
   no identifiers beyond an agent code.
@@ -101,7 +133,7 @@ sits where it does.
 ## Architecture
 
 ```
-  browser (PWA)                       server (cPanel shared hosting)
+  browser (responsive web app)       server (cPanel shared hosting)
   ───────────────                     ──────────────────────────────────
   React + TypeScript                  PHP 8.2, no framework, no Composer
   IndexedDB queue                     MySQL 8.0.3+ or MariaDB 10.11+
@@ -202,6 +234,29 @@ Attestation would require the Android `Keystore`/`Camera2` signed-capture path o
 in-app store distribution. Neither is implemented, and both change the deployment
 model.
 
+## What FieldPulse does not do
+
+- **It does not pay anyone.** A published reward entitlement is a statement that
+  the organisation owes an agent something for a frozen week. FieldPulse never
+  moves money. An agent looking at `PENDING` or `APPROVED` has been *told what
+  they are owed* — they have not been paid, and the UI must never say otherwise.
+  Only the organisation's own confirmation marks an entitlement paid.
+- **It does not perform enrollment.** FieldPulse is not an enrollment system.
+  Agents report the enrollment activity they performed in the field; this
+  application captures the evidence, verifies it, freezes the resulting weekly
+  standing, and makes the reward defensible. Enrollment itself happens outside
+  it. The word "provision" is used for creating an agent account, because
+  enrolling an agent is not what that command does.
+- **It is not a native mobile application.** It is a responsive web application.
+  Installing it adds an icon and an offline cache; nothing is distributed through
+  an app store, and the service worker can be deleted and re-created.
+- **It does not choose who to reward, or how much.** The organisation supplies
+  the tier schedule. FieldPulse computes the frozen weekly standing the schedule
+  applies to, and stops there.
+- **It does not decide rewards from a live leaderboard.** The standing used for a
+  reward is the one frozen when the period closed. A leaderboard that moves
+  afterwards is informational.
+
 ## Verification
 
 The complete gate. Everything below is expected to pass with zero warnings.
@@ -281,9 +336,9 @@ pairing-code workflow, are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). In short
 5. Run `php private_storage/bin/migrate.php`.
 6. Confirm the host honours `AllowOverride All`, or the `.htaccess` denials do
    nothing.
-7. `php private_storage/bin/healthcheck.php` must be clean before you enrol
+7. `php private_storage/bin/healthcheck.php` must be clean before you provision
    anyone.
-8. Enrol with `bin/provision_agent.php`, issue a pairing code with
+8. Provision with `bin/provision_agent.php`, issue a pairing code with
    `bin/pair_device.php`, and hand both to the agent out of band.
 
 ## Documentation
@@ -325,8 +380,8 @@ Stated plainly, because each is a real constraint rather than a bug report.
 ## Repository layout
 
 ```
-src/                     React PWA — pages, API client, crypto, IndexedDB queue
-public/                  favicon and PWA icons, generated by bin/brand_assets.php
+src/                     React app — pages, API client, crypto, IndexedDB queue
+public/                  favicon and app icons, generated by bin/brand_assets.php
 public_html/             the only deployed directory: shell, assets, api/
 private_storage/
   app/                   Domain, Database, Verification, Security, Http, Support

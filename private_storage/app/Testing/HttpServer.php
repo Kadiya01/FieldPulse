@@ -65,6 +65,22 @@ final class HttpServer
      *        test run has no business rewriting the deployment's configuration,
      *        and a run interrupted before cleanup would leave it rewritten.
      * @param array<string,string> $env Extra process environment
+     * @param bool $spaFallback Serve index.html for unmatched non-API paths.
+     *        The app routes on the client with BrowserRouter, so a deep link
+     *        such as /capture or /leaderboard is a request for a file that does
+     *        not exist on disk. Without a fallback the router 404s it and no
+     *        browser test can reach those routes at all. Only set this for the
+     *        browser suite: the contract suites assert that a genuinely missing
+     *        file is a 404, and a blanket fallback would make that vacuous.
+     * @param int|null $port Pin the listening port. The contract suites let the
+     *        OS assign a free one so parallel runs cannot collide; the browser
+     *        suite pins a port because Playwright has to know the base URL
+     *        before it starts anything.
+     * @param string|null $faultStateFile Harness-only fault injection, read per
+     *        request. Only the E2E runner sets this, and only for the three
+     *        faults a real network produces on its own: a slow upload, a
+     *        response lost after the server committed, and an abrupt death.
+     *        Production code contains no fault switches.
      * @throws \RuntimeException if the server does not come up
      */
     public static function start(
@@ -72,7 +88,10 @@ final class HttpServer
         array $configOverrides = [],
         array $env = [],
         int $maxUploadBytes = 16_000_000,
-        ?string $docRoot = null
+        ?string $docRoot = null,
+        bool $spaFallback = false,
+        ?int $port = null,
+        ?string $faultStateFile = null,
     ): self {
         $repoRoot   = dirname(__DIR__, 3);
         $publicRoot = $docRoot ?? ($repoRoot . '/public_html');
@@ -95,11 +114,15 @@ final class HttpServer
             $envFile = self::writeEnvCopy($workDir, $configOverrides);
         }
 
-        $port    = self::allocatePort();
+        $port    = $port ?? self::allocatePort();
         $logPath = $workDir . '/server.log';
         $slash   = static fn (string $p): string => str_replace('\\', '/', $p);
 
-        $childEnv = ['FP_DOCROOT' => $slash($publicRoot)] + $env;
+        $childEnv = [
+            'FP_DOCROOT' => $slash($publicRoot),
+            'FP_SPA_FALLBACK' => $spaFallback ? '1' : '0',
+            'FP_E2E_FAULTS' => $faultStateFile !== null ? $slash($faultStateFile) : '',
+        ] + $env;
 
         if ($envFile !== null) {
             $childEnv['FP_ENV_FILE'] = $slash($envFile);
@@ -809,9 +832,93 @@ $docRoot = (string) getenv('FP_DOCROOT');
 $path    = (string) parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $target  = $docRoot . $path;
 
+/*
+ * Harness-only fault injection. Off unless FP_E2E_FAULTS names a state file,
+ * which only bin/e2e_server.php does.
+ *
+ * Two faults are modelled, both of which a real network produces on its own
+ * and neither of which production code needs a switch for:
+ *
+ *   delay          A slow upload. Real on a weak mobile connection, and the
+ *                  only honest way to test a 30s lock lease.
+ *
+ *   lost_response  The response is dropped AFTER the server has committed the
+ *                  submission. This is the case a naive stub cannot produce,
+ *                  because stubbing the failure before the handler runs would
+ *                  prove nothing about idempotency: the retry would be the
+ *                  first successful send, not a replay. Here the file is
+ *                  really stored and really signed, and only the answer is
+ *                  lost, so the client retry must be recognised as a replay.
+ */
+$faultsFile = (string) getenv('FP_E2E_FAULTS');
+
+if ($faultsFile !== '' && $path === '/api/v1/submit.php') {
+    $faults = json_decode((string) @file_get_contents($faultsFile), true);
+    $mode   = is_array($faults) ? (string) ($faults['submit']['mode'] ?? 'none') : 'none';
+    $delayMs = is_array($faults) ? (int) ($faults['submit']['ms'] ?? 0) : 0;
+
+    if ($mode === 'delay' && $delayMs > 0) {
+        usleep($delayMs * 1000);
+        // Fall through: the request is then handled normally, just slowly.
+    } elseif ($mode === 'lost_response') {
+        ob_start();
+        require $docRoot . '/api/v1/submit.php';
+        $body = ob_get_clean();
+
+        $status = http_response_code();
+
+        // Promise more than we send. The client sees a short read and reports a
+        // network error, which is indistinguishable from the acknowledgement
+        // being lost on a bad link — and the submission really is stored.
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+
+        http_response_code($status === false ? 200 : $status);
+        header('Content-Type: application/json');
+        header('Content-Length: ' . (strlen((string) $body) + 32));
+        echo $body;
+
+        return true;
+    }
+}
+
 // Contain path traversal: the resolved target must stay under the document root.
 $realDocRoot = realpath($docRoot);
 $realTarget  = realpath($target);
+
+/*
+ * Client-side route fallback, for the browser suite only.
+ *
+ * The app routes with BrowserRouter, so /capture, /leaderboard and /sync are
+ * real routes that have no file behind them. Apache in production handles this
+ * with the rewrite rules in .htaccess; this reproduces just that rule so a deep
+ * link reaches the app instead of a 404.
+ *
+ * Deliberately NOT applied to:
+ *   - /api/... and the server-side .php endpoints, because a 404 from the API
+ *     is a real answer and papering it with index.html would turn a broken
+ *     endpoint into a 200 that looks like success;
+ *   - anything with a file extension, so a genuinely missing asset still 404s
+ *     instead of being handed an HTML body the browser would try to parse as
+ *     JavaScript.
+ */
+$spa = getenv('FP_SPA_FALLBACK') === '1';
+$isApiPath = (bool) preg_match('#^/(api/|submit\.php|logout\.php|refresh\.php|provision_agent\.php|device_pair\.php|register\.php|login\.php|health\.php)#', $path);
+$looksLikeAsset = (bool) preg_match('#\.[A-Za-z0-9]{2,5}$#', $path);
+
+if ($realTarget === false && $spa && !$isApiPath && !$looksLikeAsset) {
+    $index = $docRoot . '/index.html';
+
+    if (is_file($index)) {
+        // 200, not 304/204: this is a document response.
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store');
+        readfile($index);
+
+        return true;
+    }
+}
 
 if ($realDocRoot === false || $realTarget === false) {
     http_response_code(404);
@@ -822,7 +929,13 @@ if ($realDocRoot === false || $realTarget === false) {
 }
 
 $realDocRoot = rtrim(str_replace('\\', '/', $realDocRoot), '/') . '/';
-$realTarget  = str_replace('\\', '/', $realTarget);
+// Normalise the target the same way. Without the trailing slash, a request
+// for the docroot root itself (/ or //api//v1...) compares "C:/.../docroot"
+// against the root prefix "C:/.../docroot/" and fails the containment check
+// below as an apparent path traversal — returning the NOT_FOUND JSON for a
+// path that is the most legal request in the system. php -S then serves the
+// directory index for it, exactly as Apache's DirectoryIndex would.
+$realTarget  = rtrim(str_replace('\\', '/', $realTarget), '/') . '/';
 
 if (!str_starts_with($realTarget, $realDocRoot)) {
     http_response_code(404);

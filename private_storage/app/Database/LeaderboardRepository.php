@@ -20,6 +20,32 @@ namespace FieldPulse\Database;
 final class LeaderboardRepository extends Repository
 {
     /**
+     * The one definition of rank order.
+     *
+     * The page query and the self-rank count must sort ties identically. They
+     * did not: this clause broke verified-count ties on pending count, while
+     * the count that produced an agent's own rank ignored pending entirely and
+     * jumped straight to agent_code. Two agents level on verified but not on
+     * pending were ordered one way on screen and counted the other way in the
+     * "you are Nth" number beside it — and a rank frozen from that pair is not
+     * a rank anyone can defend afterwards.
+     */
+    private const ORDER_BY = 's.total_verified_count DESC, s.total_pending ASC, a.agent_code ASC';
+
+    /**
+     * "Strictly ahead of me", in exactly the terms {@see self::ORDER_BY} uses.
+     *
+     * Kept as one fragment so the comparison cannot drift from the ordering
+     * again: a rank is the count of agents sorted before this one, and that is
+     * only true if both statements agree on what "before" means.
+     */
+    private const AHEAD_OF_SELF = ' AND (s.total_verified_count > :self_count
+                                   OR (s.total_verified_count = :self_count AND s.total_pending < :self_pending)
+                                   OR (s.total_verified_count = :self_count
+                                       AND s.total_pending = :self_pending
+                                       AND a.agent_code < :self_code))';
+
+    /**
      * @return array{
      *   entries:list<array<string,mixed>>,
      *   total:int,
@@ -41,9 +67,8 @@ final class LeaderboardRepository extends Repository
                     s.total_verified_count, s.total_submissions, s.total_rejected, s.total_pending
                FROM agent_performance_summary s
                JOIN agents a ON a.id = s.agent_id
-              ' . $where . '
-              ORDER BY s.total_verified_count DESC, s.total_pending ASC, a.agent_code ASC'
-            . self::limitClause($limit, 200, $offset),
+               ' . $where . '
+              ORDER BY ' . self::ORDER_BY . self::limitClause($limit, 200, $offset),
             $params
         );
 
@@ -87,12 +112,11 @@ final class LeaderboardRepository extends Repository
                     'SELECT COUNT(*) + 1
                        FROM agent_performance_summary s
                        JOIN agents a ON a.id = s.agent_id
-                      ' . $where . '
-                        AND (s.total_verified_count > :self_count
-                             OR (s.total_verified_count = :self_count AND a.agent_code < :self_code))',
+                      ' . $where . self::AHEAD_OF_SELF,
                     $params + [
-                        'self_count' => (int) $self['total_verified_count'],
-                        'self_code'  => (string) $self['agent_code'],
+                        'self_count'   => (int) $self['total_verified_count'],
+                        'self_pending' => (int) $self['total_pending'],
+                        'self_code'    => (string) $self['agent_code'],
                     ]
                 );
             }
@@ -107,26 +131,28 @@ final class LeaderboardRepository extends Repository
                 'agent_code'           => (string) $self['agent_code'],
                 'display_name'         => $this->maskName((string) $self['full_name']),
                 'total_verified_count' => (int) $self['total_verified_count'],
+                'total_pending'        => (int) $self['total_pending'],
             ],
             'self_rank' => $selfRank,
         ];
     }
 
     /**
-     * The caller's own row, ignoring the site filter, so the "you" block is
-     * always the global truth even on a site-filtered board.
+     * The caller's own row, ignoring the site filter so the "you" block is
+     * always the global truth even on a site-filtered board — except that a
+     * site filter is honoured when present, because a board for a site the
+     * agent is not assigned to has no row for them to be shown.
      *
-     * @param  array<string,mixed> $where
+     * `total_pending` comes back as well as the verified count: it is the
+     * tiebreaker in {@see self::ORDER_BY}, so the rank comparison needs it.
+     *
      * @param  array<string,mixed> $params
      * @return array<string,mixed>|null
-     */
-    /**
-     * @param array<string,mixed> $params
      */
     private function selfRow(string $period, int $agentId, ?int $siteId, array $params): ?array
     {
         $sql = 'SELECT a.id AS agent_id, a.agent_code, a.full_name,
-                       s.total_verified_count
+                       s.total_verified_count, s.total_pending
                   FROM agent_performance_summary s
                   JOIN agents a ON a.id = s.agent_id
                  WHERE s.period_start_date = :period
@@ -228,6 +254,33 @@ final class LeaderboardRepository extends Repository
             'name'      => (string) $r['name'],
             'radius_m'  => (int) $r['radius_m'],
         ], $rows);
+    }
+
+    /**
+     * The whole standing for a period, in {@see self::ORDER_BY} order.
+     *
+     * This is what RewardService freezes when a period closes. It reuses
+     * filters(), which is the point: the frozen rank and the rank the agent saw
+     * on screen come out of one WHERE clause and one ORDER BY, so nobody can be
+     * rewarded at a number the board never showed them. Deriving the order
+     * anywhere else would reintroduce exactly the split that made the old
+     * self-rank disagree with the page.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function standingForPeriod(string $periodStartDate): array
+    {
+        [$where, $params] = $this->filters($periodStartDate, null);
+
+        return $this->all(
+            'SELECT s.agent_id, s.total_verified_count, s.total_pending, s.total_rejected,
+                    a.status AS agent_status
+               FROM agent_performance_summary s
+               JOIN agents a ON a.id = s.agent_id
+              ' . $where . '
+              ORDER BY ' . self::ORDER_BY,
+            $params
+        );
     }
 
     /**

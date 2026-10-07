@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { generateAndStoreDeviceIdentity, hashRequestBody, generateNonce } from './keys';
+import { generateAndStoreDeviceIdentity, hashRequestBody, generateNonce, signPayload } from './keys';
 import { db } from '../db/db';
 
 // Mock IndexedDB
@@ -84,5 +84,69 @@ describe('Cryptography & Identity', () => {
     const nonce2 = generateNonce();
     expect(nonce1).not.toBe(nonce2);
     expect(nonce1.length).toBe(32); // 16 bytes = 32 hex chars
+  });
+
+  /**
+   * signPayload must emit unpadded base64url, because that is the only alphabet
+   * the server accepts.
+   *
+   * Str::base64UrlDecode() on the PHP side is strict — /^[A-Za-z0-9_-]+$/ — so a
+   * plain btoa() result is refused whenever it happens to contain '+', '/', or
+   * '=' padding. A DER-encoded P-256 signature is ~70 bytes, i.e. ~96 base64
+   * characters, so that is nearly every signature rather than a rare edge case:
+   * measured against the real decoder, 200 generated signatures were accepted
+   * 200 times as base64url and 0 times as plain base64.
+   *
+   * Asserting the alphabet is what makes this catch the regression. Asserting
+   * that "signing works" would not, because the signature is well-formed DER
+   * either way — the encoding is only wrong at the boundary.
+   */
+  it('should encode signatures as unpadded base64url', async () => {
+    await generateAndStoreDeviceIdentity();
+    const privateKey = vi.mocked(db.device.put).mock.calls[0][0].private_key as CryptoKey;
+
+    // Checked over several signatures: a single sample could pass by luck, and
+    // the failure this guards against is probabilistic by nature.
+    for (let i = 0; i < 50; i++) {
+      const signature = await signPayload('{"nonce":' + i + '}', privateKey);
+
+      expect(signature).toMatch(/^[A-Za-z0-9_-]+$/);
+      // Padding would be rejected by the decoder's alphabet check above.
+      expect(signature).not.toContain('=');
+    }
+  });
+
+  it('should produce signatures the server can verify', async () => {
+    const { public_key_jwk } = await generateAndStoreDeviceIdentity();
+    const privateKey = vi.mocked(db.device.put).mock.calls[0][0].private_key as CryptoKey;
+    const payload = '{"submission_uuid":"abc","count":1}';
+
+    const signature = await signPayload(payload, privateKey);
+
+    // Round-trip through the exact alphabet the server enforces, then verify.
+    // WebCrypto emits DER; openssl_verify() wants that DER, so no unwrapping
+    // happens here either — this is the same byte sequence the server receives.
+    // atob() needs the padding signPayload() correctly omits, so it is restored
+    // here — which also confirms the omission is safe to strip.
+    let std = signature.replace(/-/g, '+').replace(/_/g, '/');
+    if (std.length % 4 !== 0) std += '='.repeat(4 - (std.length % 4));
+    const bytes = Uint8Array.from(atob(std), (c) => c.charCodeAt(0));
+
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      public_key_jwk as JsonWebKey,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify']
+    );
+
+    await expect(
+      crypto.subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        publicKey,
+        bytes,
+        new TextEncoder().encode(payload)
+      )
+    ).resolves.toBe(true);
   });
 });

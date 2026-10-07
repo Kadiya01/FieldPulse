@@ -26,6 +26,19 @@ dist-ssr
 # embedded GPS and timestamps — would be a privacy incident, not just clutter.
 private_storage/fieldpulse/
 
+# Browser end-to-end harness artefacts. .e2e_docroot is a real deploy of dist/
+# over a copy of public_html and is rebuilt on every run; .e2e_creds.json holds
+# the agent credentials the run signs in with; .e2e_faults.json is the harness's
+# fault-injection switch, read by the test router only; .e2e_profiles are the
+# persistent browser profiles, which hold real device keys. playwright-report/
+# and test-results/ hold failure output. None of it belongs in the repository.
+.e2e_docroot/
+.e2e_creds.json
+.e2e_faults.json
+.e2e_profiles/
+playwright-report/
+test-results/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

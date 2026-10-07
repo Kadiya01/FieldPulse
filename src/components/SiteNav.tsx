@@ -3,6 +3,7 @@ import {
   Camera,
   Database,
   Trophy,
+  Award,
   ClipboardCheck
 } from 'lucide-react';
 
@@ -22,7 +23,11 @@ export default function SiteNav({ isOperator }: { isOperator: boolean }) {
   const items = [
     { to: '/', label: 'Capture', icon: Camera, end: true },
     { to: '/queue', label: 'Queue', icon: Database, end: false },
-    { to: '/leaderboard', label: 'Leaderboard', icon: Trophy, end: false }
+    { to: '/leaderboard', label: 'Leaderboard', icon: Trophy, end: false },
+    // Rewards is offered to everyone, not only operators: an agent sees their
+    // own published entitlements, and the decide controls are gated inside the
+    // page and again on the server.
+    { to: '/rewards', label: 'Rewards', icon: Award, end: false }
   ];
 
   if (isOperator) {

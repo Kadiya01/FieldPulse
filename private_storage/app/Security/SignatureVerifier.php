@@ -52,23 +52,80 @@ final class SignatureVerifier
             throw new ApiException(401, ErrorCode::SIGNATURE_INVALID, 'Malformed X-Request-Signature.');
         }
 
-        // DER-encoded ECDSA signature, which is what WebCrypto's ES256 produces.
-        $result = @openssl_verify(
-            self::signedBytes($method, $path, $signedBody, $timestamp, $nonce),
-            $raw,
-            $key,
-            OPENSSL_ALGO_SHA256
-        );
+        // DER-encoded ECDSA signature, which is what openssl_verify accepts.
+        // WebCrypto's subtle.sign does NOT produce DER: it produces IEEE P1363,
+        // r || s concatenated, exactly 64 bytes for P-256. A browser signature
+        // therefore fails to parse here as DER and openssl_verify returns -1 —
+        // not 0, the "signature does not match" case — for every request. The
+        // PHP suites never caught this because they sign with openssl_sign(),
+        // which emits DER, while only a real browser key can produce the raw
+        // form. openssl_verify() takes a string, so a non-DER string is not a
+        // type error, it is a silent -1, which is exactly the shape of a much
+        // more interesting bug.
+        $signed = self::signedBytes($method, $path, $signedBody, $timestamp, $nonce);
+        $result = @openssl_verify($signed, $raw, $key, OPENSSL_ALGO_SHA256);
+
+        if ($result === -1 && strlen($raw) === 64) {
+            // Retry once with the raw P1363 signature transcribed to DER. The
+            // 64-byte guard keeps this from ever re-encoding a real DER
+            // signature: those are 70-72 bytes, and a legitimate DER signature
+            // cannot parse as P1363, so it never reaches the -1 branch.
+            $der = self::p1363ToDer($raw);
+            if ($der !== null) {
+                $result = @openssl_verify($signed, $der, $key, OPENSSL_ALGO_SHA256);
+            }
+        }
 
         if ($result !== 1) {
             Logger::warning('signature.verification_failed', [
                 'device_uuid' => $deviceRow['device_uuid'],
                 'path'        => $path,
+                // openssl_error_string() reports the last entry in the queue
+                // and does not clear it, so this is frequently a stale message
+                // from an earlier OpenSSL call in the same request. It says
+                // "PEM routines::no start line" while the PEM built from the
+                // JWK is in fact fine, which sends the investigation entirely
+                // the wrong way. $result is the trustworthy signal: 0 means the
+                // signature simply does not match, -1 means OpenSSL failed.
                 'openssl'     => (string) openssl_error_string(),
+                'verify'      => $result,
+                'signed_sha256'  => hash('sha256', $signed),
+                'sig_bytes'      => strlen($raw),
+                'nonce'          => $nonce,
             ]);
 
             throw new ApiException(401, ErrorCode::SIGNATURE_INVALID, 'Request signature verification failed.');
         }
+    }
+
+    /**
+     * Transcribe an IEEE P1363 ECDSA signature (r || s, both fixed-width) into
+     * the DER form openssl_verify expects.
+     *
+     * @param  string $raw  A 64-byte string when the caller intends P1363.
+     * @return string|null  The DER encoding, or null when $raw is not 64 bytes.
+     */
+    public static function p1363ToDer(string $raw): ?string
+    {
+        if (strlen($raw) !== 64) {
+            return null;
+        }
+
+        $encode = static function (string $int): string {
+            $trimmed = ltrim($int, "\x00");
+            if ($trimmed === '') {
+                return "\x02\x01\x00";
+            }
+            if ((ord($trimmed[0]) & 0x80) !== 0) {
+                $trimmed = "\x00" . $trimmed;
+            }
+            return "\x02" . chr(strlen($trimmed)) . $trimmed;
+        };
+
+        $r = $encode(substr($raw, 0, 32));
+        $s = $encode(substr($raw, 32, 32));
+
+        return "\x30" . chr(strlen($r) + strlen($s)) . $r . $s;
     }
 
     /**
