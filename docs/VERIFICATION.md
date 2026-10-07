@@ -462,7 +462,7 @@ create is never touched.
 `bin/queue.php` — 13 assertions, released against a barrier so several real
 worker subprocesses contend for the same rows at once. It asserts both claim
 strategies, so `bin/db_matrix.php` exercises the native `SKIP LOCKED` path on
-MySQL and on MariaDB 10.11 while the fallback is covered by the test seam. Two
+MySQL and on MariaDB 11.4.13 while the fallback is covered by the test seam. Two
 overlapping cron ticks is the expected production case, not an edge case, and it
 is the one thing an in-process test cannot prove — hence real subprocesses.
 

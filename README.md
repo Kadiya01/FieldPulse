@@ -313,9 +313,14 @@ Two things about running these by hand, both discovered the hard way:
 - **PHP needs an OpenSSL config file on Windows.** Without
   `OPENSSL_CONF` pointing at `extras/ssl/openssl.cnf`, every HTTPS-capable test
   fails on certificate loading and it looks like a code fault.
+- **One command runs all of it.** `php private_storage/bin/release_gate.php`
+  sequences every check above, resets each test database first so the ordering
+  hazard cannot bite, and prints `FIELDPULSE RELEASE CANDIDATE: PASS` only when
+  every mandatory check is green with nothing skipped. See
+  [docs/RELEASE.md](docs/RELEASE.md).
 
-Supported engines are MySQL **8.0.3 or later** (tested on 8.0.40) and MariaDB
-**10.11 or later** (tested on 10.11.9). MariaDB 10.3–10.10 is not claimed; the
+Supported engines are MySQL **8.0.3 or later** (certified on 8.0.40) and MariaDB
+**10.11 or later** (certified on 11.4.13). MariaDB 10.3–10.10 is not claimed; the
 `SKIP LOCKED` fallback exists, but those versions are not in the matrix.
 
 ## Deploying to cPanel
@@ -348,6 +353,7 @@ pairing-code workflow, are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). In short
 | [docs/API.md](docs/API.md) | Every endpoint, the signature scheme, the error envelope |
 | [docs/VERIFICATION.md](docs/VERIFICATION.md) | All fourteen pipeline steps, every threshold, and what the pipeline cannot prove |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | cPanel install, `.htaccess`, cron, secrets, the database matrix |
+| [docs/RELEASE.md](docs/RELEASE.md) | What the release gate runs, what it certifies, and the certified engine versions |
 | [docs/PRODUCTION_AUDIT.md](docs/PRODUCTION_AUDIT.md) | The original hardening pass, kept for what it found |
 
 ## Limitations

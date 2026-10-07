@@ -19,6 +19,10 @@ dist
 dist-ssr
 *.local
 
+# Local editor/agent tooling (e.g. an opencode plugin and its own node_modules).
+# It is not application source and would otherwise be swept in by `git add -A`.
+.opencode/
+
 # Runtime storage created by the app, not source. Holds uploaded evidence
 # (quarantine, processed/{verified,review,rejected}), operational logs, and
 # worker temp files. The logs are already covered by *.log above, but the

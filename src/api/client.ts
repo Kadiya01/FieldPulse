@@ -183,6 +183,17 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
       throw new Error('Authentication failed');
     }
 
+    // Another request — in this tab or a sibling — may have refreshed while
+    // this one was in flight. When the access token under us has already
+    // changed, this 401 is already answered: retry on the new token rather than
+    // start a second refresh, which would present the rotated cookie and get
+    // the whole family revoked. The in-flight promise covers the overlap; this
+    // covers the ordering where the refreshing sibling finished first.
+    const currentToken = getAccessToken();
+    if (currentToken !== null && currentToken !== accessToken) {
+      return authenticatedFetch(path, { ...options, __retried: true });
+    }
+
     const refreshed = await attemptTokenRefresh();
     if (refreshed) {
       return authenticatedFetch(path, { ...options, __retried: true });

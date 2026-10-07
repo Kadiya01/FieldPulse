@@ -257,11 +257,10 @@ not re-investigated in a later phase. (Note: `null` does *not* delete — it sto
 - **The queue claim is consistent across MariaDB versions.**
   `JobRepository::claimBatch()` uses `FOR UPDATE SKIP LOCKED` when the server
   reports support (MySQL 8.0.1+, MariaDB 10.6+) and falls back to an atomic
-  `UPDATE ... ORDER BY ... LIMIT` worker-token claim otherwise. **Phase 7 closed
-  this gate**: MariaDB 10.11.9 was run through `bin/db_matrix.php` with both
-  strategies, so the fallback is exercised rather than merely present. The
-  supported floor moved from 10.3 to 10.11 in `DEPLOYMENT.md` because 10.11 is
-  the oldest release actually tested; `migrate.php` warns below it.
+  `UPDATE ... ORDER BY ... LIMIT` worker-token claim otherwise. **The release
+  gate closes this cell**: MariaDB 11.4.13 is run through `bin/db_matrix.php`
+  with both strategies, so the fallback is exercised rather than merely present.
+  The supported floor is 10.11 in `DEPLOYMENT.md`; `migrate.php` warns below it.
 - **`ST_Distance_Sphere` is absent on MySQL 8.0.40**; `Haversine.php:14` documents
   the PHP fallback, and the healthcheck reports it as `[ok]`. Working as designed.
 - **Service-worker registration works.** The build emits `dist/registerSW.js` and

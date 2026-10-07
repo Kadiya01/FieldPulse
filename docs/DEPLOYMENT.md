@@ -1,6 +1,6 @@
 # FieldPulse — cPanel deployment
 
-Target: PHP 8.2, MySQL 8.0.3+ or MariaDB 10.3+, cPanel with Cron. No Composer,
+Target: PHP 8.2, MySQL 8.0.3+ or MariaDB 10.11+, cPanel with Cron. No Composer,
 no Redis, no process supervisor, no shell access beyond the account's own
 document root.
 
@@ -108,7 +108,7 @@ leaves the deployment configured against the wrong database.
 | Engine | Supported | Tested |
 |---|---|---|
 | MySQL | 8.0.3+ | **8.0.40** |
-| MariaDB | 10.11+ | **10.11.9** |
+| MariaDB | 10.11+ | **11.4.13** |
 
 `php private_storage/bin/db_matrix.php` is what establishes the right-hand
 column: for each engine it applies every migration from empty, runs the
@@ -129,8 +129,8 @@ guess and a silently skipped cell reads as a pass.
 on 10.6+ and a portable fallback below it, and the schema avoids generated
 columns, MySQL-only JSON operators and spatial types, so 10.3–10.10 will very
 likely work. That has not been tested, so it is not supported here — the floor is
-10.11 because that is the oldest release the matrix has actually run. If you need
-an older one, add it as a matrix cell and let the result decide.
+10.11, and the cell the matrix certifies is MariaDB **11.4.13**. If you need an
+older one, add it as a matrix cell and let the result decide.
 
 Migrations 001–008 are the contract schema. 009–015 are additive and exist
 because the spec's requirements are only satisfiable with extra columns:
