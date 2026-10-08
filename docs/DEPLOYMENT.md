@@ -108,7 +108,7 @@ leaves the deployment configured against the wrong database.
 | Engine | Supported | Tested |
 |---|---|---|
 | MySQL | 8.0.3+ | **8.0.40** |
-| MariaDB | 10.11+ | **10.11.9** |
+| MariaDB | 10.11+ | **11.4.13** |
 
 `php private_storage/bin/db_matrix.php` is what establishes the right-hand
 column: for each engine it applies every migration from empty, runs the
@@ -124,6 +124,12 @@ php private_storage/bin/db_matrix.php --quick               # migrate + healthch
 The MariaDB cell reads its own environment file, named by
 `FIELDPULSE_MARIADB_ENV`. There is no default, because a default would be a
 guess and a silently skipped cell reads as a pass.
+
+For a full release certification across all five tiers — frontend, the PHP
+suites, a real Apache deployment, the Playwright browser suite, and the database
+matrix, in order and from a fresh database — run `bin/release_gate.php` and
+check that it ends with `FIELDPULSE RELEASE CANDIDATE: PASS`. See
+[docs/RELEASE.md](RELEASE.md) for the tier list and the last certification.
 
 **On older MariaDB.** The queue takes the native `FOR UPDATE SKIP LOCKED` path
 on 10.6+ and a portable fallback below it, and the schema avoids generated

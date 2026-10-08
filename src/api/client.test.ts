@@ -103,6 +103,21 @@ describe('Session restore', () => {
   });
 
   /**
+   * The request never reached the server, which is not the same as the server
+   * saying there is no session. Reporting this as anonymous would lock the agent
+   * out of the captures already queued on the handset at the exact moment they
+   * most need to see them, and nothing is granted by letting them in: there is
+   * still no access token, so the first request after the network returns is
+   * still authenticated from scratch.
+   */
+  it('reports offline, not anonymous, when the request cannot reach the server', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    await expect(restoreSession()).resolves.toEqual({ status: 'offline' });
+    expect(getAccessToken()).toBeNull();
+  });
+
+  /**
    * A valid cookie with no local private key is a distinct state from no
    * session at all. Sending the user to the login screen here would be wrong:
    * their credentials are fine, the browser simply cannot prove possession of

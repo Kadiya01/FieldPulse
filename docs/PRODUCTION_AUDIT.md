@@ -484,3 +484,26 @@ npm run lint                              # 0 errors
 npx tsc --noEmit                          # clean
 npm run build                             # pass
 ```
+
+---
+
+## Release certification
+
+**Status: FIELDPULSE RELEASE CANDIDATE: PASS**
+Date: 2026-10-08
+Method: `bin/release_gate.php` — all five tiers, fresh database, real Apache and
+Playwright, both engines live (`SELECT VERSION()`: MySQL 8.0.40, MariaDB 11.4.13).
+See [docs/RELEASE.md](RELEASE.md) for the tier list and the run record.
+
+### Fixed during certification
+
+The gate found one genuine product defect and two harness defects.
+
+| # | Defect | Where | How it was found |
+|---|---|---|---|
+| RC-1 | A reload mid-upload deadlocked the sync queue. The stranded row stayed `SYNCING` for ever because nothing was scheduled to retry after the dead realm's lease expired. | `src/sync/coordinator.ts` | Tier 4 browser: `offline-lifecycle.spec.ts` stalled at `PENDING`/`SYNCING` (`never reached SENT`). The coordinator now wakes once at lease expiry on a lost lock race. |
+| RC-2 | `runNpm()` invoked `npm.cmd` under `proc_open`, which mis-resolved on Windows. npm is now launched via `node <npm-cli.js>`. | `bin/release_gate.php` | Tier 1 would never run on this host. |
+| RC-3 | `db_matrix.php` ran child suites with `private_storage/` as the working directory, so root-relative `FIELDPULSE_*_ENV` paths never resolved. | `bin/db_matrix.php` | Tier 5 matrix could not find its per-engine env files. |
+
+No verification thresholds, cheque rules, or reward rules changed during
+certification. The verdict the gate produced is the one the product ships.

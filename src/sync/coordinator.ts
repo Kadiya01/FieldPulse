@@ -15,6 +15,9 @@ const LOCK_RENEW_INTERVAL = LOCK_TTL / 3;
 
 const SYNC_CHANNEL = new BroadcastChannel('fieldpulse_sync_channel');
 
+/** The pending armRetryTimer() wake-up, or null when nothing is waiting. */
+let retryTimer: number | null = null;
+
 let isSyncRunning = false;
 let myHolderId = crypto.randomUUID();
 
@@ -74,7 +77,16 @@ async function attemptSync() {
   if (isSyncRunning) return;
 
   const acquired = await acquireLock();
-  if (!acquired) return; // Another tab is the coordinator
+  if (!acquired) {
+    // Another tab, or a previous document of this tab, is the coordinator. The
+    // lease expires by itself (or the holder extends it), so instead of walking
+    // away for good, wake up once the lease lapses and try again. Without this
+    // the app was a one-shot waker: a reload that landed mid-upload killed the
+    // realm that held the lease, and nothing ever synced again — the queue only
+    // moved once the user happened to reopen the app or hit Sync now.
+    await wakeWhenLeaseFree();
+    return;
+  }
 
   isSyncRunning = true;
   try {
@@ -89,7 +101,71 @@ async function attemptSync() {
   } finally {
     isSyncRunning = false;
     await releaseLock();
+
+    // Whatever could not go now is either done or waiting for its backoff, and
+    // the backoff has to end in something that actually tries again.
+    await armRetryTimer();
   }
+}
+
+/**
+ * Wake the queue up when the network comes back.
+ *
+ * `processQueue()` gives up as soon as `navigator.onLine` is false, and the
+ * browser fires `online` at the moment that flips back. Without this listener
+ * the only thing that could retry a queued capture was the agent reopening the
+ * app or pressing Sync now — which is precisely the manual step the queue exists
+ * to remove.
+ */
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    void attemptSync();
+  });
+}
+
+/**
+ * Arm a single timer for the earliest capture still waiting on its backoff.
+ *
+ * `scheduleRetry()` records `next_retry_at`, and without a clock attached to it
+ * that timestamp is only ever read by the next flush — so a capture that failed
+ * once sat in RETRY_WAIT until something unrelated woke the coordinator. The
+ * first attempt after a restart fails this way routinely: the access token is
+ * memory-only, so the upload comes back 401 and is scheduled rather than sent.
+ *
+ * One timer for the whole queue, not one per record: the coordinator picks the
+ * oldest eligible record itself, and re-arming on completion means a queue of a
+ * hundred captures still costs one timer. Tabs that are not the coordinator
+ * arm it too and lose the lock race, which is the same outcome as not arming it.
+ */
+async function armRetryTimer(): Promise<void> {
+  if (typeof window === 'undefined') return;
+
+  const waiting = await db.submissions
+    .filter((sub) => sub.status === 'RETRY_WAIT')
+    .first();
+
+  if (!waiting) {
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+
+    return;
+  }
+
+  // Never sleep past the largest backoff the scheduler can produce, so a record
+  // whose timer was dropped by a suspended tab still gets retried on wake.
+  const delay = Math.min(
+    Math.max(waiting.next_retry_at - Date.now(), 250),
+    60_000
+  );
+
+  if (retryTimer !== null) window.clearTimeout(retryTimer);
+
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null;
+    void attemptSync();
+  }, delay);
 }
 
 /**
@@ -164,6 +240,42 @@ async function acquireLock(): Promise<boolean> {
     }
     return false;
   });
+}
+
+/**
+ * Wake `attemptSync` again once the current holder's lease lapses.
+ *
+ * Called only from the `!acquired` exit of `attemptSync`, so this tab lost a
+ * fair race against a live coordinator, or is following on from a coordinator
+ * that was destroyed mid-run and never released the lease. Either way the way
+ * forward is to stop stepping on the holder's toes and try again when the lease
+ * can no longer protect it — then the lock check, not a heuristic, decides who
+ * actually owns the queue.
+ *
+ * The timer is deliberately one-shot: the next `attemptSync` re-arms it only if
+ * the lease is still busy, so a tab that is not the coordinator polls once per
+ * lease generation rather than hammering the table.
+ */
+async function wakeWhenLeaseFree(): Promise<void> {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const lock = await db.sync_lock.get(SYNC_LOCK_ID);
+
+  if (!lock) {
+    void attemptSync();
+    return;
+  }
+
+  const wait = Math.min(
+    Math.max(lock.expires_at - Date.now() + 250, 250),
+    60_000
+  );
+
+  window.setTimeout(() => {
+    void attemptSync();
+  }, wait);
 }
 
 async function releaseLock() {

@@ -408,20 +408,43 @@ export async function logout(): Promise<void> {
 export type RestoreResult =
   | { status: 'authenticated'; agent: SessionAgent | null }
   | { status: 'anonymous' }
+  | { status: 'offline' }
   | { status: 'unregistered' };
 
 /**
  * Rebuild the in-memory session from the refresh cookie on page load.
  *
  * The access token is not persisted, so every reload starts with nothing and
- * has to ask the server who it is. Three outcomes, and the distinction matters:
- * a live session is usable, no session means the login screen, and a registered
+ * has to ask the server who it is. Four outcomes, and the distinction matters:
+ * a live session is usable, no session means the login screen, a registered
  * server session with no local private key means the browser cleared it and the
  * device must be re-registered — which is a different screen, because the
- * user's credentials are still perfectly good.
+ * user's credentials are still perfectly good — and a network failure means the
+ * question could not be asked at all.
+ *
+ * That last one used to be reported as "anonymous", which threw away the single
+ * most important thing the app can offer with no network: the captures already
+ * queued on this handset. Sending the agent to the login screen because the
+ * server was unreachable means they cannot see, or even confirm, the evidence
+ * they just took, and the queue they are told will upload itself is exactly what
+ * they lose. A session that could not be checked is not a session that has
+ * ended, so it is reported on its own and the app lets the agent through with no
+ * identity. Nothing is granted: the access token stays empty, so the first
+ * request after the network returns still gets a 401, still refreshes, and
+ * still carries a signature.
  */
 export async function restoreSession(): Promise<RestoreResult> {
-  const response = await fetch(`${API_BASE}/auth/refresh.php`, { method: 'POST' });
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE}/auth/refresh.php`, { method: 'POST' });
+  } catch {
+    // fetch only rejects when the request never reached the server. An answer,
+    // any answer, is handled below.
+    setAccessToken(null);
+
+    return { status: 'offline' };
+  }
 
   if (!response.ok) {
     setAccessToken(null);

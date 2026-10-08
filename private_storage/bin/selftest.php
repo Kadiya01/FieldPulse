@@ -936,6 +936,43 @@ $t->test('a malformed JWK is refused', function (TestRunner $t): void {
     ]), null, 'coordinates must be base64url');
 });
 
+$t->test('a JWK as WebCrypto exports it is accepted', function (TestRunner $t) use ($makeKey): void {
+    /*
+     * The shape a browser actually sends.
+     *
+     * This test exists because of a defect it would have caught: the allowlist
+     * omitted the optional RFC 7517 members `ext` and `key_ops`, which
+     * `crypto.subtle.exportKey('jwk', publicKey)` includes on every engine, so
+     * device registration failed in a real browser while every suite passed —
+     * they all built their JWKs by hand and left those two members out.
+     *
+     * The regression is in both directions: the browser's shape must be accepted,
+     * and `d` must still be refused, since allowing the harmless members is only
+     * safe while the dangerous one keeps its hard rejection.
+     */
+    [, $exported] = $makeKey();
+
+    // A real key's coordinates, carrying the two members a browser adds on export.
+    $browserJwk = $exported + ['ext' => true, 'key_ops' => ['verify']];
+
+    $normalised = \FieldPulse\Security\Jwk::validatePublicJwk($browserJwk);
+
+    $t->assertSame('EC', $normalised['kty']);
+    $t->assertSame('P-256', $normalised['crv']);
+
+    // Neither member is secret or trusted, so neither is kept.
+    $t->assertFalse(array_key_exists('ext', $normalised), 'ext must not be persisted');
+    $t->assertFalse(array_key_exists('key_ops', $normalised), 'key_ops must not be persisted');
+
+    $t->assertThrows(static fn () => \FieldPulse\Security\Jwk::validatePublicJwk(
+        $browserJwk + ['d' => \FieldPulse\Support\Str::base64UrlEncode(str_repeat("\x33", 32))]
+    ), null, 'a private key member must still be a hard rejection');
+
+    $t->assertThrows(static fn () => \FieldPulse\Security\Jwk::validatePublicJwk(
+        $browserJwk + ['something_else' => 'x']
+    ), null, 'an unknown member must still be rejected');
+});
+
 $t->test('a signature from the matching key verifies', function (TestRunner $t) use ($makeKey): void {
     [$key, $jwk] = $makeKey();
 

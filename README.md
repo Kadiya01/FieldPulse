@@ -283,6 +283,17 @@ php private_storage/bin/brand_assets.php --check    # icons and colours match th
 php private_storage/bin/db_matrix.php
 ```
 
+Or run all of it — five tiers, fresh database, real browser and both engines,
+from one command:
+
+```bash
+php private_storage/bin/release_gate.php --httpd=/path/to/apache/bin/httpd
+```
+
+The gate prints every tier's result and exits non-zero on any failure; a PASS
+line at the end is the certification. The record of the last run is in
+[docs/RELEASE.md](docs/RELEASE.md).
+
 `db_matrix.php` applies every migration from scratch and runs the
 database-facing suites per engine. A cell only reads PASS if migrations applied
 *and* the healthcheck is clean *and* the suites are green, and the exit code is
@@ -315,7 +326,7 @@ Two things about running these by hand, both discovered the hard way:
   fails on certificate loading and it looks like a code fault.
 
 Supported engines are MySQL **8.0.3 or later** (tested on 8.0.40) and MariaDB
-**10.11 or later** (tested on 10.11.9). MariaDB 10.3–10.10 is not claimed; the
+**10.11 or later** (tested on 11.4.13). MariaDB 10.3–10.10 is not claimed; the
 `SKIP LOCKED` fallback exists, but those versions are not in the matrix.
 
 ## Deploying to cPanel
@@ -349,6 +360,7 @@ pairing-code workflow, are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). In short
 | [docs/VERIFICATION.md](docs/VERIFICATION.md) | All fourteen pipeline steps, every threshold, and what the pipeline cannot prove |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | cPanel install, `.htaccess`, cron, secrets, the database matrix |
 | [docs/PRODUCTION_AUDIT.md](docs/PRODUCTION_AUDIT.md) | The original hardening pass, kept for what it found |
+| [docs/RELEASE.md](docs/RELEASE.md) | The release gate: what it runs, and the last certification |
 
 ## Limitations
 

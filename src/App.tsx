@@ -8,6 +8,7 @@ import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
 import Layout from './components/Layout';
 import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
+import { triggerSync } from './sync/coordinator';
 import { SessionContext, useSessionValue } from './auth/sessionContext';
 
 type Gate = 'checking' | 'ready' | 'login' | 'unregistered';
@@ -44,11 +45,37 @@ export default function App() {
           return;
         }
         setAgent(result.status === 'authenticated' ? result.agent : null);
+
+        if (result.status === 'offline') {
+          // The session could not be checked because the server could not be
+          // reached, which says nothing about whether the agent is signed in.
+          // The app opens with no identity and no token — nothing is granted,
+          // and the first request once the network returns still has to
+          // authenticate — but the captures already queued on this handset stay
+          // visible, which is the whole point of a queue that is supposed to
+          // survive going offline.
+          setGate('ready');
+
+          // A no-op while the network is down, and the thing that starts the
+          // queue moving again once it is not.
+          void triggerSync();
+
+          return;
+        }
+
         setGate(
           result.status === 'authenticated' ? 'ready'
             : result.status === 'unregistered' ? 'unregistered'
             : 'login'
         );
+
+        // A capture taken before the last reload is still on this handset
+        // waiting for the connection it could not get. Opening the app is the
+        // signal that it is worth trying again, and waiting for the agent to
+        // notice a queue that is supposed to empty itself is not a design.
+        if (result.status === 'authenticated') {
+          void triggerSync();
+        }
       })
       .catch(() => {
         if (live) {
