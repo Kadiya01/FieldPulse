@@ -4,7 +4,8 @@ import {
   Database,
   Trophy,
   Award,
-  ClipboardCheck
+  ClipboardCheck,
+  UserCog
 } from 'lucide-react';
 
 /**
@@ -19,7 +20,7 @@ import {
  * Split out from `Layout` so that asking "which links exist, for whom" does not
  * have to load the sign-out path and the request helpers behind it.
  */
-export default function SiteNav({ isOperator }: { isOperator: boolean }) {
+export default function SiteNav({ isOperator, isAdmin }: { isOperator: boolean; isAdmin: boolean }) {
   const items = [
     { to: '/', label: 'Capture', icon: Camera, end: true },
     { to: '/queue', label: 'Queue', icon: Database, end: false },
@@ -32,6 +33,10 @@ export default function SiteNav({ isOperator }: { isOperator: boolean }) {
 
   if (isOperator) {
     items.push({ to: '/reviews', label: 'Reviews', icon: ClipboardCheck, end: false });
+  }
+
+  if (isAdmin) {
+    items.push({ to: '/admin', label: 'Admin', icon: UserCog, end: false });
   }
 
   return (

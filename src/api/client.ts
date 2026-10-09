@@ -614,6 +614,124 @@ export async function decideReview(
 }
 
 /**
+ * The account directory (§16).
+ *
+ * ADMIN-only on the server (`Kernel`.requireAdmin)); anyone else receives 403.
+ * The list is served from the `agents` table with the handful of summary
+ * columns the directory needs, and every field here is presentation — the
+ * privilege checks all happen against the database row on each call.
+ */
+export type AdminAgentRole = 'AGENT' | 'SUPERVISOR' | 'ADMIN';
+export type AdminAgentStatus = 'ACTIVE' | 'SUSPENDED' | 'DELETED';
+
+export interface AdminAgent {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  role: AdminAgentRole;
+  status: AdminAgentStatus;
+  /** The login username, when the account has one. Null after credential revoke/retire. */
+  username: string | null;
+  has_credential: boolean;
+  active_device_count: number;
+  created_at: string;
+}
+
+export interface AdminAgentList {
+  agents: AdminAgent[];
+  meta: {
+    pagination: { total: number; limit: number; offset: number };
+    active_admins: number;
+    requested_by: string;
+  };
+}
+
+/**
+ * Fetch the account directory.
+ *
+ * The caller identifies itself in `meta.requested_by`, which the GUI uses to
+ * disable the self-guarded actions the server would refuse anyway — a nuance
+ * worth surfacing as disabled controls rather than as 409s.
+ */
+export async function fetchAdminAgents(limit = 50, offset = 0): Promise<AdminAgentList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await authenticatedFetch(`/admin/agents.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAgent[]; meta: AdminAgentList['meta'] };
+  return { agents: envelope.data, meta: envelope.meta };
+}
+
+export interface CreateAdminAgentInput {
+  agent_code: string;
+  full_name: string;
+  username: string;
+  password: string;
+  /** Optional; the server defaults a new account to AGENT. */
+  role?: AdminAgentRole;
+  /** An IMEI to bind at create time; optional and administrative, never a credential. */
+  imei?: string;
+}
+
+/**
+ * Create an account.
+ *
+ * A created account always lands ACTIVE with a credential, so the person can
+ * sign in on the first try — a created account is a promise to a person, not a
+ * draft. Duplicate code or username answers 409 IDEMPOTENCY_CONFLICT; the UI
+ * shows the server's message rather than pre-checking, because the two rows can
+ * collide with a concurrent create.
+ */
+export async function createAdminAgent(input: CreateAdminAgentInput): Promise<AdminAgent> {
+  const response = await authenticatedFetch('/admin/agents.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAgent };
+  return envelope.data;
+}
+
+/** The four state-changing actions the directory supports. */
+export type AdminAgentAction =
+  | { action: 'SET_ROLE'; role: AdminAgentRole }
+  | { action: 'SET_STATUS'; status: 'ACTIVE' | 'SUSPENDED' | 'DELETED' }
+  | { action: 'SET_PASSWORD'; password: string }
+  | { action: 'REVOKE_CREDENTIAL' };
+
+/**
+ * Apply one state-changing action to an account.
+ *
+ * The server refuses four things with 409 STATE_CONFLICT that the GUI mirrors
+ * as disabled controls: acting on yourself (except password reset), demoting /
+ * suspending / retiring the last active administrator, and touching a retired
+ * account at all. A 409 is still surfaced verbatim when one slips through,
+ * because a role revoked in another tab since this one loaded is a real state.
+ */
+export async function actOnAdminAgent(id: number, patch: AdminAgentAction): Promise<AdminAgent> {
+  const response = await authenticatedFetch('/admin/agent.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, ...patch })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAgent };
+  return envelope.data;
+}
+
+/**
  * Rewards (§14).
  *
  * A published entitlement, not a live figure. Every number here was copied onto

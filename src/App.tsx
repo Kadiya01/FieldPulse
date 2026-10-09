@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
+import AdminPage from './pages/AdminPage';
 import Layout from './components/Layout';
 import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
 import { triggerSync } from './sync/coordinator';
@@ -165,6 +166,13 @@ export default function App() {
             role revoked server-side should not leave a stale screen.
           */}
           <Route path="/reviews" element={<ReviewsPage />} />
+          {/*
+            The account directory is mounted for every authenticated session and
+            the page checks `isAdmin` itself, exactly like Reviews. An
+            administrator demoted server-side since this tab loaded must land on
+            a "no longer admin" panel, not on stale controls.
+          */}
+          <Route path="/admin" element={<AdminPage />} />
         </Route>
 
         <Route

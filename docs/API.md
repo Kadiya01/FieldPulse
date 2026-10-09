@@ -47,6 +47,8 @@ leaves an agent staring at a form that refuses to say which box is wrong.
 | `FORBIDDEN` | 403 | Authenticated, but not permitted |
 | `RATE_LIMITED` | 429 | Too many attempts; see `Retry-After` |
 | `IDEMPOTENCY_CONFLICT` | 409 | `submission_uuid` belongs to another agent |
+| `STATE_CONFLICT` | 409 | The row is in a state that forbids the change |
+| `UNKNOWN_AGENT` | 404 | No such agent row |
 | `FILE_HASH_MISMATCH` | 422 | Uploaded bytes ≠ signed `file_sha256` |
 | `FILE_TOO_LARGE` | 413 | Over `MAX_UPLOAD_BYTES` |
 | `UNSUPPORTED_MEDIA` | 415 | Not `multipart/form-data` |
@@ -122,6 +124,9 @@ uses a bearer header, which a browser will not attach cross-origin.
 | GET | `/api/v1/rewards/self.php` | bearer, own entitlements only |
 | GET | `/api/v1/rewards/index.php` | operator |
 | POST | `/api/v1/rewards/decide.php` | operator |
+| GET | `/api/v1/admin/agents.php` | admin |
+| POST | `/api/v1/admin/agents.php` | admin |
+| POST | `/api/v1/admin/agent.php` | admin |
 
 Every path is the literal file on disk, `.php` suffix included. There is no
 extensionless rewrite in `.htaccess`, so `/api/v1/auth/login` is a 404 and not a
@@ -526,6 +531,123 @@ record the acting operator. They reference `agents(id)` — this deployment has 
 identity concept, an agent row holding a supervisor or admin role — and they are
 deliberately not named `*_by_agent_id`, which next to `agent_id` (the recipient)
 would read as though the payee had approved their own payment.
+
+---
+
+### GET /api/v1/admin/agents.php  ·  POST /api/v1/admin/agents.php
+### POST /api/v1/admin/agent.php
+
+Administrator-only (`ADMIN`). A `SUPERVISOR` or `AGENT` receives `403 FORBIDDEN`,
+and an unauthenticated caller `401 UNAUTHENTICATED`. The gate is the Kernel's
+`admin` requirement, declared in one table beside the operator one, so a
+controller mistake cannot leave the surface open.
+
+#### GET `/api/v1/admin/agents.php`
+
+The account directory. Query: `limit` (1–200, default 50), `offset` (default 0).
+
+```json
+{
+  "data": [
+    {
+      "id": 3,
+      "agent_code": "AG-001",
+      "full_name": "Ada Lovelace",
+      "role": "ADMIN",
+      "status": "ACTIVE",
+      "username": "mpadmin",
+      "has_credential": true,
+      "active_device_count": 1,
+      "created_at": "2026-09-28 09:41:05"
+    }
+  ],
+  "meta": {
+    "pagination": { "total": 12, "limit": 50, "offset": 0 },
+    "active_admins": 2,
+    "requested_by": "AG-001"
+  }
+}
+```
+
+`username` is `null` and `has_credential` is `false` once a credential has been
+revoked or the account retired. `active_device_count` counts bound devices that
+are not revoked, so it is the number that matters for "can this person still get
+in". `meta.requested_by` is the caller's own `agent_code` and `meta.active_admins`
+the count the last-admin guard is applied against; a client uses both to disable
+the controls the server would refuse, rather than offering a button that 409s.
+
+#### POST `/api/v1/admin/agents.php`
+
+Creates an account. It always lands `ACTIVE` with a credential, so the person can
+sign in on the first try — a created account is a promise to a person, not a
+draft. `role` and `imei` are optional; `role` defaults to `AGENT`.
+
+```json
+{
+  "agent_code": "AG-012",
+  "full_name": "Grace Hopper",
+  "username": "grace",
+  "password": "…",
+  "role": "AGENT",
+  "imei": "…"
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `201` | Created; body is `{ "data": <agent> }` in the directory shape above |
+| `409` | `IDEMPOTENCY_CONFLICT` — `agent_code` or `username` already in use |
+| `422` | `VALIDATION_FAILED` — bad format, or an unknown field in the body |
+
+`agent_code` is 2–64 characters of `A–Z a–z 0–9 . _ -`; `username` is 3–64 of the
+same with at least one letter (so an all-digit, IMEI-shaped username cannot be
+chosen); `password` is 8–128 characters with at least one letter and one digit.
+The field list is an allowlist, so an unknown key — including one that tried to
+set `status` directly — is rejected with `422`, not dropped. `imei` is stored as
+an administrative note only and is never an authentication factor.
+
+#### POST `/api/v1/admin/agent.php`
+
+Applies one state-changing action to one account. The body always carries the
+target `id` and an `action`; the rest depends on the action, and anything outside
+that action's own field list is a `422`.
+
+```json
+{ "id": 12, "action": "SET_ROLE",          "role": "SUPERVISOR" }
+{ "id": 12, "action": "SET_STATUS",        "status": "SUSPENDED" }
+{ "id": 12, "action": "SET_PASSWORD",      "password": "…" }
+{ "id": 12, "action": "REVOKE_CREDENTIAL" }
+```
+
+`SET_STATUS` accepts `ACTIVE`, `SUSPENDED` or `DELETED`. `DELETED` is retirement:
+devices and credential are revoked, the `DELETED` status is terminal, and the row
+and its history survive for compliance. Any transition away from `ACTIVE` revokes
+the account's devices, so a token that outlived the account stops working on its
+next request.
+
+Each call returns the updated account as `{ "data": <agent> }`, in the same shape
+as the directory.
+
+**Two guards, both `409 STATE_CONFLICT`.** An administrator cannot re-role,
+suspend, retire or revoke their **own** account — changing your own password is
+the one allowed self-action, because it locks nothing. And the last remaining
+active administrator cannot be demoted, suspended or retired. The first is what
+makes the second unreachable through the API (the actor is always an active
+admin, so at least one remains), but both are enforced against the current row on
+every call, so neither depends on the other holding.
+
+`404 UNKNOWN_AGENT` means the `id` does not exist. `409` also covers a change to a
+retired account, which is immutable. `403` means the caller is not an `ADMIN`.
+
+Every action appends an immutable audit row: `admin.agent.created`,
+`admin.agent.role_changed`, `admin.agent.suspended`, `admin.agent.reinstated`,
+`admin.agent.retired`, `admin.agent.password_reset` or
+`admin.agent.credential_revoked`.
+
+**Suspension and retirement are not distinguishable at login.** Any non-`ACTIVE`
+account returns the same `401 UNAUTHENTICATED` as a wrong password, for the same
+reason every login failure is byte-identical: the response must not become an
+account-status oracle.
 
 ---
 

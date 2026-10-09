@@ -163,6 +163,19 @@ describe('route table and navigation agree', () => {
     expect(read('pages/ReviewsPage.tsx')).toContain('isOperator');
   });
 
+  it('has exactly one account route, and it is admin-only', () => {
+    // Same reasoning as the review route: one declaration, one nav entry, and a
+    // page that checks the role itself rather than trusting the link's absence.
+    const occurrences = (source: string, pattern: RegExp): number =>
+      [...source.matchAll(pattern)].length;
+
+    expect(occurrences(appSource, /path="\/admin"/g)).toBe(1);
+    expect(occurrences(navSource, /to: '\/admin'/g)).toBe(1);
+
+    expect(appSource).toMatch(/AdminPage/);
+    expect(read('pages/AdminPage.tsx')).toContain('isAdmin');
+  });
+
   it('sends an unknown path to the capture screen rather than a blank page', () => {
     // A client-side route that falls through to nothing renders an empty
     // document, which an agent reports as "the app is broken".

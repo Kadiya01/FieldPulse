@@ -38,6 +38,8 @@ final class Kernel
         'rewards.self'     => \FieldPulse\Domain\RewardController::class,
         'rewards.index'    => \FieldPulse\Domain\RewardController::class,
         'rewards.decide'   => \FieldPulse\Domain\RewardController::class,
+        'admin.agents'     => \FieldPulse\Domain\AdminAgentController::class,
+        'admin.agent'      => \FieldPulse\Domain\AdminAgentController::class,
     ];
 
     /**
@@ -59,6 +61,11 @@ final class Kernel
      *   bearer     access JWT, plus a live agent and ACTIVE device
      *   signed     bearer, plus a valid device signature over this request
      *   operator   bearer, plus SUPERVISOR or ADMIN role
+     *   admin      bearer, plus the ADMIN role only. User administration is a
+     *              single-role privilege: the access it grants (suspend, retire,
+     *              re-role) can lock other people out, so allowing every
+     *              SUPERVISOR to hold it would be one misassigned role away
+     *              from a hostile supervisor.
      *
      * device.register is `bootstrap`, not `public`. It was public while login
      * was IMEI-based, because a first-time pairing had to happen before the
@@ -85,6 +92,8 @@ final class Kernel
         'rewards.self'     => 'bearer',
         'rewards.index'    => 'operator',
         'rewards.decide'   => 'operator',
+        'admin.agents'     => 'admin',
+        'admin.agent'      => 'admin',
     ];
 
     private static bool $booted = false;
@@ -345,6 +354,10 @@ final class Kernel
         if ($requirement === 'operator') {
             self::assertOperator($context, $route);
         }
+
+        if ($requirement === 'admin') {
+            self::assertAdmin($context, $route);
+        }
     }
 
     /**
@@ -367,6 +380,29 @@ final class Kernel
             ]);
 
             throw new ApiException(403, ErrorCode::FORBIDDEN, 'Supervisor access is required.');
+        }
+    }
+
+    /**
+     * ADMIN-only endpoints.
+     *
+     * The check mirrors assertOperator() but with a single role. The agent row
+     * is re-read from the database on every request (see Authenticator), so a
+     * role change takes effect immediately and cannot be papered over by a
+     * token issued before the demotion.
+     */
+    private static function assertAdmin(\FieldPulse\Security\AuthContext $context, string $route): void
+    {
+        $role = (string) ($context->agent()['role'] ?? 'AGENT');
+
+        if ($role !== 'ADMIN') {
+            Logger::channel('app')->warning('request.rejected_non_admin', [
+                'route' => $route,
+                'agent' => $context->agentCode(),
+                'role'  => $role,
+            ]);
+
+            throw new ApiException(403, ErrorCode::FORBIDDEN, 'Administrator access is required.');
         }
     }
 

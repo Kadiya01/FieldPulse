@@ -20,7 +20,7 @@ import { logout } from '../api/client';
  * Capture, so nothing in the UI led anywhere except back to the start.
  */
 export default function Layout() {
-  const { isOperator, label } = useSession();
+  const { isOperator, isAdmin, label } = useSession();
   const online = useOnlineStatus();
 
   return (
@@ -58,7 +58,7 @@ export default function Layout() {
         </div>
 
         <div className="max-w-3xl mx-auto px-2 pb-1">
-          <SiteNav isOperator={isOperator} />
+          <SiteNav isOperator={isOperator} isAdmin={isAdmin} />
         </div>
       </header>
 

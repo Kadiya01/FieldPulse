@@ -362,6 +362,46 @@ final class Validator
     }
 
     /**
+     * A password chosen by an administrator, not by a login form.
+     *
+     * This is stricter than the operator CLI's "non-empty" floor on purpose:
+     * the CLI runs from a shell where the typist is responsible for the policy,
+     * but a password set through the admin API is entered into a web form and
+     * is handed to the agent on a slip of paper. Enforcing length and shape here
+     * keeps the setter from becoming a way to mint trivially guessable
+     * credentials at scale.
+     *
+     * 8-128 characters, with at least one letter and at least one digit. No
+     * character-class rule is imposed — a passphrase of lowercase words and a
+     * single digit is far stronger than "aA1!abc" — and 128 keeps the bound
+     * inside the bcrypt (72-byte) safe zone for a hash we store whole.
+     */
+    public static function password(mixed $value, string $field = 'password'): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation('Field "' . $field . '" is required.', ['field' => $field]);
+        }
+
+        $password = (string) $value;
+
+        if (mb_strlen($password) < 8 || mb_strlen($password) > 128) {
+            throw ApiException::validation(
+                'Field "' . $field . '" must be between 8 and 128 characters.',
+                ['field' => $field, 'min' => 8, 'max' => 128]
+            );
+        }
+
+        if (preg_match('/[A-Za-z]/', $password) !== 1 || preg_match('/[0-9]/', $password) !== 1) {
+            throw ApiException::validation(
+                'Field "' . $field . '" must contain at least one letter and one digit.',
+                ['field' => $field]
+            );
+        }
+
+        return $password;
+    }
+
+    /**
      * Reject any field outside the contract.
      *
      * Throws rather than logging, despite the name looking like a soft check.

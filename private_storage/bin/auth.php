@@ -1698,6 +1698,8 @@ $t->test('no executable code treats an IMEI as a credential', function (TestRunn
         'Database/AgentRepository.php' => 'administrative',
         // The column, when writing or reading a device row.
         'Database/DeviceRepository.php' => 'administrative',
+        // The administrative enrolment write from the account-management UI.
+        'Domain/AdminAgentController.php' => 'administrative',
         // Shown to a reviewer so a disputed device can be identified. Operator
         // only, and a display concern rather than an identity decision.
         'Database/ReviewRepository.php' => 'display',

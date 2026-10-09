@@ -5,7 +5,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom';
 import SiteNav from './SiteNav';
-import { isOperatorRole } from '../auth/roles';
+import { isOperatorRole, isAdminRole } from '../auth/roles';
 
 /**
  * The navigation as it is drawn, not as the router would match it.
@@ -28,34 +28,38 @@ import { isOperatorRole } from '../auth/roles';
  * does — the route changes and the placeholder screen is what comes up — instead
  * of asserting on an `href` that no router ever had to resolve.
  */
-function Chrome({ isOperator }: { isOperator: boolean }) {
+function Chrome({ isOperator, isAdmin }: { isOperator: boolean; isAdmin: boolean }) {
   return (
     <>
-      <SiteNav isOperator={isOperator} />
+      <SiteNav isOperator={isOperator} isAdmin={isAdmin} />
       <Outlet />
     </>
   );
 }
 
-function renderNav(isOperator: boolean, initialPath = '/') {
+function renderNav(flags: { isOperator: boolean; isAdmin: boolean }, initialPath = '/') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
-        <Route element={<Chrome isOperator={isOperator} />}>
+        <Route element={<Chrome isOperator={flags.isOperator} isAdmin={flags.isAdmin} />}>
           <Route path="/" element={<p>Capture screen</p>} />
           <Route path="/queue" element={<p>Queue screen</p>} />
           <Route path="/leaderboard" element={<p>Leaderboard screen</p>} />
           <Route path="/rewards" element={<p>Rewards screen</p>} />
           <Route path="/reviews" element={<p>Reviews screen</p>} />
+          <Route path="/admin" element={<p>Admin screen</p>} />
         </Route>
       </Routes>
     </MemoryRouter>
   );
 }
 
+const neither = { isOperator: false, isAdmin: false } as const;
+const admin = { isOperator: true, isAdmin: true } as const;
+
 describe('primary navigation', () => {
   it('names itself, so a screen reader can skip past it', () => {
-    renderNav(false);
+    renderNav(neither);
 
     // Without a name this is the first `navigation` landmark on the page and gets
     // announced as such; with one it is distinguishable from the region landmarks.
@@ -66,9 +70,10 @@ describe('primary navigation', () => {
     ['Queue', /queue/i, 'Queue screen'],
     ['Leaderboard', /leaderboard/i, 'Leaderboard screen'],
     ['Rewards', /rewards/i, 'Rewards screen'],
-    ['Reviews', /reviews/i, 'Reviews screen']
+    ['Reviews', /reviews/i, 'Reviews screen'],
+    ['Admin', /admin/i, 'Admin screen']
   ])('navigates to %s', async (_name, linkName, expected) => {
-    renderNav(true);
+    renderNav(admin);
 
     await userEvent.click(screen.getByRole('link', { name: linkName }));
 
@@ -76,7 +81,7 @@ describe('primary navigation', () => {
   });
 
   it('navigates back to Capture from another screen', async () => {
-    renderNav(false, '/queue');
+    renderNav(neither, '/queue');
 
     await userEvent.click(screen.getByRole('link', { name: /capture/i }));
 
@@ -84,7 +89,7 @@ describe('primary navigation', () => {
   });
 
   it('marks the current destination for assistive technology', () => {
-    renderNav(true, '/leaderboard');
+    renderNav(neither, '/leaderboard');
 
     const current = screen.getByRole('link', { current: 'page' });
     expect(current).toHaveTextContent(/leaderboard/i);
@@ -93,7 +98,7 @@ describe('primary navigation', () => {
   it('does not mark a destination merely because it shares a prefix', () => {
     // `/` is a prefix of every path. Without `end`, Capture would report itself
     // active on every screen and the tab bar would lie about where the user is.
-    renderNav(false, '/queue');
+    renderNav(neither, '/queue');
 
     expect(screen.getByRole('link', { name: /capture/i })).not.toHaveAttribute('aria-current');
     expect(screen.getByRole('link', { current: 'page' })).toHaveTextContent(/queue/i);
@@ -104,13 +109,13 @@ describe('review queue link', () => {
   // Driven through `isOperatorRole` rather than a literal `true`, so these fail
   // if the role names and the nav's condition ever drift apart.
   it('is offered to a supervisor', () => {
-    renderNav(isOperatorRole('SUPERVISOR'));
+    renderNav({ isOperator: isOperatorRole('SUPERVISOR'), isAdmin: isAdminRole('SUPERVISOR') });
 
     expect(screen.getByRole('link', { name: /reviews/i })).toBeInTheDocument();
   });
 
   it('is offered to an administrator', () => {
-    renderNav(isOperatorRole('ADMIN'));
+    renderNav({ isOperator: isOperatorRole('ADMIN'), isAdmin: isAdminRole('ADMIN') });
 
     expect(screen.getByRole('link', { name: /reviews/i })).toBeInTheDocument();
   });
@@ -118,21 +123,49 @@ describe('review queue link', () => {
   it('is not offered to an agent', () => {
     // Offering it to someone who will receive 403 teaches them the button is
     // broken. The check is presentation; `Kernel::assertOperator` is enforcement.
-    renderNav(isOperatorRole('AGENT'));
+    renderNav({ isOperator: isOperatorRole('AGENT'), isAdmin: isAdminRole('AGENT') });
 
     expect(screen.queryByRole('link', { name: /reviews/i })).not.toBeInTheDocument();
   });
 
   it('is not offered when the session identity is unknown', () => {
-    renderNav(isOperatorRole(undefined));
+    renderNav({ isOperator: isOperatorRole(undefined), isAdmin: isAdminRole(undefined) });
 
     expect(screen.queryByRole('link', { name: /reviews/i })).not.toBeInTheDocument();
   });
 });
 
+describe('account directory link', () => {
+  it('is offered to an administrator', () => {
+    renderNav({ isOperator: isOperatorRole('ADMIN'), isAdmin: isAdminRole('ADMIN') });
+
+    expect(screen.getByRole('link', { name: /admin/i })).toBeInTheDocument();
+  });
+
+  it('is not offered to a supervisor, who is an operator but not an admin', () => {
+    // The narrower gate is the point: a supervisor can review submissions but
+    // cannot manage accounts, and a link that 403s is worse than no link.
+    renderNav({ isOperator: isOperatorRole('SUPERVISOR'), isAdmin: isAdminRole('SUPERVISOR') });
+
+    expect(screen.queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
+  });
+
+  it('is not offered to an agent', () => {
+    renderNav({ isOperator: isOperatorRole('AGENT'), isAdmin: isAdminRole('AGENT') });
+
+    expect(screen.queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
+  });
+
+  it('is not offered when the session identity is unknown', () => {
+    renderNav({ isOperator: isOperatorRole(undefined), isAdmin: isAdminRole(undefined) });
+
+    expect(screen.queryByRole('link', { name: /admin/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('decoration', () => {
   it('hides every icon from assistive technology', () => {
-    renderNav(false);
+    renderNav(neither);
 
     // Each entry is icon plus word. An unlabelled icon is announced as an empty
     // image, so the accessible name must come from the text alone.

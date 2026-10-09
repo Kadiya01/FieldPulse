@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * POST /api/v1/auth/refresh.php
+ * GET /api/v1/admin/agents.php
  *
  * Three-line shim, described in Http\Kernel: resolve the application from
  * outside the document root, then hand the route name to the kernel. Keeping
@@ -33,4 +33,4 @@ if ($fpRoot === null) {
 require_once $fpRoot . '/private_storage/app/bootstrap.php';
 unset($fpDir, $fpRoot, $fpI, $fpParent);
 
-\FieldPulse\Http\Kernel::handle('auth.refresh');
+\FieldPulse\Http\Kernel::handle('admin.agents');
