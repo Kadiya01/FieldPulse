@@ -18,7 +18,9 @@ declare(strict_types=1);
  * it would be a lockout vector — the tool that removes the last administrator
  * is the one tool that must refuse to. This suite asserts the gate, the
  * lifecycle transitions, the terminality of retirement, and the guards that
- * keep the surface from locking itself out.
+ * keep the surface from locking itself out. It also covers the no-lockout
+ * class: issuing a device pairing code from the admin surface lets an agent
+ * (or a reinstated admin) bind a device without ever touching SSH.
  *
  * It runs over a real socket with real sessions (see Testing\HttpServer): the
  * ADMIN calling the tool must actually hold a device-bound ADMIN session, the
@@ -326,6 +328,13 @@ $secondAdmin  = $makeAgent('root2', 'ADMIN');
 $adminSession     = $enrol($admin);
 $supervisorToken  = $enrol($supervisor)['token'];
 $agentToken       = $enrol($agent)['token'];
+
+// A dedicated AGENT for the ISSUE_PAIRING_CODE gate check. The shared agent
+// fixture is suspended later in the run (which revokes its device), so its
+// token stops being a plain "wrong role" probe and starts failing with
+// DEVICE_REVOKED. This one is never touched by other groups.
+$pairGateAgent = $makeAgent('pairgate');
+$pairGateToken = $enrol($pairGateAgent)['token'];
 
 /* -- The gate -------------------------------------------------------------- */
 
@@ -646,6 +655,177 @@ $t->test('an unknown target is a 404, not a crash', function (TestRunner $t) use
 
     $t->assertSame(404, $r['status'], 'an unknown agent is a 404, got ' . $r['status']);
     $t->assertSame('UNKNOWN_AGENT', $errorCode($r), 'the code names the missing account');
+});
+
+/* -- Pairing codes ---------------------------------------------------------- */
+
+$t->group('pairing-code');
+
+$t->test('issuing a code returns it once, stores only its hash, and binds the first device', function (TestRunner $t) use (
+    $create, $update, $login, $makeKeyPair, $adminSession, $admin, $runTag, $baseUrl, $appUrl,
+    &$createdDeviceIds, $errorCode
+) {
+    $username = $runTag . '.pair';
+    $password = 'pair-pass-4921';
+
+    $created = $create($adminSession['token'], [
+        'agent_code' => $runTag . '-pair',
+        'full_name'  => 'Pairing Target',
+        'username'   => $username,
+        'password'   => $password,
+    ]);
+
+    $t->assertSame(201, $created['status'], 'the pairing target is created');
+    $t->assertSame(0, $created['body']['data']['active_device_count'] ?? -1, 'the target starts with no devices');
+
+    $id = (int) $created['body']['data']['id'];
+
+    $r = $update($adminSession['token'], [
+        'id'     => $id,
+        'action' => 'ISSUE_PAIRING_CODE',
+        'label'  => 'Field kit',
+    ]);
+
+    $t->assertSame(200, $r['status'], 'issuing succeeds, got ' . $r['status']);
+
+    $code = $r['body']['data']['pairing_code'] ?? null;
+    $t->assertTrue(is_string($code) && preg_match('/^\d{10}$/', $code) === 1, 'the response carries a 10-digit code');
+    $t->assertTrue(is_int($r['body']['data']['ttl_seconds'] ?? null), 'the response carries the TTL');
+    $t->assertTrue(is_string($r['body']['data']['expires_at'] ?? null), 'the response carries the expiry');
+    $t->assertSame($id, $r['body']['data']['id'] ?? null, 'the code rides on the presented account row');
+
+    $createdBy = Connection::fetchValue(
+        'SELECT created_by FROM pairing_codes WHERE agent_id = :id ORDER BY id DESC LIMIT 1',
+        ['id' => $id]
+    );
+    $t->assertSame($admin['agentCode'], $createdBy, 'the issuer is recorded on the row');
+
+    $storedHash = Connection::fetchValue(
+        'SELECT code_hash FROM pairing_codes WHERE agent_id = :id ORDER BY id DESC LIMIT 1',
+        ['id' => $id]
+    );
+    $t->assertSame(PairingCode::hash((string) $code), $storedHash, 'only the code hash is stored');
+
+    $label = Connection::fetchValue(
+        'SELECT label FROM pairing_codes WHERE agent_id = :id ORDER BY id DESC LIMIT 1',
+        ['id' => $id]
+    );
+    $t->assertSame('Field kit', $label, 'the optional label is stored');
+
+    $session = $login(['username' => $username, 'password' => $password]);
+    $t->assertSame(200, $session['result']['status'], 'the target logs in with its credential');
+
+    $keys       = $makeKeyPair();
+    $deviceUuid = Uuid::v4();
+
+    $reg = HttpServer::sendJson(
+        $baseUrl, $appUrl, 'POST', '/api/v1/device/register.php',
+        [
+            'device_uuid'    => $deviceUuid,
+            'public_key_jwk' => $keys['public'],
+            'pairing_code'   => (string) $code,
+        ],
+        (string) $session['token']
+    );
+
+    $t->assertSame(
+        200, $reg['status'],
+        'the issued code binds the first device, got ' . $reg['status'] . ' ' . $reg['raw']
+    );
+
+    $deviceId = (int) Connection::fetchValue('SELECT id FROM devices WHERE device_uuid = :u', ['u' => $deviceUuid]);
+    $t->assertTrue($deviceId > 0, 'the device row exists after registering with the code');
+
+    if ($deviceId > 0) {
+        $createdDeviceIds[] = $deviceId;
+    }
+
+    $consumed = Connection::fetchValue(
+        'SELECT consumed_at IS NOT NULL FROM pairing_codes WHERE agent_id = :id ORDER BY id DESC LIMIT 1',
+        ['id' => $id]
+    );
+    $t->assertSame(1, (int) $consumed, 'the registration consumes the code');
+});
+
+$t->test('issuing is gated: AGENTs are refused, non-active accounts are refused, bad fields are 422', function (TestRunner $t) use (
+    $create, $update, $adminSession, $pairGateToken, $pairGateAgent, $agent, $runTag, $errorCode
+) {
+    $forbidden = $update($pairGateToken, [
+        'id'     => $pairGateAgent['id'],
+        'action' => 'ISSUE_PAIRING_CODE',
+    ]);
+    $t->assertSame(403, $forbidden['status'], 'an AGENT cannot issue a code, got ' . $forbidden['status']);
+    $t->assertSame('FORBIDDEN', $errorCode($forbidden), 'the refusal is FORBIDDEN');
+
+    $suspend = $update($adminSession['token'], [
+        'id'     => $agent['id'],
+        'action' => 'SET_STATUS',
+        'status' => 'SUSPENDED',
+    ]);
+    $t->assertSame(200, $suspend['status'], 'the fixture is suspended for this test');
+
+    $refused = $update($adminSession['token'], [
+        'id'     => $agent['id'],
+        'action' => 'ISSUE_PAIRING_CODE',
+    ]);
+    $t->assertSame(409, $refused['status'], 'a suspended account is refused a code, got ' . $refused['status']);
+    $t->assertSame('STATE_CONFLICT', $errorCode($refused), 'the refusal is a state conflict');
+
+    $reinstate = $update($adminSession['token'], [
+        'id'     => $agent['id'],
+        'action' => 'SET_STATUS',
+        'status' => 'ACTIVE',
+    ]);
+    $t->assertSame(200, $reinstate['status'], 'the fixture is reinstated for later groups');
+
+    // A self-contained already-retired account (independent of the retire
+    // group, so the assertion holds even when this group runs alone).
+    $username = $runTag . '.dead';
+    $created = $create($adminSession['token'], [
+        'agent_code' => $runTag . '-dead',
+        'full_name'  => 'Already Retired',
+        'username'   => $username,
+        'password'   => 'dead-pass-4921',
+    ]);
+    $t->assertSame(201, $created['status'], 'a retirement fixture is created');
+    $retireId = (int) $created['body']['data']['id'];
+
+    $retiredStatus = $update($adminSession['token'], [
+        'id'     => $retireId,
+        'action' => 'SET_STATUS',
+        'status' => 'DELETED',
+    ]);
+    $t->assertSame(200, $retiredStatus['status'], 'the retirement fixture is retired');
+
+    $retired = $update($adminSession['token'], [
+        'id'     => $retireId,
+        'action' => 'ISSUE_PAIRING_CODE',
+    ]);
+    $t->assertSame(
+        409, $retired['status'],
+        'a retired account is refused through the immutable guard, got ' . $retired['status']
+    );
+    $t->assertSame('STATE_CONFLICT', $errorCode($retired), 'the refusal is a state conflict');
+
+    $unknown = $update($adminSession['token'], [
+        'id'     => $agent['id'],
+        'action' => 'ISSUE_PAIRING_CODE',
+        'ttl'    => 9999,
+    ]);
+    $t->assertSame(422, $unknown['status'], 'an unknown field is refused, got ' . $unknown['status']);
+});
+
+$t->test('an admin may issue a pairing code for their own account', function (TestRunner $t) use ($update, $adminSession, $admin) {
+    $r = $update($adminSession['token'], [
+        'id'     => $admin['id'],
+        'action' => 'ISSUE_PAIRING_CODE',
+    ]);
+
+    $t->assertSame(200, $r['status'], 'issuing for self succeeds (it cannot lock anyone out), got ' . $r['status']);
+    $t->assertTrue(
+        preg_match('/^\d{10}$/', (string) ($r['body']['data']['pairing_code'] ?? '')) === 1,
+        'a code is returned'
+    );
 });
 
 /* -- Invariant ------------------------------------------------------------- */

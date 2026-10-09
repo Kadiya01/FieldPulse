@@ -12,8 +12,11 @@ use FieldPulse\Http\ApiException;
 use FieldPulse\Http\ErrorCode;
 use FieldPulse\Http\Request;
 use FieldPulse\Http\Response;
+use FieldPulse\Config\Config;
 use FieldPulse\Security\AuthContext;
 use FieldPulse\Security\Credentials;
+use FieldPulse\Security\PairingCode;
+use FieldPulse\Support\Clock;
 use FieldPulse\Support\Logger;
 
 /**
@@ -21,7 +24,7 @@ use FieldPulse\Support\Logger;
  *
  *   GET  /api/v1/admin/agents    the account directory
  *   POST /api/v1/admin/agents    create an account
- *   POST /api/v1/admin/agent      update one account (role / status / password)
+ *   POST /api/v1/admin/agent      update one account (role / status / password / pairing)
  *
  * The routes are gated by Http\Kernel's `admin` requirement, so the check is
  * visible in one table and a controller mistake cannot leave the surface open.
@@ -55,6 +58,7 @@ final class AdminAgentController implements ActionInterface
         'SET_STATUS',
         'SET_PASSWORD',
         'REVOKE_CREDENTIAL',
+        'ISSUE_PAIRING_CODE',
     ];
 
     public function __construct(
@@ -214,32 +218,45 @@ final class AdminAgentController implements ActionInterface
             'SET_STATUS'         => ['id', 'action', 'status'],
             'SET_PASSWORD'       => ['id', 'action', 'password'],
             'REVOKE_CREDENTIAL'  => ['id', 'action'],
+            'ISSUE_PAIRING_CODE' => ['id', 'action', 'label'],
         ];
 
         Validator::assertNoUnknownKeys($body, $allowed[$action], 'admin.agent.' . strtolower($action));
 
-        // Changing your own password locks nothing; the other three can lock an
-        // administrator out of their own account, and are refused on self.
-        if ($action !== 'SET_PASSWORD' && (int) $target['id'] === $context->agentId()) {
+        // Changing your own password locks nothing; re-role, status and credential
+        // revocation can lock an administrator out of their own account, and are
+        // refused on self. Issuing a pairing code to yourself is the same class as
+        // SET_PASSWORD: it adds a way in, it cannot remove the one you already hold.
+        if (
+            $action !== 'SET_PASSWORD'
+            && $action !== 'ISSUE_PAIRING_CODE'
+            && (int) $target['id'] === $context->agentId()
+        ) {
             $this->denySelf();
         }
 
-        match ($action) {
+        $extra = match ($action) {
             'SET_ROLE'           => $this->setRole($request, $context, $target, $body),
             'SET_STATUS'         => $this->setStatus($request, $context, $target, $body),
             'SET_PASSWORD'       => $this->setPassword($request, $context, $target, $body),
             'REVOKE_CREDENTIAL'  => $this->revokeCredential($request, $context, $target),
+            'ISSUE_PAIRING_CODE' => $this->issuePairingCode($request, $context, $target, $body),
         };
 
-        return Response::json(['data' => $this->present($this->requireAgent($id))]);
+        $data = $this->present($this->requireAgent($id));
+        if ($extra !== null) {
+            $data = array_merge($data, $extra);
+        }
+
+        return Response::json(['data' => $data]);
     }
 
-    private function setRole(Request $request, AuthContext $context, array $target, array $body): void
+    private function setRole(Request $request, AuthContext $context, array $target, array $body): ?array
     {
         $role = $this->role($body['role'] ?? null);
 
         if ($role === (string) $target['role']) {
-            return;
+            return null;
         }
 
         $this->guardLastActiveAdmin($target);
@@ -263,14 +280,16 @@ final class AdminAgentController implements ActionInterface
             'admin'    => $context->agentCode(),
             'role'     => $role,
         ]);
+
+        return null;
     }
 
-    private function setStatus(Request $request, AuthContext $context, array $target, array $body): void
+    private function setStatus(Request $request, AuthContext $context, array $target, array $body): ?array
     {
         $status = $this->statusTarget($body['status'] ?? null);
 
         if ($status === (string) $target['status']) {
-            return;
+            return null;
         }
 
         $action = match ($status) {
@@ -314,9 +333,11 @@ final class AdminAgentController implements ActionInterface
             'admin'    => $context->agentCode(),
             'status'   => $status,
         ]);
+
+        return null;
     }
 
-    private function setPassword(Request $request, AuthContext $context, array $target, array $body): void
+    private function setPassword(Request $request, AuthContext $context, array $target, array $body): ?array
     {
         $password = Validator::password($body['password'] ?? null);
 
@@ -346,9 +367,11 @@ final class AdminAgentController implements ActionInterface
             'agent_id' => (int) $target['id'],
             'admin'    => $context->agentCode(),
         ]);
+
+        return null;
     }
 
-    private function revokeCredential(Request $request, AuthContext $context, array $target): void
+    private function revokeCredential(Request $request, AuthContext $context, array $target): ?array
     {
         $this->agents->clearCredentials((int) $target['id']);
 
@@ -365,6 +388,77 @@ final class AdminAgentController implements ActionInterface
             'agent_id' => (int) $target['id'],
             'admin'    => $context->agentCode(),
         ]);
+
+        return null;
+    }
+
+    private function issuePairingCode(Request $request, AuthContext $context, array $target, array $body): ?array
+    {
+        // The pairing gate only lets a device bind while the account is
+        // reachable (first device under FIRST_DEVICE_ONLY, every device under
+        // ALWAYS). A suspended or retired account would never be able to
+        // consume the code, so minting one for it is wasted secrets.
+        if ((string) $target['status'] !== AgentRepository::ACTIVE) {
+            throw ApiException::conflict(
+                ErrorCode::STATE_CONFLICT,
+                'Only active accounts can receive a pairing code.'
+            );
+        }
+
+        $label = $body['label'] ?? null;
+
+        if ($label !== null) {
+            $label = Validator::string($label, 1, 100, 'label');
+        } elseif (isset($target['agent_code'])) {
+            $label = 'Mobile device for ' . $target['agent_code'];
+        }
+
+        $ttl      = (int) Config::instance()->int('security.pairing_code_ttl', 1800);
+        $now      = Clock::now();
+        $expires  = $now->modify(sprintf('+%d seconds', $ttl));
+        $expiresIso = $expires->format('c'); // ISO-8601 with offset, parseable by the browser
+        $code     = PairingCode::random();
+
+        Connection::execute(
+            'INSERT INTO pairing_codes
+                (agent_id, code_hash, label, attempts, max_attempts, expires_at, created_by, created_at)
+             VALUES (:agent_id, :hash, :label, 0, 5, :expires_at, :created_by, :created_at)',
+            [
+                'agent_id'   => (int) $target['id'],
+                'hash'       => PairingCode::hash($code),
+                'label'      => $label,
+                'expires_at' => Clock::sql($expires),
+                'created_by' => $context->agentCode(),
+                'created_at' => Clock::sql($now),
+            ]
+        );
+
+        $this->audit->recordSafe([
+            'actor_agent_id' => $context->agentId(),
+            'action'         => 'admin.agent.pairing_code_issued',
+            'entity_type'    => 'agent',
+            'entity_id'      => (int) $target['id'],
+            'ip_address'     => $request->clientIp(),
+            'metadata'       => [
+                'agent_code'  => (string) $target['agent_code'],
+                'ttl_seconds' => $ttl,
+                'expires_at'  => Clock::sql($expires),
+                'label'       => $label,
+            ],
+        ]);
+
+        Logger::info('admin.agent_pairing_code_issued', [
+            'agent_id'    => (int) $target['id'],
+            'admin'       => $context->agentCode(),
+            'ttl_seconds' => $ttl,
+            'expires_at'  => Clock::sql($expires),
+        ]);
+
+        return [
+            'pairing_code' => $code,
+            'expires_at'   => $expiresIso,
+            'ttl_seconds'  => $ttl,
+        ];
     }
 
     /* -- Guards ------------------------------------------------------------ */

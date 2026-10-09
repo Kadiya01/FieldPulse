@@ -19,6 +19,23 @@ dist
 dist-ssr
 *.local
 
+# Build output and deploy archives. The frontend is built (vite) into dist/,
+# copied into public_html/, and shipped as fieldpulse-*.zip; none of those
+# artefacts are authored in the repo. Only the api shims (.htaccess, .user.ini,
+# api/) are tracked under public_html — the built index.html, assets/, service
+# worker and PWA icons are generated every build. docs/DEPLOYMENT.md documents
+# the copy.
+dist.zip
+fieldpulse-*.zip
+public_html/assets/
+public_html/favicon.svg
+public_html/index.html
+public_html/manifest.webmanifest
+public_html/pwa-*.png
+public_html/registerSW.js
+public_html/sw.js
+public_html/workbox-*.js
+
 # Runtime storage created by the app, not source. Holds uploaded evidence
 # (quarantine, processed/{verified,review,rejected}), operational logs, and
 # worker temp files. The logs are already covered by *.log above, but the

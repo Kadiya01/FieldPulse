@@ -3,11 +3,13 @@ import {
   fetchAdminAgents,
   createAdminAgent,
   actOnAdminAgent,
+  issuePairingCode,
   ApiError,
   type AdminAgent,
   type AdminAgentAction,
   type AdminAgentRole,
-  type AdminAgentList
+  type AdminAgentList,
+  type IssuePairingCodeResult
 } from '../api/client';
 import { useSession } from '../auth/sessionContext';
 import {
@@ -20,7 +22,11 @@ import {
   Ban,
   Archive,
   RotateCcw,
-  KeyRound
+  KeyRound,
+  Smartphone,
+  Copy,
+  Check,
+  X
 } from 'lucide-react';
 
 const LIMIT = 50;
@@ -65,6 +71,7 @@ export default function AdminPage() {
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [passwordResetId, setPasswordResetId] = useState<number | null>(null);
   const [resetPassword, setResetPassword] = useState('');
+  const [issuedCode, setIssuedCode] = useState<{ id: number; result: IssuePairingCodeResult } | null>(null);
 
   const total = meta?.pagination.total ?? 0;
   const maxOffset = Math.max(0, Math.floor((total - 1) / LIMIT) * LIMIT);
@@ -217,6 +224,25 @@ export default function AdminPage() {
     setPasswordResetId(null);
   };
 
+  /** Mint a pairing code and hold it in a dedicated panel; issuing alone never
+      changes the row, so the directory is not refetched and the code stays up. */
+  const issueCode = async (agent: AdminAgent) => {
+    setRowBusy(agent.id);
+    setRowError(null);
+    setIssuedCode(null);
+
+    try {
+      const result = await issuePairingCode(agent.id);
+      setIssuedCode({ id: agent.id, result });
+    } catch (err) {
+      setRowError({ id: agent.id, message: err instanceof Error ? err.message : 'The registration code could not be issued.' });
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const dismissCode = () => setIssuedCode(null);
+
   if (!isAdmin) {
     return (
       <section className="bg-white rounded-lg shadow p-6">
@@ -327,6 +353,9 @@ export default function AdminPage() {
                   { action: 'REVOKE_CREDENTIAL' },
                   `Revoke the login for ${agent.agent_code}? They can no longer sign in until an administrator issues a new credential.`
                 )}
+              onIssueCode={() => void issueCode(agent)}
+              onDismissCode={dismissCode}
+              issuedCode={issuedCode?.id === agent.id ? issuedCode.result : null}
             />
           </li>
         ))}
@@ -495,6 +524,7 @@ function AgentCard({
   error,
   resetting,
   resetPassword,
+  issuedCode,
   onResetPasswordChange,
   onToggleReset,
   onResetPassword,
@@ -502,7 +532,9 @@ function AgentCard({
   onSuspend,
   onReinstate,
   onRetire,
-  onRevoke
+  onRevoke,
+  onIssueCode,
+  onDismissCode
 }: {
   agent: AdminAgent;
   isSelf: boolean;
@@ -511,6 +543,7 @@ function AgentCard({
   error: string;
   resetting: boolean;
   resetPassword: string;
+  issuedCode: IssuePairingCodeResult | null;
   onResetPasswordChange: (value: string) => void;
   onToggleReset: () => void;
   onResetPassword: () => void;
@@ -519,8 +552,26 @@ function AgentCard({
   onReinstate: () => void;
   onRetire: () => void;
   onRevoke: () => void;
+  onIssueCode: () => void;
+  onDismissCode: () => void;
 }) {
   const retired = agent.status === 'DELETED';
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = async (code: string) => {
+    if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard can be unavailable (permissions, insecure context). The code
+      // is visible on screen and typeable — nothing breaks.
+    }
+  };
 
   // The self-guard and the last-admin guard, previewed as disabled controls.
   // The server enforces both regardless; a control that does nothing teaches
@@ -623,6 +674,19 @@ function AgentCard({
             Reset password
           </button>
 
+          {!retired && agent.status === 'ACTIVE' && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onIssueCode}
+              title="Mint a one-time code this agent uses on the /register page to bind their first device."
+              className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            >
+              <Smartphone size={14} aria-hidden="true" />
+              Registration code
+            </button>
+          )}
+
           <button
             type="button"
             disabled={busy || isSelf || !agent.has_credential}
@@ -663,6 +727,51 @@ function AgentCard({
               : <KeyRound size={14} aria-hidden="true" />}
             Set password
           </button>
+        </div>
+      )}
+
+      {issuedCode && !retired && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mt-3 border border-blue-300 bg-blue-50 rounded p-3"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">
+                One-time registration code for {agent.agent_code}
+              </p>
+              <p className="text-xs text-gray-700 mt-0.5">
+                Shown once · single use · expires in about {formatExpiry(issuedCode.ttl_seconds)}. Send it and the
+                account’s username and password to the agent; they enter it on the
+                /register page.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onDismissCode}
+              className="text-gray-500 hover:text-gray-800 p-1"
+              aria-label="Dismiss the registration code"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <code className="font-mono text-2xl tracking-widest text-gray-900 bg-white border border-gray-300 rounded px-3 py-1">
+              {issuedCode.pairing_code}
+            </code>
+            <button
+              type="button"
+              onClick={() => void copyCode(issuedCode.pairing_code)}
+              className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-50"
+            >
+              {copied
+                ? <Check size={14} aria-hidden="true" />
+                : <Copy size={14} aria-hidden="true" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -759,6 +868,16 @@ const STATUS_WORDS: Record<string, string> = {
   SUSPENDED: 'Suspended',
   DELETED: 'Retired'
 };
+
+/** A short, human phrase for a remaining countdown in seconds. */
+function formatExpiry(seconds: number): string {
+  if (seconds < 60) {
+    return 'under a minute';
+  }
+
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
 
 const STATUS_TONE: Record<string, string> = {
   ACTIVE: 'text-green-800 border-green-300 bg-green-50',

@@ -613,10 +613,11 @@ target `id` and an `action`; the rest depends on the action, and anything outsid
 that action's own field list is a `422`.
 
 ```json
-{ "id": 12, "action": "SET_ROLE",          "role": "SUPERVISOR" }
-{ "id": 12, "action": "SET_STATUS",        "status": "SUSPENDED" }
-{ "id": 12, "action": "SET_PASSWORD",      "password": "…" }
+{ "id": 12, "action": "SET_ROLE",            "role": "SUPERVISOR" }
+{ "id": 12, "action": "SET_STATUS",          "status": "SUSPENDED" }
+{ "id": 12, "action": "SET_PASSWORD",        "password": "…" }
 { "id": 12, "action": "REVOKE_CREDENTIAL" }
+{ "id": 12, "action": "ISSUE_PAIRING_CODE" }
 ```
 
 `SET_STATUS` accepts `ACTIVE`, `SUSPENDED` or `DELETED`. `DELETED` is retirement:
@@ -625,24 +626,38 @@ and its history survive for compliance. Any transition away from `ACTIVE` revoke
 the account's devices, so a token that outlived the account stops working on its
 next request.
 
+`ISSUE_PAIRING_CODE` mints the out-of-band code the `/register` page (or the
+device-registration step of the sign-in page) consumes to bind the account's
+first device. It is valid only for an `ACTIVE` account, so a suspended or retired
+account answers `409 STATE_CONFLICT`. The plaintext code is returned exactly
+once, in the response — the server stores only its SHA-256 and records the
+issuer as `created_by` — and the response adds `pairing_code`, `expires_at`
+(ISO-8601 with offset) and `ttl_seconds` to the account row. An optional `label`
+(e.g. an agent's name) is stored with the code for an operator to recognise.
+Issuing a code is a way in for somebody, never a way out, so — like a password
+reset — it is also allowed on the caller's **own** account.
+
 Each call returns the updated account as `{ "data": <agent> }`, in the same shape
 as the directory.
 
 **Two guards, both `409 STATE_CONFLICT`.** An administrator cannot re-role,
-suspend, retire or revoke their **own** account — changing your own password is
-the one allowed self-action, because it locks nothing. And the last remaining
-active administrator cannot be demoted, suspended or retired. The first is what
-makes the second unreachable through the API (the actor is always an active
-admin, so at least one remains), but both are enforced against the current row on
-every call, so neither depends on the other holding.
+suspend, retire or revoke their **own** account — changing your own password, or
+issuing yourself a pairing code, is allowed, because both add a way in and cannot
+lock anything. And the last remaining active administrator cannot be demoted,
+suspended or retired. The first is what makes the second unreachable through the
+API (the actor is always an active admin, so at least one remains), but both are
+enforced against the current row on every call, so neither depends on the other
+holding.
 
 `404 UNKNOWN_AGENT` means the `id` does not exist. `409` also covers a change to a
 retired account, which is immutable. `403` means the caller is not an `ADMIN`.
 
 Every action appends an immutable audit row: `admin.agent.created`,
 `admin.agent.role_changed`, `admin.agent.suspended`, `admin.agent.reinstated`,
-`admin.agent.retired`, `admin.agent.password_reset` or
-`admin.agent.credential_revoked`.
+`admin.agent.retired`, `admin.agent.password_reset`,
+`admin.agent.credential_revoked` or `admin.agent.pairing_code_issued`. The
+audit metadata for a pairing code records who issued it, the TTL and the expiry —
+never the code itself.
 
 **Suspension and retirement are not distinguishable at login.** Any non-`ACTIVE`
 account returns the same `401 UNAUTHENTICATED` as a wrong password, for the same
@@ -662,7 +677,10 @@ account-status oracle.
    private half anywhere.
 3. `POST /api/v1/device/register.php` with the bootstrap token, `device_uuid`,
    `public_key_jwk`, and a pairing code if the server asks for one. This returns
-   the device-bound token that replaces the bootstrap one.
+   the device-bound token that replaces the bootstrap one. The app surfaces the
+   whole first-device flow on the standalone `/register` route (username,
+   password and an administrator-issued code on one screen); the sign-in page's
+   first-device step is the reactive form of the same two calls.
 4. On a page load with no token in memory, call `/api/v1/auth/refresh.php` once to restore
    it. If that succeeds but IndexedDB has no private key, the state is
    `UNREGISTERED` — the cookie is fine, the browser cannot prove the device —

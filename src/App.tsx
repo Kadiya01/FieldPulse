@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import CapturePage from './pages/CapturePage';
 import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
@@ -191,6 +192,27 @@ export default function App() {
                * way forward and no way to reach the app without a manual reload.
                */
               <LoginPage
+                onAuthenticated={(authenticated) => {
+                  setAgent(authenticated);
+                  setGate('ready');
+                }}
+              />
+            )
+          }
+        />
+
+        <Route
+          path="/register"
+          element={
+            gate === 'ready' ? (
+              <Navigate to="/" replace />
+            ) : (
+              /*
+               * The standalone first-device flow: username, password and an
+               * admin-issued code on one screen. Like /login it hands the agent
+               * back so the gate does not have to re-ask the server.
+               */
+              <RegisterPage
                 onAuthenticated={(authenticated) => {
                   setAgent(authenticated);
                   setGate('ready');

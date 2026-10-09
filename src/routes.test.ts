@@ -140,9 +140,10 @@ describe('route table and navigation agree', () => {
   });
 
   it('links to every authenticated destination the app routes to', () => {
-    // `/login` is deliberately absent: it renders outside the layout, because a
-    // session that does not exist cannot render chrome that needs one.
-    const reachable = routedPaths.filter((p) => p !== '/login' && p !== '*');
+    // `/login` and `/register` are deliberately absent: both render outside the
+    // layout, because a session that does not exist cannot render chrome that
+    // needs one. The nav only links within the authenticated shell.
+    const reachable = routedPaths.filter((p) => p !== '/login' && p !== '/register' && p !== '*');
     const unlinked = reachable.filter((p) => !navTargets.includes(p));
 
     expect(unlinked).toEqual([]);
@@ -180,5 +181,22 @@ describe('route table and navigation agree', () => {
     // A client-side route that falls through to nothing renders an empty
     // document, which an agent reports as "the app is broken".
     expect(appSource).toContain('path="*"');
+  });
+
+  it('has exactly one registration route, and it is public', () => {
+    // The standalone first-device flow mirrors /login: declared once, rendered
+    // outside the authenticated layout, and reachable without a session. It must
+    // not be a nav target — a signed-in agent has no reason to re-register, and
+    // the route itself redirects a ready session back to the capture screen.
+    const occurrences = (source: string, pattern: RegExp): number =>
+      [...source.matchAll(pattern)].length;
+
+    expect(occurrences(appSource, /path="\/register"/g)).toBe(1);
+    expect(appSource).toMatch(/RegisterPage/);
+    expect(read('pages/RegisterPage.tsx')).toContain('registerDevice');
+
+    // The sign-in page points first-time agents at it, so it is discoverable
+    // without typing a URL.
+    expect(read('pages/LoginPage.tsx')).toMatch(/to="\/register"/);
   });
 });

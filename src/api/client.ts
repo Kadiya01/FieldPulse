@@ -732,6 +732,48 @@ export async function actOnAdminAgent(id: number, patch: AdminAgentAction): Prom
 }
 
 /**
+ * An issued device-pairing code, riding on the account row.
+ *
+ * `pairing_code` is the one and only time the plaintext is served. The server
+ * stores only its SHA-256 and the UI must not persist it, write it to storage,
+ * or echo it back — it is copied to the clipboard and read aloud.
+ */
+export interface IssuePairingCodeResult extends AdminAgent {
+  /** The ten-digit, single-use registration code. Show once, never store. */
+  pairing_code: string;
+  /** ISO 8601 timestamp after which the code stops being usable. */
+  expires_at: string;
+  /** Seconds the code remains valid (server-configured pairing TTL). */
+  ttl_seconds: number;
+}
+
+/**
+ * Mint a device-pairing code for an ACTIVE account.
+ *
+ * This is the admin-side half of agent onboarding: with a credential (create or
+ * a password reset) and a code from here, an agent can complete a first-device
+ * registration from the `/register` page without an operator ever touching SSH.
+ *
+ * The server refuses with 409 STATE_CONFLICT for any account that is not ACTIVE
+ * (including retired accounts, which are immutable), and the GUI mirrors that
+ * as a disabled control.
+ */
+export async function issuePairingCode(id: number, label?: string): Promise<IssuePairingCodeResult> {
+  const response = await authenticatedFetch('/admin/agent.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, action: 'ISSUE_PAIRING_CODE', ...(label ? { label } : {}) })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: IssuePairingCodeResult };
+  return envelope.data;
+}
+
+/**
  * Rewards (§14).
  *
  * A published entitlement, not a live figure. Every number here was copied onto

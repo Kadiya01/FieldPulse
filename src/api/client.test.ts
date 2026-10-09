@@ -3,6 +3,7 @@ import {
   authenticatedFetch,
   login,
   registerDevice,
+  issuePairingCode,
   restoreSession,
   ApiError
 } from './client';
@@ -231,6 +232,84 @@ describe('Login and registration', () => {
     // the bootstrap token afterwards would send an already-revoked session on
     // every subsequent request.
     expect(getAccessToken()).toBe('bound-token');
+  });
+});
+
+describe('Admin pairing codes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDeviceIdentity).mockResolvedValue({
+      id: 'current',
+      device_uuid: 'd0e0e0e0-0000-4000-8000-000000000001',
+      private_key: {} as CryptoKey,
+      public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+      registered_at: 1
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts the ISSUE_PAIRING_CODE action and returns the one-time code', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, {
+        access_token: 'bootstrap-token',
+        agent: { id: 1, agent_code: 'AG-001', full_name: 'Ada' },
+        device_bound: false,
+        next_step: 'device.register'
+      }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        data: {
+          id: 7,
+          agent_code: 'AG-007',
+          full_name: 'Bo',
+          role: 'AGENT',
+          status: 'ACTIVE',
+          username: 'bo',
+          has_credential: true,
+          active_device_count: 0,
+          created_at: '2026-01-01 00:00:00',
+          pairing_code: '1234567890',
+          expires_at: '2026-01-01T00:30:00+00:00',
+          ttl_seconds: 1800
+        }
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // A session has to exist first: issuePairingCode goes through
+    // authenticatedFetch, which signs with the device key.
+    await login('ada', 'hunter2');
+    const result = await issuePairingCode(7, 'Field kit');
+
+    const call = fetchMock.mock.calls[1];
+    expect(call[0]).toBe('/api/v1/admin/agent.php');
+
+    const sent = JSON.parse((call[1] as RequestInit).body as string);
+    expect(sent).toEqual({ id: 7, action: 'ISSUE_PAIRING_CODE', label: 'Field kit' });
+
+    expect(result.pairing_code).toBe('1234567890');
+    expect(result.ttl_seconds).toBe(1800);
+  });
+
+  it('omits the label when none is given, so the server applies its default', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, {
+        access_token: 'bootstrap-token',
+        agent: { id: 1, agent_code: 'AG-001', full_name: 'Ada' },
+        device_bound: false,
+        next_step: 'device.register'
+      }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { id: 7, pairing_code: '1234567890' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await login('ada', 'hunter2');
+    await issuePairingCode(7);
+
+    const sent = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(sent).toEqual({ id: 7, action: 'ISSUE_PAIRING_CODE' });
   });
 });
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { LogIn, KeyRound, ShieldAlert } from 'lucide-react';
 import { generateAndStoreDeviceIdentity, getDeviceIdentity } from '../crypto/keys';
 import { login, registerDevice, ApiError, type SessionAgent } from '../api/client';
@@ -41,13 +41,23 @@ export default function LoginPage({
    * after three, which is why the code field is cleared on every attempt.
    */
   const completeRegistration = async (code?: string): Promise<SessionAgent | null> => {
-    // Reuse the stored key if the browser already has one. Re-generating on
-    // every login would leave an orphan key per attempt and, worse, would
-    // present a different device_uuid to a policy that may only permit the
-    // first device.
-    const existing = await getDeviceIdentity();
-    if (!existing) {
-      await generateAndStoreDeviceIdentity();
+    // Getting or minting the key pair is its own failure domain: if crypto or
+    // storage is unavailable, that is a browser problem, not a credential
+    // problem, and must never be reported as a rejected password. Reuse the
+    // stored key if the browser already has one — regenerating on every login
+    // would leave an orphan key per attempt and present a different device_uuid
+    // to a policy that may only permit the first device.
+    try {
+      const existing = await getDeviceIdentity();
+      if (!existing) {
+        await generateAndStoreDeviceIdentity();
+      }
+    } catch {
+      setErrorMsg(
+        'This browser could not create a device key. Open this page over HTTPS, ' +
+        'allow storage for this site, or try another browser.'
+      );
+      return null;
     }
 
     try {
@@ -84,8 +94,10 @@ export default function LoginPage({
         navigate('/', { replace: true });
       }
     } catch (err) {
-      // Every credential failure is deliberately identical server-side, so
-      // there is nothing more specific to say than the status allows.
+      // Only the credentials call reaches here: completeRegistration handles its
+      // own device and pairing failures and reports them itself. Every
+      // credential failure is deliberately identical server-side, so there is
+      // nothing more specific to say than the status allows.
       setErrorMsg(
         err instanceof ApiError && err.status === 429
           ? 'Too many attempts. Wait a few minutes and try again.'
@@ -223,6 +235,13 @@ export default function LoginPage({
         <p className="mt-4 text-xs text-gray-700 text-center">
           This device gets its own cryptographic key on first sign-in. The key never leaves it,
           and it is not sent to the server in any form.
+        </p>
+
+        <p className="mt-4 text-sm text-gray-700 text-center">
+          First time on this device?{' '}
+          <Link to="/register" className="text-blue-700 font-medium hover:underline">
+            Register it with a code
+          </Link>
         </p>
       </div>
     </div>
