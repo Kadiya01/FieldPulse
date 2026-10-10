@@ -27,6 +27,7 @@ dist-ssr
 # the copy.
 dist.zip
 fieldpulse-*.zip
+backend-update.zip
 public_html/assets/
 public_html/favicon.svg
 public_html/index.html
