@@ -84,10 +84,9 @@ return [
 
     'auth' => [
         /*
-         * Login is username + password (see Security\Credentials), and a device
-         * is registered afterwards from the bootstrap session login returns.
-         * imei_pattern survives only for the administrative pairing CLI and for
-         * validating legacy rows: it is not an authentication input.
+         * Administrators/reviewers use username + password. Publicly registered
+         * agents use the IMEI recorded at signup; this is intentionally a weak
+         * identifier-only credential. Device keys are bound after bootstrap.
          */
         'imei_pattern'      => '/^\d{14,16}$/',
         'login_rate_limit'  => (int) Env::get('LOGIN_RATE_LIMIT', '10'),
@@ -96,11 +95,11 @@ return [
         'register_rate_window' => (int) Env::get('REGISTER_RATE_WINDOW', '3600'),
 
         /*
-         * How much friction adding a device costs. Registration is gated on a
-         * login-issued bootstrap token in every case; this decides whether it
-         * ALSO requires an operator-issued one-time pairing code, which is the
-         * only out-of-band factor standing between a stolen password and a
-         * key an attacker controls.
+         * How much friction adding a device costs for pre-existing managed
+         * accounts. Registration is gated on a login-issued bootstrap token in
+         * every case; this decides whether it ALSO requires an operator-issued
+         * one-time pairing code. Self-registered agents bypass this policy for
+         * their first browser so signup can be completed without admin action.
          *
          *   ALWAYS          every new device needs a code. Safest; an agent
          *                   replacing a lost handset needs a new code.

@@ -591,6 +591,106 @@ $t->test('login never accepts an IMEI where a username belongs', function (TestR
     $t->assertSame(422, $r['status'], 'an IMEI is not a valid username, so it is refused as malformed, got ' . $r['raw']);
 });
 
+/* -- Public agent registration ------------------------------------------ */
+
+$t->group('public agent registration');
+
+$t->test('self-registration activates an agent and allows IMEI login and device binding', function (TestRunner $t) use ($baseUrl, $appUrl, $runTag, $makeKeyPair, &$createdAgentIds, &$createdDeviceIds) {
+    $imeiBase = '35' . substr(str_pad((string) hexdec(substr($runTag, 2)), 12, '0', STR_PAD_LEFT), -12);
+    $imei = null;
+    for ($check = 0; $check <= 9; $check++) {
+        $candidate = $imeiBase . $check;
+        if (\FieldPulse\Domain\Validator::luhn($candidate)) {
+            $imei = $candidate;
+            break;
+        }
+    }
+
+    if ($imei === null) {
+        throw new RuntimeException('Could not create a valid test IMEI.');
+    }
+
+    $nin = str_pad((string) random_int(0, 99999999999), 11, '0', STR_PAD_LEFT);
+    $registration = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/agents/register.php',
+        [
+            'full_name' => 'Self Registered Agent',
+            'nin' => $nin,
+            'imei' => $imei,
+            'device_type' => 'SAMSUNG',
+        ]
+    );
+
+    $t->assertSame(201, $registration['status'], 'registration succeeds immediately');
+    $t->assertSame('ACTIVE', $registration['body']['status'] ?? null, 'the account is active without admin approval');
+    $t->assertSame('AGENT', $registration['body']['agent']['role'] ?? null, 'self-registration creates an agent role');
+    $t->assertTrue(
+        !array_key_exists('nin', $registration['body']['agent'] ?? [])
+            && !array_key_exists('imei', $registration['body']['agent'] ?? []),
+        'the public response never includes NIN or IMEI'
+    );
+
+    $agentCode = (string) ($registration['body']['agent']['agent_code'] ?? '');
+    $agentId = (int) Connection::fetchValue(
+        'SELECT id FROM agents WHERE agent_code = :code',
+        ['code' => $agentCode]
+    );
+    if ($agentId < 1) {
+        throw new RuntimeException('Self-registered fixture row was not created.');
+    }
+    $createdAgentIds[] = $agentId;
+
+    $login = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/auth/agent-login.php',
+        ['imei' => $imei]
+    );
+    $t->assertSame(200, $login['status'], 'the new agent can sign in immediately with the registered IMEI');
+    $t->assertSame('AGENT', $login['body']['agent']['role'] ?? null, 'IMEI login returns an agent session');
+
+    $keys = $makeKeyPair();
+    $deviceUuid = Uuid::v4();
+    $device = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/device/register.php',
+        [
+            'device_uuid' => $deviceUuid,
+            'public_key_jwk' => $keys['public'],
+        ],
+        (string) ($login['body']['access_token'] ?? '')
+    );
+    $t->assertSame(200, $device['status'], 'self-registered agents can bind their first device without a pairing code');
+
+    $deviceId = (int) Connection::fetchValue(
+        'SELECT id FROM devices WHERE device_uuid = :uuid',
+        ['uuid' => $deviceUuid]
+    );
+    if ($deviceId > 0) {
+        $createdDeviceIds[] = $deviceId;
+    }
+
+    $duplicate = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/agents/register.php',
+        [
+            'full_name' => 'Another Agent',
+            'nin' => $nin,
+            'imei' => $imei,
+            'device_type' => 'SAMSUNG',
+        ]
+    );
+    $t->assertSame(409, $duplicate['status'], 'a duplicate registration does not create a second account');
+});
+
 /* -- Device registration -------------------------------------------------- */
 
 $t->group('device registration');
@@ -1675,7 +1775,7 @@ $t->test('the retired IMEI challenge route no longer exists', function (TestRunn
     $t->assertSame(404, $r['status'], 'the challenge endpoint is gone, got ' . $r['status']);
 });
 
-$t->test('no executable code treats an IMEI as a credential', function (TestRunner $t) {
+$t->test('IMEI access is limited to approved credential and admin code', function (TestRunner $t) {
     /*
      * A structural check, because the behavioural version is what the tests
      * above already are.
@@ -1688,11 +1788,15 @@ $t->test('no executable code treats an IMEI as a credential', function (TestRunn
      * test could only ever pass while the explanation was deleted.
      *
      * What is left is executable code. Each entry in $allow is a place the
-     * column is legitimately touched, and none of them is an authentication
-     * decision — the new list below is a second IMEI test to add to if a real
-     * need appears, which is the point of naming them.
+     * column is legitimately touched, including the self-registration and
+     * IMEI-login endpoints. Keep this list explicit so IMEI use does not spread
+     * into unrelated authentication or authorization paths.
      */
     $allow = [
+        // Public self-registration stores the IMEI and the public agent-login
+        // endpoint uses it to issue the deliberately weak bootstrap session.
+        'Domain/AgentRegistrationController.php' => 'credential',
+        'Domain/AgentLoginController.php' => 'credential',
         // The administrative lookup and the enrolment writes, for the
         // provision_agent.php and pair_device.php CLIs.
         'Database/AgentRepository.php' => 'administrative',
@@ -1756,7 +1860,7 @@ $t->test('no executable code treats an IMEI as a credential', function (TestRunn
         $found[] = $relative;
     }
 
-    $t->assertSame([], $found, 'IMEI appears in executable code only in the administrative files listed');
+    $t->assertSame([], $found, 'IMEI appears only in the explicitly approved credential and administrative files');
 });
 
 /* ---------------------------------------------------------------------------

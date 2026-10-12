@@ -70,9 +70,19 @@ final class AdminAgentController implements ActionInterface
 
     public function __invoke(Request $request): Response
     {
-        return $request->endpoint() === 'agent'
-            ? $this->update($request)
-            : ($request->method() === 'POST' ? $this->create($request) : $this->index($request));
+        if ($request->endpoint() === 'agent') {
+            return $this->update($request);
+        }
+
+        if ($request->method() === 'POST') {
+            throw new ApiException(
+                405,
+                ErrorCode::METHOD_NOT_ALLOWED,
+                'Agent accounts are self-registered. Administrators review submitted records.'
+            );
+        }
+
+        return $this->index($request);
     }
 
     /* -- List -------------------------------------------------------------- */
@@ -581,6 +591,7 @@ final class AdminAgentController implements ActionInterface
             'id'                  => $id,
             'agent_code'          => (string) $row['agent_code'],
             'full_name'           => (string) $row['full_name'],
+            'nin'                 => isset($row['nin']) ? (string) $row['nin'] : null,
             'role'                => (string) $row['role'],
             'status'              => (string) $row['status'],
             'username'            => $row['username'] ?? null,

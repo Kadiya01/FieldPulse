@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import CapturePage from './pages/CapturePage';
 import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
+import AgentLoginPage from './pages/AgentLoginPage';
 import RegisterPage from './pages/RegisterPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
@@ -177,7 +178,7 @@ export default function App() {
         </Route>
 
         <Route
-          path="/login"
+          path="/admin/login"
           element={
             gate === 'ready' ? (
               <Navigate to="/" replace />
@@ -202,15 +203,30 @@ export default function App() {
         />
 
         <Route
+          path="/login"
+          element={
+            gate === 'ready' ? (
+              <Navigate to="/" replace />
+            ) : (
+              <AgentLoginPage
+                onAuthenticated={(authenticated) => {
+                  setAgent(authenticated);
+                  setGate('ready');
+                }}
+              />
+            )
+          }
+        />
+
+        <Route
           path="/register"
           element={
             gate === 'ready' ? (
               <Navigate to="/" replace />
             ) : (
               /*
-               * The standalone first-device flow: username, password and an
-               * admin-issued code on one screen. Like /login it hands the agent
-               * back so the gate does not have to re-ask the server.
+               * Public self-registration activates the agent and proceeds
+               * directly into the first-device binding flow.
                */
               <RegisterPage
                 onAuthenticated={(authenticated) => {

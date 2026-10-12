@@ -327,6 +327,45 @@ export async function login(username: string, password: string): Promise<LoginRe
   return data;
 }
 
+export async function loginAgent(imei: string): Promise<LoginResult> {
+  const response = await fetch(`${API_BASE}/auth/agent-login.php`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imei })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const data = (await response.json()) as LoginResult;
+  setAccessToken(data.access_token);
+  announceAccessToken(data.access_token);
+  return data;
+}
+
+export interface AgentRegistrationInput {
+  full_name: string;
+  nin: string;
+  imei: string;
+  device_type: string;
+}
+
+export async function registerAgent(input: AgentRegistrationInput): Promise<SessionAgent> {
+  const response = await fetch(`${API_BASE}/agents/register.php`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const data = (await response.json()) as { agent: SessionAgent };
+  return data.agent;
+}
+
 export interface RegisterResult {
   device_uuid: string;
   status: string;
@@ -628,6 +667,7 @@ export interface AdminAgent {
   id: number;
   agent_code: string;
   full_name: string;
+  nin: string | null;
   role: AdminAgentRole;
   status: AdminAgentStatus;
   /** The login username, when the account has one. Null after credential revoke/retire. */

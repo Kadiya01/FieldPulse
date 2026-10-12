@@ -1,7 +1,6 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import {
   fetchAdminAgents,
-  createAdminAgent,
   actOnAdminAgent,
   issuePairingCode,
   ApiError,
@@ -18,7 +17,6 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
-  UserPlus,
   Ban,
   Archive,
   RotateCcw,
@@ -54,18 +52,6 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [notice, setNotice] = useState('');
-
-  const emptyForm = {
-    agent_code: '',
-    full_name: '',
-    username: '',
-    password: '',
-    role: 'AGENT' as AdminAgentRole,
-    imei: ''
-  };
-  const [form, setForm] = useState(emptyForm);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState('');
 
   const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
   const [rowBusy, setRowBusy] = useState<number | null>(null);
@@ -146,47 +132,6 @@ export default function AdminPage() {
       live = false;
     };
   }, [isAdmin, offset]);
-
-  /** Create an account, then land on the page where the new row can be seen. */
-  const createAgent = async (event: FormEvent) => {
-    event.preventDefault();
-
-    const problem = validateCreate(form);
-    if (problem) {
-      setCreateError(problem);
-      return;
-    }
-
-    setCreating(true);
-    setCreateError('');
-
-    try {
-      const created = await createAdminAgent({
-        agent_code: form.agent_code.trim(),
-        full_name: form.full_name.trim(),
-        username: form.username.trim(),
-        password: form.password,
-        role: form.role,
-        imei: form.imei.trim() || undefined
-      });
-
-      setForm(emptyForm);
-      setNotice(`Account ${created.agent_code} created and active. Pass on their username and password.`);
-
-      // The newest row sorts onto the first page; move there so it is visible
-      // without hunting. When already there, refetch directly because `offset`
-      // has not changed and the effect will not re-run.
-      if (offset !== 0) {
-        setOffset(0);
-      } else {
-        void fetchDir(0);
-      }
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'The account could not be created.');
-    } finally {
-      setCreating(false);
-    }
-  };
 
   /** One state-changing action, then a refresh of the visible page. */
   const runAction = async (
@@ -302,13 +247,10 @@ export default function AdminPage() {
         )}
       </div>
 
-      <CreateAccountForm
-        form={form}
-        setForm={setForm}
-        creating={creating}
-        error={createError}
-        onSubmit={createAgent}
-      />
+      <aside className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
+        Agents register themselves from the registration page. Administrators do not create agent
+        accounts; use the review queue to approve or reject submitted records.
+      </aside>
 
       {agents.length === 0 && !loading && (
         <p className="text-gray-700 bg-white rounded-lg shadow p-6 text-center">
@@ -387,125 +329,6 @@ export default function AdminPage() {
         </nav>
       )}
     </section>
-  );
-}
-
-/**
- * The create form, folded up by default.
- *
- * A `<details>` element is the native disclosure: keyboard-focusable, announced
- * as a disclosure, and openable without JavaScript. The submit path mirrors the
- * server's validation so a mistake is told to the administrator before a round
- * trip — the server still validates again, and is the authority on collisions.
- */
-function CreateAccountForm({
-  form,
-  setForm,
-  creating,
-  error,
-  onSubmit
-}: {
-  form: typeof emptyFormShape;
-  setForm: (next: typeof emptyFormShape) => void;
-  creating: boolean;
-  error: string;
-  onSubmit: (event: FormEvent) => void;
-}) {
-  return (
-    <details className="bg-white rounded-lg shadow mb-4 open:pb-4">
-      <summary className="flex items-center gap-2 px-4 py-3 font-medium text-gray-900 cursor-pointer list-none">
-        <UserPlus size={16} aria-hidden="true" />
-        Create an account
-      </summary>
-
-      <form onSubmit={onSubmit} className="px-4 pt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-        <Field label="Agent code" htmlFor="new-agent_code" hint="e.g. AG-012">
-          <input
-            id="new-agent_code"
-            value={form.agent_code}
-            onChange={e => setForm({ ...form, agent_code: e.target.value })}
-            className={inputClass}
-            pattern="[A-Za-z0-9._-]{2,64}"
-            required
-          />
-        </Field>
-
-        <Field label="Full name" htmlFor="new-full_name">
-          <input
-            id="new-full_name"
-            value={form.full_name}
-            onChange={e => setForm({ ...form, full_name: e.target.value })}
-            className={inputClass}
-            required
-          />
-        </Field>
-
-        <Field label="Username" htmlFor="new-username" hint="3–64 characters, with at least one letter">
-          <input
-            id="new-username"
-            value={form.username}
-            onChange={e => setForm({ ...form, username: e.target.value })}
-            className={inputClass}
-            autoComplete="off"
-            required
-          />
-        </Field>
-
-        <Field label="Password" htmlFor="new-password" hint="8–128 characters, at least one letter and one digit">
-          <input
-            id="new-password"
-            type="password"
-            value={form.password}
-            onChange={e => setForm({ ...form, password: e.target.value })}
-            className={inputClass}
-            autoComplete="new-password"
-            required
-          />
-        </Field>
-
-        <Field label="Role" htmlFor="new-role">
-          <select
-            id="new-role"
-            value={form.role}
-            onChange={e => setForm({ ...form, role: e.target.value as AdminAgentRole })}
-            className={inputClass}
-          >
-            <option value="AGENT">Agent</option>
-            <option value="SUPERVISOR">Supervisor</option>
-            <option value="ADMIN">Administrator</option>
-          </select>
-        </Field>
-
-        <Field label="IMEI (optional)" htmlFor="new-imei" hint="Administrative reference only; never a login">
-          <input
-            id="new-imei"
-            value={form.imei}
-            onChange={e => setForm({ ...form, imei: e.target.value })}
-            className={inputClass}
-            inputMode="numeric"
-            placeholder="14–16 digits"
-          />
-        </Field>
-
-        <div className="sm:col-span-2 flex items-center gap-3">
-          {error && (
-            <p role="alert" className="text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2 flex-1">
-              {error}
-            </p>
-          )}
-          <button
-            type="submit"
-            disabled={creating}
-            className="inline-flex items-center gap-1 bg-blue-700 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-800 disabled:opacity-60 ml-auto"
-          >
-            {creating
-              ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-              : <UserPlus size={16} aria-hidden="true" />}
-            Create
-          </button>
-        </div>
-      </form>
-    </details>
   );
 }
 
@@ -602,6 +425,7 @@ function AgentCard({
           </h2>
           <p className="text-sm text-gray-700">
             {agent.username ? `username ${agent.username}` : 'no username'}
+            {agent.nin && <> · NIN {agent.nin}</>}
             {' · '}{agent.active_device_count} active device{agent.active_device_count === 1 ? '' : 's'}
             {isSelf && <span className="text-gray-600"> · this is you</span>}
           </p>
@@ -783,74 +607,6 @@ function AgentCard({
       )}
     </article>
   );
-}
-
-function Field({
-  label,
-  htmlFor,
-  hint,
-  children
-}: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-800 mb-1">
-        {label}
-      </label>
-      {children}
-      {hint && <p className="text-xs text-gray-600 mt-1">{hint}</p>}
-    </div>
-  );
-}
-
-const inputClass = 'w-full border border-gray-400 rounded-md p-2 text-sm bg-white';
-
-const emptyFormShape = {
-  agent_code: '',
-  full_name: '',
-  username: '',
-  password: '',
-  role: 'AGENT' as AdminAgentRole,
-  imei: ''
-};
-
-/**
- * Client-side mirror of Validator's create rules, so the administrator is told
- * why before the round trip. The server re-validates and is the authority on
- * duplicates; this only short-circuits the obvious mistakes.
- */
-function validateCreate(form: typeof emptyFormShape): string | null {
-  if (!/^[A-Za-z0-9._-]{2,64}$/.test(form.agent_code.trim())) {
-    return 'Agent code must be 2 to 64 characters using letters, digits, dot, underscore or hyphen.';
-  }
-
-  if (form.full_name.trim().length < 1) {
-    return 'Full name is required.';
-  }
-
-  const username = form.username.trim();
-  if (!/^[A-Za-z0-9._-]{3,64}$/.test(username)) {
-    return 'Username must be 3 to 64 characters using letters, digits, dot, underscore or hyphen.';
-  }
-  if (!/[A-Za-z]/.test(username)) {
-    return 'Username must contain at least one letter.';
-  }
-
-  const passwordProblem = validatePassword(form.password);
-  if (passwordProblem) {
-    return passwordProblem;
-  }
-
-  const imei = form.imei.trim().replace(/[\s-]/g, '');
-  if (imei !== '' && !/^\d{14,16}$/.test(imei)) {
-    return 'IMEI must be 14 to 16 digits.';
-  }
-
-  return null;
 }
 
 function validatePassword(password: string): string | null {

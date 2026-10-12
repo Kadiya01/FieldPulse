@@ -298,9 +298,42 @@ $enrol = static function (array $agent, ?string $password = null) use ($baseUrl,
 $list   = static fn (?string $token, array $overrides = []) => HttpServer::sendJson(
     $baseUrl, $appUrl, 'GET', '/api/v1/admin/agents.php', [], $token, $overrides
 );
-$create = static fn (string $token, array $body) => HttpServer::sendJson(
+$createRequest = static fn (string $token, array $body) => HttpServer::sendJson(
     $baseUrl, $appUrl, 'POST', '/api/v1/admin/agents.php', $body, $token
 );
+$create = static function (string $token, array $body) use ($agents, &$createdAgentIds): array {
+    $id = $agents->create((string) $body['agent_code'], (string) $body['full_name'], $body['imei'] ?? null);
+    $createdAgentIds[] = $id;
+
+    if (isset($body['role'])) {
+        $agents->setRole($id, (string) $body['role']);
+    }
+    if (isset($body['username'], $body['password'])) {
+        $agents->setCredentials($id, (string) $body['username'], Credentials::hash((string) $body['password']));
+    }
+
+    $row = $agents->findById($id);
+    if ($row === null) {
+        throw new RuntimeException('Admin test fixture could not be re-read.');
+    }
+
+    return [
+        'status' => 201,
+        'body' => [
+            'data' => [
+                'id' => $id,
+                'agent_code' => (string) $row['agent_code'],
+                'full_name' => (string) $row['full_name'],
+                'role' => (string) $row['role'],
+                'status' => (string) $row['status'],
+                'username' => $row['username'] ?? null,
+                'has_credential' => ($row['password_hash'] ?? null) !== null,
+                'active_device_count' => 0,
+                'created_at' => (string) $row['created_at'],
+            ],
+        ],
+    ];
+};
 $update = static function (string $token, array $body) use ($baseUrl, $appUrl): array {
     $r = HttpServer::sendJson(
         $baseUrl, $appUrl, 'POST', '/api/v1/admin/agent.php', $body, $token
@@ -374,72 +407,16 @@ $t->test('an ADMIN lists the account directory', function (TestRunner $t) use ($
 
 $t->group('create');
 
-$t->test('a valid account is created and can log in immediately', function (TestRunner $t) use ($create, $list, $login, $adminSession, $runTag) {
-    $username = $runTag . '.created';
-    $password = 'created-pass-4921';
-
-    $r = $create($adminSession['token'], [
+$t->test('administrators cannot create agent registrations', function (TestRunner $t) use ($createRequest, $adminSession, $runTag, $errorCode) {
+    $r = $createRequest($adminSession['token'], [
         'agent_code' => $runTag . '-created',
         'full_name'  => 'Created Agent',
-        'username'   => $username,
-        'password'   => $password,
+        'username'   => $runTag . '.created',
+        'password'   => 'created-pass-4921',
     ]);
 
-    $t->assertSame(201, $r['status'], 'a valid create succeeds, got ' . $r['status']);
-    $t->assertSame('AGENT', $r['body']['data']['role'] ?? null, 'the default role is AGENT');
-    $t->assertSame(true, $r['body']['data']['has_credential'] ?? null, 'the account is immediately usable');
-    $t->assertFalse(str_contains((string) $r['raw'], $password), 'the plaintext password never leaves the server');
-
-    $loginResult = $login(['username' => $username, 'password' => $password]);
-    $t->assertSame(200, $loginResult['result']['status'], 'the created user can log in');
-});
-
-$t->test('duplicate agent codes and duplicate usernames are refused', function (TestRunner $t) use ($create, $adminSession, $admin, $runTag) {
-    $dupCode = $create($adminSession['token'], [
-        'agent_code' => $admin['agentCode'],
-        'full_name'  => 'Duplicate',
-        'username'   => $runTag . '.dupcode',
-        'password'   => 'duplicate-pass-42',
-    ]);
-
-    $t->assertSame(409, $dupCode['status'], 'a duplicate agent code is refused, got ' . $dupCode['status']);
-
-    $r2 = $create($adminSession['token'], [
-        'agent_code' => $runTag . '-dupuser',
-        'full_name'  => 'Duplicate User',
-        'username'   => $admin['username'],
-        'password'   => 'duplicate-pass-42',
-    ]);
-
-    $t->assertSame(409, $r2['status'], 'a duplicate username is refused, got ' . $r2['status']);
-});
-
-$t->test('a weak password, an unknown role and an unknown field are all 422', function (TestRunner $t) use ($create, $adminSession, $runTag) {
-    $weak = $create($adminSession['token'], [
-        'agent_code' => $runTag . '-weakpw',
-        'full_name'  => 'Weak',
-        'username'   => $runTag . '.weak',
-        'password'   => 'short',
-    ]);
-    $t->assertSame(422, $weak['status'], 'a weak password is refused, got ' . $weak['status']);
-
-    $role = $create($adminSession['token'], [
-        'agent_code' => $runTag . '-badrole',
-        'full_name'  => 'Bad Role',
-        'username'   => $runTag . '.badrole',
-        'password'   => 'role-pass-4921',
-        'role'       => 'GOD',
-    ]);
-    $t->assertSame(422, $role['status'], 'an unknown role is refused, got ' . $role['status']);
-
-    $extra = $create($adminSession['token'], [
-        'agent_code' => $runTag . '-extra',
-        'full_name'  => 'Extra',
-        'username'   => $runTag . '.extra',
-        'password'   => 'extra-pass-4921',
-        'privilege'  => 'everything',
-    ]);
-    $t->assertSame(422, $extra['status'], 'an unknown field is refused, got ' . $extra['status']);
+    $t->assertSame(405, $r['status'], 'the registration endpoint is disabled for administrators');
+    $t->assertSame('METHOD_NOT_ALLOWED', $errorCode($r), 'the endpoint clearly reports the disabled operation');
 });
 
 /* -- Role changes ---------------------------------------------------------- */

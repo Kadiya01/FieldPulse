@@ -112,10 +112,12 @@ uses a bearer header, which a browser will not attach cross-origin.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/api/v1/auth/login.php` | public, username + password |
+| POST | `/api/v1/agents/register.php` | public, self-registration |
+| POST | `/api/v1/auth/agent-login.php` | public, IMEI |
+| POST | `/api/v1/auth/login.php` | public, username + password for administrators/reviewers |
 | POST | `/api/v1/auth/refresh.php` | refresh cookie + Origin |
 | POST | `/api/v1/auth/logout.php` | refresh cookie + Origin |
-| POST | `/api/v1/device/register.php` | bootstrap token + pairing code |
+| POST | `/api/v1/device/register.php` | bootstrap token; new self-registered agents do not need a pairing code |
 | POST | `/api/v1/submit.php` | **signed** |
 | GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
 | GET | `/api/v1/leaderboard.php` | bearer |
@@ -125,7 +127,7 @@ uses a bearer header, which a browser will not attach cross-origin.
 | GET | `/api/v1/rewards/index.php` | operator |
 | POST | `/api/v1/rewards/decide.php` | operator |
 | GET | `/api/v1/admin/agents.php` | admin |
-| POST | `/api/v1/admin/agents.php` | admin |
+| POST | `/api/v1/admin/agents.php` | admin, disabled; agents self-register |
 | POST | `/api/v1/admin/agent.php` | admin |
 
 Every path is the literal file on disk, `.php` suffix included. There is no
@@ -138,7 +140,8 @@ the first cPanel request.
 
 ### POST /api/v1/auth/login.php
 
-Exchanges a username and password for a **bootstrap** session.
+Exchanges an administrator/reviewer username and password for a **bootstrap**
+session. Agent accounts use `/api/v1/auth/agent-login.php`.
 
 ```json
 { "username": "ada", "password": "…" }
@@ -178,8 +181,44 @@ them being distinguishable is a way to learn things about the account.
 limit is keyed on the username **and** the source IP; per-IP is what stops a
 single host walking the whole user table.
 
-IMEI is not accepted, read, or required anywhere in this flow. It is not an
-authentication factor and is not used as one.
+This route does not authenticate AGENT-role accounts created through public
+self-registration. Pre-existing agent accounts retain their current login
+credentials for compatibility; new agents use IMEI login.
+
+---
+
+### POST /api/v1/agents/register.php
+
+Creates an active AGENT account immediately. Agent account registration is not
+queued for administrator approval; administrators approve submitted records
+through the review endpoints.
+
+```json
+{
+  "full_name": "Ada Lovelace",
+  "nin": "12345678901",
+  "imei": "490154203237518",
+  "device_type": "SAMSUNG"
+}
+```
+
+`device_type` must be one of `EACRUGGED`, `EASTAEON`, `HENA`, `MANTRA`,
+`OUKITEL`, `SAMSUNG` or `WHEATEK`. The NIN is stored and exposed only through
+the ADMIN-only account directory. Duplicate NIN or IMEI values receive a
+generic `409 STATE_CONFLICT` response. Registration attempts are rate-limited
+by NIN and source IP.
+
+The successful response includes the active agent summary but never returns
+the NIN or IMEI. The browser then signs in with the submitted IMEI and binds its
+local device key.
+
+### POST /api/v1/auth/agent-login.php
+
+Exchanges an active agent's IMEI for a **bootstrap** session. The IMEI is an
+identifier, not a secret; anyone who knows or copies it may impersonate that
+agent. Requests are rate-limited by IMEI and source IP. The client must bind
+the browser's device key at `/api/v1/device/register.php` before making signed
+requests.
 
 ---
 
@@ -553,6 +592,7 @@ The account directory. Query: `limit` (1–200, default 50), `offset` (default 0
       "id": 3,
       "agent_code": "AG-001",
       "full_name": "Ada Lovelace",
+      "nin": "12345678901",
       "role": "ADMIN",
       "status": "ACTIVE",
       "username": "mpadmin",
@@ -569,6 +609,9 @@ The account directory. Query: `limit` (1–200, default 50), `offset` (default 0
 }
 ```
 
+`nin` is the full NIN and is included only in this ADMIN-only directory response.
+Do not expose or log this field outside authorized administrator workflows.
+
 `username` is `null` and `has_credential` is `false` once a credential has been
 revoked or the account retired. `active_device_count` counts bound devices that
 are not revoked, so it is the number that matters for "can this person still get
@@ -576,35 +619,13 @@ in". `meta.requested_by` is the caller's own `agent_code` and `meta.active_admin
 the count the last-admin guard is applied against; a client uses both to disable
 the controls the server would refuse, rather than offering a button that 409s.
 
-#### POST `/api/v1/admin/agents.php`
+#### POST `/api/v1/admin/agents.php` (disabled)
 
-Creates an account. It always lands `ACTIVE` with a credential, so the person can
-sign in on the first try — a created account is a promise to a person, not a
-draft. `role` and `imei` are optional; `role` defaults to `AGENT`.
+Returns `405 METHOD_NOT_ALLOWED`. Agent accounts are created by the public
+self-registration endpoint; administrators do not approve or create agent
+registrations. Existing account management remains available through
+`POST /api/v1/admin/agent.php`.
 
-```json
-{
-  "agent_code": "AG-012",
-  "full_name": "Grace Hopper",
-  "username": "grace",
-  "password": "…",
-  "role": "AGENT",
-  "imei": "…"
-}
-```
-
-| Status | Meaning |
-|---|---|
-| `201` | Created; body is `{ "data": <agent> }` in the directory shape above |
-| `409` | `IDEMPOTENCY_CONFLICT` — `agent_code` or `username` already in use |
-| `422` | `VALIDATION_FAILED` — bad format, or an unknown field in the body |
-
-`agent_code` is 2–64 characters of `A–Z a–z 0–9 . _ -`; `username` is 3–64 of the
-same with at least one letter (so an all-digit, IMEI-shaped username cannot be
-chosen); `password` is 8–128 characters with at least one letter and one digit.
-The field list is an allowlist, so an unknown key — including one that tried to
-set `status` directly — is rejected with `422`, not dropped. `imei` is stored as
-an administrative note only and is never an authentication factor.
 
 #### POST `/api/v1/admin/agent.php`
 
@@ -668,6 +689,15 @@ account-status oracle.
 
 ## Client integration order
 
+For agents, register at `/register` with full name, NIN, IMEI and one of the
+supported device types. Registration activates the account immediately. Then
+sign in at `/login` with the registered IMEI; the agent flow binds the browser's
+device key without an administrator-issued code. An IMEI is an identifier, not
+a secret.
+
+For administrators and reviewers, sign in at `/admin/login` with username and
+password:
+
 1. `POST /api/v1/auth/login.php` with username and password. Keep the returned access token
    in memory only — never in `localStorage` or `sessionStorage` — and let the
    `HttpOnly` refresh cookie be stored by the browser.
@@ -676,11 +706,9 @@ account-status oracle.
    `CryptoKey` handle and its public JWK in IndexedDB, and never send the
    private half anywhere.
 3. `POST /api/v1/device/register.php` with the bootstrap token, `device_uuid`,
-   `public_key_jwk`, and a pairing code if the server asks for one. This returns
-   the device-bound token that replaces the bootstrap one. The app surfaces the
-   whole first-device flow on the standalone `/register` route (username,
-   password and an administrator-issued code on one screen); the sign-in page's
-   first-device step is the reactive form of the same two calls.
+   `public_key_jwk`, and a pairing code if the server asks for one. For
+   pre-existing managed accounts, this returns the device-bound token that
+   replaces the bootstrap one.
 4. On a page load with no token in memory, call `/api/v1/auth/refresh.php` once to restore
    it. If that succeeds but IndexedDB has no private key, the state is
    `UNREGISTERED` — the cookie is fine, the browser cannot prove the device —

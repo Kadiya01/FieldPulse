@@ -7,16 +7,10 @@ namespace FieldPulse\Database;
 /**
  * agents access.
  *
- * The credential lookup is by username, and the only thing that proves an agent
- * is who they claim to be is a password verified with password_verify() against
- * the bcrypt hash in password_hash.
- *
- * IMEI is not a credential and is not used to authenticate anything. It is
- * retained as an administrative attribute — useful for support and for matching
- * a handset to an ERP record — and deliberately reachable only through
- * findByImei(), which no authentication path calls. It is not a secret: it is
- * printed on the handset, printed on the box, and recycled between owners, and
- * a browser cannot read it at all.
+ * Administrator/reviewer credentials are stored as password hashes. New
+ * self-registered agents identify themselves with the IMEI stored on their
+ * account; this is intentionally a weak identifier-only login because an IMEI
+ * is printed on the handset/box and can be copied.
  */
 final class AgentRepository extends Repository
 {
@@ -107,8 +101,7 @@ final class AgentRepository extends Repository
     }
 
     /**
-     * The lookup that used to sit behind login. Retained for administrative
-     * and support use only.
+     * Lookup for agent IMEI login and the administrative account directory.
      *
      * @return array<string,mixed>|null
      */
@@ -118,6 +111,40 @@ final class AgentRepository extends Repository
             'SELECT * FROM agents WHERE imei = :imei AND imei IS NOT NULL',
             ['imei' => $imei]
         );
+    }
+
+    public function registrationExists(string $nin, string $imei): bool
+    {
+        return $this->one(
+            'SELECT id FROM agents WHERE nin = :nin OR imei = :imei LIMIT 1',
+            ['nin' => $nin, 'imei' => $imei]
+        ) !== null;
+    }
+
+    public function createSelfRegistered(
+        string $code,
+        string $fullName,
+        string $nin,
+        string $imei,
+        string $deviceType
+    ): int {
+        $this->exec(
+            'INSERT INTO agents
+                (agent_code, full_name, nin, role, status, imei, device_type, self_registered, created_at, updated_at)
+             VALUES
+                (:code, :name, :nin, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+            [
+                'code'        => $code,
+                'name'        => $fullName,
+                'nin'         => $nin,
+                'role'        => 'AGENT',
+                'status'      => self::ACTIVE,
+                'imei'        => $imei,
+                'device_type' => $deviceType,
+            ]
+        );
+
+        return (int) Connection::lastInsertId();
     }
 
     public function create(string $code, string $fullName, ?string $imei = null): int
@@ -200,7 +227,7 @@ final class AgentRepository extends Repository
      */
     public function listForAdmin(int $limit, int $offset): array
     {
-        $sql = "SELECT a.id, a.agent_code, a.full_name, a.role, a.status,
+        $sql = "SELECT a.id, a.agent_code, a.full_name, a.nin, a.role, a.status,
                        a.username, a.created_at,
                        (SELECT COUNT(*) FROM devices d
                          WHERE d.agent_id = a.id

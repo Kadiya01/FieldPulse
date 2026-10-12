@@ -122,7 +122,8 @@ publication rules.
   required note. Agents cannot reach it; the server enforces the role
   independently of what the UI shows.
 - **Device-bound sessions.** A non-extractable ECDSA P-256 key in the browser
-  signs state-changing requests. Device registration needs an operator-issued
+  signs state-changing requests. New self-registered agents bind their browser
+  directly; existing managed accounts may still require an operator-issued
   one-time pairing code.
 - **Installable PWA.** Manifest, icons, and an offline service worker — a
   capability of a responsive web application, not the product's identity.
@@ -193,9 +194,11 @@ verdict on screen.
 - **Two factors on state-changing calls.** A 15-minute HS256 bearer token *and*
   an ECDSA signature over `METHOD\nPATH\nTIMESTAMP\nNONCE\nSHA256HEX(body)`, with
   a replay-protected nonce and a timestamp window.
-- **A weak first token by design.** Login returns a `scope=bootstrap` token that
-  can reach exactly one route: device registration. Upgrading it to a
-  device-bound token requires the pairing code an operator issues.
+- **A weak first token by design.** Admins and reviewers sign in with username
+  and password; newly registered agents use their IMEI alone. Both receive a
+  `scope=bootstrap` token that can reach exactly one route: device registration.
+  IMEI is an identifier, not a secret, so anyone who knows it may impersonate
+  the agent before a device key is bound.
 - **The refresh cookie is unreadable by design.** `HttpOnly`, `Secure`,
   `SameSite=Strict`, scoped to `/api/v1/auth`, and `Origin`-checked — the only
   two cookie-authenticated endpoints, so they are the only two that need CSRF
@@ -206,9 +209,10 @@ verdict on screen.
 - **Validation details are safe in production.** `error.details.field` is
   allowlisted rather than gated behind `APP_DEBUG`, so a client can tell an agent
   which input is wrong without the debug flag leaking internals.
-- **No IMEI in the auth flow.** An IMEI may be recorded on the agent row by an
-  operator for inventory, but no endpoint accepts it, no login uses it, and a
-  browser cannot read one from a handset.
+- **Self-service agent signup.** Agents register with their name, NIN, IMEI and
+  device type, and accounts become active immediately. Administrators review
+  submitted records; they do not approve registrations. Full NIN is returned
+  only by the ADMIN-only account directory.
 
 ## What this is not evidence of
 
@@ -331,26 +335,16 @@ Supported engines are MySQL **8.0.3 or later** (tested on 8.0.40) and MariaDB
 
 ## Deploying to cPanel
 
-Full instructions, including `.htaccess` requirements and the credential and
-pairing-code workflow, are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). In short:
+Full setup and update steps, including `.htaccess` requirements and migration
+ordering, are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). For an existing
+installation, upload and apply migration `024_self_registration.sql`, deploy
+the changed backend PHP files and new API entry points, then upload the built
+`dist/` contents into the hostname's document root. Do not upload `dist/` alone:
+the backend and database migration are also required.
 
-1. Build the frontend: `npm run build`.
-2. Copy `dist/` into `public_html/`, and `api/` to `public_html/api/`.
-3. Upload `private_storage/` **outside** the document root — a sibling of
-   `public_html`, not a child — and set permissions (`750` on the directory,
-   `640` on `.env` and the migration files) or it will be served as plaintext.
-4. `cp .env.example private_storage/.env`, set the database credentials, and
-   generate the signing secret with
-   `php -r "echo bin2hex(random_bytes(48)), PHP_EOL;"` into `JWT_SECRET`.
-   **Rotating it invalidates every access and refresh token**, so every agent is
-   signed out.
-5. Run `php private_storage/bin/migrate.php`.
-6. Confirm the host honours `AllowOverride All`, or the `.htaccess` denials do
-   nothing.
-7. `php private_storage/bin/healthcheck.php` must be clean before you provision
-   anyone.
-8. Provision with `bin/provision_agent.php`, issue a pairing code with
-   `bin/pair_device.php`, and hand both to the agent out of band.
+The agent registration page is `/register`, agent IMEI sign-in is `/login`,
+and administrator/reviewer username-password sign-in is `/admin/login`.
+`private_storage/` must remain outside and beside the active document root.
 
 ## Documentation
 

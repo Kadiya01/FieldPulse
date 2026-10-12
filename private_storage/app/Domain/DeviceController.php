@@ -39,10 +39,10 @@ use FieldPulse\Support\Logger;
  * Whether a *new* device needs a pairing code is a configured policy, not a
  * hardcoded rule. See authoriseRegistration().
  *
- * IMEI is not accepted, read, or required anywhere in this flow. A device is
- * identified by a key pair the browser generated; the server stores the public
- * half and never sees the private one. The devices.imei column is left NULL and
- * exists only for the administrative pairing CLI.
+ * IMEI is not accepted by this device-binding route. A device is identified by
+ * a key pair the browser generated; the server stores the public half and never
+ * sees the private one. The devices.imei column remains NULL and exists only
+ * for the administrative pairing CLI.
  */
 final class DeviceController implements ActionInterface
 {
@@ -313,6 +313,18 @@ final class DeviceController implements ActionInterface
 
     private function codeRequired(int $agentId): bool
     {
+        // Publicly registered agents already proved control of their IMEI.
+        // Requiring an administrator-issued code here would contradict the
+        // self-service flow and leave the new account unable to use its device.
+        $selfRegistered = Connection::fetchValue(
+            'SELECT self_registered FROM agents WHERE id = :a',
+            ['a' => $agentId]
+        );
+
+        if ((int) $selfRegistered === 1) {
+            return false;
+        }
+
         return match ($this->policy()) {
             self::POLICY_ALWAYS => true,
             self::POLICY_NEVER  => false,

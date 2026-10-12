@@ -161,6 +161,13 @@ final class LoginController implements ActionInterface
             throw self::genericFailure();
         }
 
+        if (
+            ($agent['role'] ?? 'AGENT') === 'AGENT'
+            && (int) ($agent['self_registered'] ?? 0) === 1
+        ) {
+            throw self::genericFailure();
+        }
+
         return $agent;
     }
 
