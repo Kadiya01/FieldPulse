@@ -70,7 +70,7 @@ final class PHash
         try {
             return self::fromGdImage($image);
         } finally {
-            imagedestroy($image);
+            unset($image);
         }
     }
 
@@ -151,7 +151,7 @@ final class PHash
 
             return $block;
         } finally {
-            imagedestroy($thumb);
+            unset($thumb);
         }
     }
 

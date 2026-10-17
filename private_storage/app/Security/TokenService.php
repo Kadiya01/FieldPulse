@@ -189,6 +189,14 @@ final class TokenService
         // Reuse of a rotated token: the holder of the cookie is not the original
         // device (or the original device was cloned). Kill the family.
         if ($row['revoked_at'] !== null) {
+            if (($row['revoked_reason'] ?? null) === 'DEVICE_REACTIVATED') {
+                throw new ApiException(
+                    401,
+                    ErrorCode::REFRESH_INVALID,
+                    'Refresh token has been revoked.'
+                );
+            }
+
             $this->tokens->revokeFamily((string) $row['token_family'], 'REUSE_DETECTED');
 
             /*

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router-dom';
 import {
   LogOut,
   WifiOff,
@@ -9,6 +9,7 @@ import SiteNav from './SiteNav';
 import { useSession } from '../auth/sessionContext';
 import { handleAuthFailure } from '../auth/session';
 import { logout } from '../api/client';
+import BrandHeader from './BrandHeader';
 
 /**
  * Where the app's chrome lives, and the only place a page title is set.
@@ -29,10 +30,7 @@ export default function Layout() {
 
       <header className="bg-blue-600 text-white shadow-md">
         <div className="max-w-3xl mx-auto px-4 pt-3 pb-2 flex items-center gap-3">
-          <Link to="/" className="flex items-center gap-2 font-bold text-lg rounded">
-            <PulseMark />
-            <span>FieldPulse</span>
-          </Link>
+          <BrandHeader className="shrink-0" logoClassName="h-14 w-28 sm:h-16 sm:w-32" />
 
           <div className="ml-auto flex items-center gap-2">
             {/* Status is text plus an icon, never colour alone. */}
@@ -113,36 +111,6 @@ function SignOutButton() {
       <LogOut size={12} aria-hidden="true" />
       Sign out
     </button>
-  );
-}
-
-/**
- * The wordmark glyph: a field pulse.
- *
- * The same shape as the favicon and the PWA icons, drawn inline so the header
- * needs no extra request and cannot render a broken image. `aria-hidden` because
- * the adjacent text already spells the name out — an icon with an accessible
- * name of "FieldPulse" immediately before another "FieldPulse" is read twice.
- */
-function PulseMark({ size = 22 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-      className="shrink-0"
-    >
-      <rect width="24" height="24" rx="6" fill="#ffffff" fillOpacity="0.18" />
-      <path
-        d="M4 12.5h3.2l1.6-3.6 2.6 7.2 1.8-4.4 1.1 2.2H20"
-        stroke="#ffffff"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 

@@ -39,10 +39,10 @@ use FieldPulse\Support\Logger;
  * Whether a *new* device needs a pairing code is a configured policy, not a
  * hardcoded rule. See authoriseRegistration().
  *
- * IMEI is not accepted, read, or required anywhere in this flow. A device is
- * identified by a key pair the browser generated; the server stores the public
- * half and never sees the private one. The devices.imei column is left NULL and
- * exists only for the administrative pairing CLI.
+ * IMEI is not accepted by this device-binding route. A device is identified by
+ * a key pair the browser generated; the server stores the public half and never
+ * sees the private one. The devices.imei column remains NULL and exists only
+ * for the administrative pairing CLI.
  */
 final class DeviceController implements ActionInterface
 {
@@ -169,17 +169,31 @@ final class DeviceController implements ActionInterface
             );
         }
 
-        if (!DeviceStatus::canSubmit((string) $device['status'])) {
+        $auditAction = 'DEVICE_REBOUND';
+
+        if ((string) $device['status'] === DeviceStatus::REVOKED) {
+            $deviceId = (int) $device['id'];
+
+            // A successful credential login can restore this exact paired
+            // device, but old refresh cookies must not become usable again.
+            TokenService::i()->revokeDeviceSessions($deviceId, 'DEVICE_REACTIVATED');
+            $this->devices->setStatus($deviceId, DeviceStatus::ACTIVE);
+            $device = $this->devices->findById($deviceId);
+
+            if ($device === null) {
+                throw new \RuntimeException('Device row vanished while reactivating it.');
+            }
+
+            $auditAction = 'DEVICE_REACTIVATED';
+        } elseif (!DeviceStatus::canSubmit((string) $device['status'])) {
             throw new ApiException(
                 403,
                 DeviceStatus::denialCode((string) $device['status']),
-                (string) $device['status'] === DeviceStatus::REVOKED
-                    ? 'This device has been revoked. Re-pairing is required.'
-                    : 'This device is not authorised.'
+                'This device is not authorised.'
             );
         }
 
-        return $this->issueBoundSession($request, $context, $device, 'DEVICE_REBOUND');
+        return $this->issueBoundSession($request, $context, $device, $auditAction);
     }
 
     /**
@@ -313,6 +327,18 @@ final class DeviceController implements ActionInterface
 
     private function codeRequired(int $agentId): bool
     {
+        // Publicly registered agents already proved control of their IMEI.
+        // Requiring an administrator-issued code here would contradict the
+        // self-service flow and leave the new account unable to use its device.
+        $selfRegistered = Connection::fetchValue(
+            'SELECT self_registered FROM agents WHERE id = :a',
+            ['a' => $agentId]
+        );
+
+        if ((int) $selfRegistered === 1) {
+            return false;
+        }
+
         return match ($this->policy()) {
             self::POLICY_ALWAYS => true,
             self::POLICY_NEVER  => false,

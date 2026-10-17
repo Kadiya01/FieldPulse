@@ -539,6 +539,21 @@ $t->test('sends the headers a JSON API and a PWA need', function (TestRunner $t)
     $t->assertContains('microphone=()', $text, 'no microphone use in this application');
 });
 
+$t->test('forwards Authorization to PHP through FastCGI', function (TestRunner $t) use ($htaccessPath): void {
+    $text = (string) file_get_contents($htaccessPath);
+
+    $t->assertContains(
+        'SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1',
+        $text,
+        'FastCGI must expose the bearer header as HTTP_AUTHORIZATION'
+    );
+    $t->assertContains(
+        'RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]',
+        $text,
+        'the rewrite environment fallback must preserve Authorization for PHP'
+    );
+});
+
 $t->test('the CSP grants no escape hatch', function (TestRunner $t) use ($htaccessPath): void {
     $text = (string) file_get_contents($htaccessPath);
 

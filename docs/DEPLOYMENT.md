@@ -267,6 +267,70 @@ HTTP. Pass `--httpd` to also boot a real Apache and assert exact status codes
 for the routing `.htaccess` owns. Without it, the suite prints a warning saying
 that tier did not run rather than quietly passing.
 
+### Updating an existing installation for agent self-registration
+
+This release changes both the backend and frontend. Uploading `dist/` alone
+does **not** enable self-registration or IMEI sign-in. Apply the additive
+database migration first; the previous application continues to work while
+the update is in progress.
+
+1. Back up the production database and the existing `private_storage/app/` and
+   web document-root trees. Do not overwrite `private_storage/.env`.
+2. Upload `private_storage/migrations/024_self_registration.sql` and
+   `private_storage/migrations/025_pending_agent_approval.sql` to the existing
+   sibling `private_storage/migrations/` directory.
+3. From cPanel Terminal, check migration state, apply pending migrations, then
+   confirm the result:
+
+   ```bash
+   php ~/private_storage/bin/migrate.php --status
+   php ~/private_storage/bin/migrate.php
+   php ~/private_storage/bin/migrate.php --status
+   ```
+
+   The final status must show both migrations as applied with no
+   checksum mismatch. Never edit a migration after it has been applied.
+4. Upload these production PHP files, preserving their directory structure:
+
+   ```text
+   private_storage/app/Config/schema.php
+   private_storage/app/Database/AgentRepository.php
+   private_storage/app/Domain/AdminAgentController.php
+   private_storage/app/Domain/AgentLoginController.php        (new)
+   private_storage/app/Domain/AgentRegistrationController.php (new)
+   private_storage/app/Domain/DeviceController.php
+   private_storage/app/Domain/LoginController.php
+   private_storage/app/Domain/Validator.php
+   private_storage/app/Http/Kernel.php
+   private_storage/app/Security/RateLimiter.php
+   private_storage/migrations/024_self_registration.sql
+   private_storage/migrations/025_pending_agent_approval.sql
+   public_html/api/v1/agents/register.php                     (new)
+   public_html/api/v1/auth/agent-login.php                    (new)
+   ```
+
+   Keep `private_storage` outside the active web document root. Do not replace
+   `.env`, `.user.ini`, or `.htaccess` during this application-code upload.
+5. Upload the contents of the new `dist/` build into the actual web document
+   root for the FieldPulse hostname. For the primary domain this is commonly
+   `public_html/`; for a subdomain, use the folder configured as that
+   subdomain's document root. Preserve `.htaccess`, `.user.ini`, and `api/`.
+   If the upload method does not synchronize `assets/`, remove only obsolete
+   content-hashed files from that directory; do not delete the document root
+   or its protected files.
+6. Run `php ~/private_storage/bin/healthcheck.php`. Check `/login` for agent
+   IMEI sign-in, `/register` for self-registration, and `/admin/login` for
+   administrator/reviewer username-password sign-in. Confirm the API routes
+   return API responses rather than SPA HTML, and that an authorized
+   administrator can view the account directory.
+
+New registrations remain pending until an administrator approves them in
+account management; rejected registrations can be reopened there for
+reconsideration. The registration form requires a Nigerian mobile number.
+IMEI is an identifier, not a secret.
+Do not test registration using a person's NIN or IMEI unless that person is
+intentionally being registered.
+
 ---
 
 ## 6. Cron
@@ -391,15 +455,14 @@ file, so this is a correctness check, not a hardening preference.
 
 ## 9. Security model in one paragraph
 
-Login is a **username and password** (bcrypt). An IMEI may be recorded against an
-agent by `provision_agent.php --imei=` as an administrative inventory note, and
-it is deliberately not an authentication input: it is not accepted by any
-endpoint, not required to register a device, and cannot be read by a browser at
-all — a handset does not expose it to web code, so anything typed into a field is
-a string a user copied from a box. The factor that does stand between a stolen
-password and a new device is the one-time pairing code (`Security\PairingCode`),
-which is delivered by whoever supervises the agent and is not guessable from
-anything the handset exposes.
+Administrators and reviewers sign in with a **username and password** (bcrypt).
+Agents self-register with their full name, NIN, IMEI and an approved device type,
+then sign in with the registered IMEI. The IMEI is an identifier, not a secret:
+anyone who knows it can request an agent bootstrap session. The session can only
+bind a browser device key; subsequent state-changing requests require a device
+signature. New self-registered agents bind their first browser without a
+pairing code, while existing managed accounts continue to follow their
+configured pairing policy.
 
 Every login failure is byte-identical, and the password hash is verified even
 when the username does not exist, so neither the body nor the response time is

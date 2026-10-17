@@ -224,6 +224,18 @@ export async function recoverStrandedSubmissions(): Promise<number> {
   return stranded.length;
 }
 
+export async function retryAuthFailedSubmissions(): Promise<number> {
+  return db.submissions
+    .where('status')
+    .equals('FAILED_AUTH')
+    .modify({
+      status: 'PENDING',
+      next_retry_at: 0,
+      last_error_code: null,
+      last_error_message: null
+    });
+}
+
 async function acquireLock(): Promise<boolean> {
   return await db.transaction('rw', db.sync_lock, async () => {
     const lock = await db.sync_lock.get(SYNC_LOCK_ID);

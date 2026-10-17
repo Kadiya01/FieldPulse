@@ -10,7 +10,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { useSubmissions } from '../hooks/useSubmissions';
-import { triggerSync } from '../sync/coordinator';
+import { retryAuthFailedSubmissions, triggerSync } from '../sync/coordinator';
 import { fetchServerVerification, type ServerVerification } from '../api/client';
 import type { Submission } from '../db/db';
 
@@ -35,6 +35,18 @@ export default function QueuePage() {
   const [online, setOnline] = useState(() =>
     typeof navigator === 'undefined' ? true : navigator.onLine
   );
+  const [syncError, setSyncError] = useState('');
+
+  const syncNow = async () => {
+    setSyncError('');
+
+    try {
+      await retryAuthFailedSubmissions();
+      await triggerSync();
+    } catch {
+      setSyncError('Could not restart failed uploads. Keep this page open and try again.');
+    }
+  };
 
   useEffect(() => {
     const goOnline = () => setOnline(true);
@@ -61,7 +73,7 @@ export default function QueuePage() {
           </Link>
           <button
             type="button"
-            onClick={() => triggerSync()}
+            onClick={() => void syncNow()}
             className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-2 rounded border border-blue-300 hover:bg-blue-50"
           >
             <RefreshCw size={14} aria-hidden="true" />
@@ -75,6 +87,12 @@ export default function QueuePage() {
         server has decided, and only the latter can make a report verified — which is the
         only thing that moves your weekly standing.
       </p>
+
+      {syncError && (
+        <p role="alert" className="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded mb-4 text-sm">
+          {syncError}
+        </p>
+      )}
 
       {!online && (
         <p className="bg-amber-100 border border-amber-400 text-amber-900 px-4 py-3 rounded mb-4 text-sm">

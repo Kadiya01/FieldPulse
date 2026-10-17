@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LogIn, KeyRound, ShieldAlert } from 'lucide-react';
+import { LogIn, KeyRound } from 'lucide-react';
 import { generateAndStoreDeviceIdentity, getDeviceIdentity } from '../crypto/keys';
 import { login, registerDevice, ApiError, type SessionAgent } from '../api/client';
+import { loginErrorMessage } from '../auth/loginErrors';
+import BrandHeader from '../components/BrandHeader';
 
 type Stage = 'credentials' | 'pairing';
 
@@ -94,15 +96,10 @@ export default function LoginPage({
         navigate('/', { replace: true });
       }
     } catch (err) {
-      // Only the credentials call reaches here: completeRegistration handles its
-      // own device and pairing failures and reports them itself. Every
-      // credential failure is deliberately identical server-side, so there is
-      // nothing more specific to say than the status allows.
-      setErrorMsg(
-        err instanceof ApiError && err.status === 429
-          ? 'Too many attempts. Wait a few minutes and try again.'
-          : 'Sign in failed. Check your username and password.'
-      );
+      // Device and pairing failures are handled by completeRegistration; here,
+      // preserve safe server errors so transport/configuration failures are not
+      // misreported as bad credentials.
+      setErrorMsg(loginErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -133,9 +130,7 @@ export default function LoginPage({
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-          <div className="flex justify-center mb-6 text-amber-700">
-            <ShieldAlert size={48} aria-hidden="true" />
-          </div>
+          <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Pair this device</h1>
           <p className="text-sm text-gray-700 text-center mb-6">
             Signed in as <span className="font-medium">{username}</span>.
@@ -184,10 +179,9 @@ export default function LoginPage({
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-        <div className="flex justify-center mb-6 text-blue-700">
-          <KeyRound size={48} aria-hidden="true" />
-        </div>
-        <h1 className="text-2xl font-bold text-center text-gray-900 mb-6">FieldPulse sign in</h1>
+        <BrandHeader className="mb-4 flex justify-center" />
+        <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Admin sign in</h1>
+        <p className="text-sm text-gray-600 text-center mb-6">For administrators and record reviewers.</p>
 
         {errorMsg && (
           <div role="alert" className="bg-red-100 text-red-800 p-3 rounded mb-4 text-sm">
@@ -198,7 +192,7 @@ export default function LoginPage({
         <form onSubmit={handleCredentials} className="space-y-4">
           <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-800">
-              Agent username
+              Username
             </label>
             <input
               id="username"
@@ -233,14 +227,14 @@ export default function LoginPage({
           </button>
         </form>
         <p className="mt-4 text-xs text-gray-700 text-center">
-          This device gets its own cryptographic key on first sign-in. The key never leaves it,
-          and it is not sent to the server in any form.
+          This browser gets a cryptographic device key after sign-in. The private key stays on
+          this device.
         </p>
 
         <p className="mt-4 text-sm text-gray-700 text-center">
-          First time on this device?{' '}
-          <Link to="/register" className="text-blue-700 font-medium hover:underline">
-            Register it with a code
+          Are you an agent?{' '}
+          <Link to="/login" className="text-blue-700 font-medium hover:underline">
+            Sign in with IMEI
           </Link>
         </p>
       </div>

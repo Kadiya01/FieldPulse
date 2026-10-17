@@ -39,10 +39,10 @@ final class LeaderboardRepository extends Repository
      * again: a rank is the count of agents sorted before this one, and that is
      * only true if both statements agree on what "before" means.
      */
-    private const AHEAD_OF_SELF = ' AND (s.total_verified_count > :self_count
-                                   OR (s.total_verified_count = :self_count AND s.total_pending < :self_pending)
-                                   OR (s.total_verified_count = :self_count
-                                       AND s.total_pending = :self_pending
+    private const AHEAD_OF_SELF = ' AND (s.total_verified_count > :self_count_verified
+                                   OR (s.total_verified_count = :self_count_pending AND s.total_pending < :self_pending_less)
+                                   OR (s.total_verified_count = :self_count_code
+                                       AND s.total_pending = :self_pending_code
                                        AND a.agent_code < :self_code))';
 
     /**
@@ -114,9 +114,12 @@ final class LeaderboardRepository extends Repository
                        JOIN agents a ON a.id = s.agent_id
                       ' . $where . self::AHEAD_OF_SELF,
                     $params + [
-                        'self_count'   => (int) $self['total_verified_count'],
-                        'self_pending' => (int) $self['total_pending'],
-                        'self_code'    => (string) $self['agent_code'],
+                        'self_count_verified' => (int) $self['total_verified_count'],
+                        'self_count_pending'  => (int) $self['total_verified_count'],
+                        'self_pending_less'   => (int) $self['total_pending'],
+                        'self_count_code'     => (int) $self['total_verified_count'],
+                        'self_pending_code'   => (int) $self['total_pending'],
+                        'self_code'           => (string) $self['agent_code'],
                     ]
                 );
             }

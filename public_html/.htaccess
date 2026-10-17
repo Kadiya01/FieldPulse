@@ -57,8 +57,30 @@
     RedirectMatch 404 ^/(cgi-bin|wp-admin|wp-login|xmlrpc\.php)
 </IfModule>
 
+# --- Authorization header passthrough ---------------------------------------
+# Under cPanel, PHP runs through the FastCGI layer (ea-php84 => php-fpm /
+# suexec CGI). Apache's default configuration strips the Authorization header
+# before it can become $_SERVER['HTTP_AUTHORIZATION'], and every authenticated
+# FieldPulse endpoint reads the Bearer token from exactly that key
+# (app/Http/Request.php, extractHeaders()). Without this, the server answers
+# every authenticated call with 401 UNAUTHENTICATED "A Bearer access token is
+# required" even though the client sent a perfectly good header.
+#
+# The SetEnvIf form is the classic mod_php/mod_setenvif fix; the RewriteRule
+# E= form covers FastCGI backends that do not inherit SetEnvIf variables. Both
+# are harmless when the header is already present, and the rewrite is a
+# pass-through (no L/S/E flag other than E=), so it cannot disturb routing.
+<IfModule mod_setenvif.c>
+    SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+</IfModule>
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
+
+    # FastCGI-safe equivalent of the SetEnvIf above: copy the raw Authorization
+    # header into HTTP_AUTHORIZATION for the PHP handler.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
     # Any request whose final path segment begins with a dot is a probe for
     # .env, .git, .htpasswd. Denied outright, including for well-known, which

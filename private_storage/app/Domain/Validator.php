@@ -74,14 +74,11 @@ final class Validator
     /**
      * IMEI: 14-16 digits, and Luhn-valid.
      *
-     * NOT AN AUTHENTICATION FACTOR. This validates the *format* of an
-     * administrative attribute only. Nothing in the login, refresh or device
-     * registration flow calls this, and an IMEI does not authenticate anyone:
-     * it is a hardware serial number, printed on the handset and the box and
-     * recycled between owners, and a browser cannot read it at all.
-     *
-     * The Luhn check remains because it is still worth rejecting a mistyped
-     * value that is being stored for support purposes.
+     * The agent login flow uses IMEI as its sole typed credential by
+     * requirement. An IMEI is a hardware identifier, not a secret, so this is
+     * materially weaker than password authentication; rate limiting does not
+     * make the identifier secret. Existing P-256 device binding remains in
+     * place for signed requests after the first login.
      */
     public static function imei(mixed $value, string $field = 'imei'): string
     {
@@ -111,6 +108,65 @@ final class Validator
         }
 
         return $imei;
+    }
+
+    public static function nin(mixed $value, string $field = 'nin'): string
+    {
+        if (!is_string($value) || preg_match('/^\d{11}$/', trim($value)) !== 1) {
+            throw ApiException::validation(
+                'NIN must contain exactly 11 digits.',
+                ['field' => $field]
+            );
+        }
+
+        return trim($value);
+    }
+
+    public static function nigerianPhone(mixed $value): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation('Enter a Nigerian mobile phone number.', ['field' => 'phone']);
+        }
+
+        $phone = preg_replace('/[\s()\-]/', '', trim($value));
+        if (!is_string($phone)) {
+            throw ApiException::validation('Enter a Nigerian mobile phone number.', ['field' => 'phone']);
+        }
+
+        if (preg_match('/^0([789]\d{9})$/', $phone, $matches) === 1) {
+            return '+234' . $matches[1];
+        }
+
+        if (preg_match('/^\+?234([789]\d{9})$/', $phone, $matches) === 1) {
+            return '+234' . $matches[1];
+        }
+
+        throw ApiException::validation(
+            'Enter a valid Nigerian mobile number, for example 08012345678 or +2348012345678.',
+            ['field' => 'phone']
+        );
+    }
+
+    public static function deviceType(mixed $value): string
+    {
+        $types = [
+            'EACRUGGED',
+            'EASTAEON',
+            'HENA',
+            'MANTRA',
+            'OUKITEL',
+            'SAMSUNG',
+            'WHEATEK',
+        ];
+
+        if (!is_string($value) || !in_array($value, $types, true)) {
+            throw ApiException::validation(
+                'Select a device type from the available list.',
+                ['field' => 'device_type']
+            );
+        }
+
+        return $value;
     }
 
     /**

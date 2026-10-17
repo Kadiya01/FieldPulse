@@ -15,8 +15,9 @@ use FieldPulse\Support\Clock;
  *
  * Two independent windows are enforced: per identifier and per IP. Either being
  * exhausted blocks the request. The identifier is whatever the endpoint names
- * as its subject — the submitted username on auth.login, the device_uuid on
- * device.register — and it is not a credential, only a key to count against.
+ * as its subject — username, IMEI, NIN or device UUID — and hashes it before
+ * storing it as a key to count against. IMEI is still a weak credential even
+ * though its limiter key is hashed.
  *
  * Both windows are needed. The per-identifier one stops a single account being
  * ground down from a botnet; the per-IP one stops one host walking the entire
@@ -123,7 +124,7 @@ final class RateLimiter
         $c = Config::instance();
 
         return match ($endpoint) {
-            'device.register' => [
+            'device.register', 'agent.register' => [
                 'limit'  => $c->int('auth.register_rate_limit'),
                 'window' => $c->int('auth.register_rate_window'),
             ],

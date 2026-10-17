@@ -287,7 +287,7 @@ $makeImage = static function (int $seed, int $size = 160, ?\DateTimeImmutable $e
     $absolute = Paths::quarantineDir() . DIRECTORY_SEPARATOR . $name;
 
     imagejpeg($image, $absolute, 90);
-    imagedestroy($image);
+    unset($image);
 
     if ($exifAt !== null) {
         $injectExif($absolute, $exifAt);
@@ -904,6 +904,20 @@ $t->test('the review queue lists pending work', function (TestRunner $t) use (
 
 $t->group('leaderboard');
 
+$t->test('the caller self-rank query binds each comparison parameter once', function (TestRunner $t) use (
+    $makeAgent,
+    $leaderboard
+): void {
+    $agentId = $makeAgent('AGENT', false, 0.0, 0.0);
+    $period  = PeriodResolver::periodStartDate();
+
+    $leaderboard->refresh($agentId, $period);
+    $board = $leaderboard->board($period, 50, 0, null, $agentId);
+
+    $t->assertNotNull($board['self'], 'the caller is included in their standing');
+    $t->assertSame($board['self']['rank'], $board['self_rank'], 'the self rank matches the returned standing');
+});
+
 $t->test('the summary counts the period it was verified in', function (TestRunner $t) use (
     $makeAgent,
     $makeDevice,
@@ -937,8 +951,10 @@ $t->test('the summary counts the period it was verified in', function (TestRunne
     $t->assertMatches('/^\d{4}-\d{2}-\d{2}$/', (string) $row['period_start_date']);
     $t->assertSame('1', (string) date('N', strtotime((string) $row['period_start_date'])), 'the period starts on a Monday');
 
-    $board = $leaderboard->board($period['date'], 50, 0);
+    $board = $leaderboard->board($period['date'], 50, 0, null, $agentId);
     $t->assertTrue($board['total'] >= 1, 'the agent is on the board');
+    $t->assertNotNull($board['self'], 'the caller is included in their standing');
+    $t->assertSame($board['self']['rank'], $board['self_rank'], 'the self rank matches the returned standing');
 });
 
 /* ---------------------------------------------------------------------------

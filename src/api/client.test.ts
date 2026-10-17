@@ -7,7 +7,7 @@ import {
   restoreSession,
   ApiError
 } from './client';
-import { getAccessToken } from '../auth/session';
+import { getAccessToken, setAccessToken } from '../auth/session';
 import { getDeviceIdentity } from '../crypto/keys';
 
 /**
@@ -66,6 +66,7 @@ const jsonResponse = (status: number, body: unknown) =>
 
 describe('Session restore', () => {
   beforeEach(() => {
+    setAccessToken(null);
     vi.clearAllMocks();
     vi.mocked(getDeviceIdentity).mockResolvedValue({
       id: 'current',
@@ -142,6 +143,7 @@ describe('Session restore', () => {
 
 describe('Login and registration', () => {
   beforeEach(() => {
+    setAccessToken(null);
     vi.clearAllMocks();
     vi.mocked(getDeviceIdentity).mockResolvedValue({
       id: 'current',
@@ -237,6 +239,7 @@ describe('Login and registration', () => {
 
 describe('Admin pairing codes', () => {
   beforeEach(() => {
+    setAccessToken(null);
     vi.clearAllMocks();
     vi.mocked(getDeviceIdentity).mockResolvedValue({
       id: 'current',
@@ -315,6 +318,7 @@ describe('Admin pairing codes', () => {
 
 describe('Refresh coordination', () => {
   beforeEach(() => {
+    setAccessToken('expired-token');
     vi.clearAllMocks();
     vi.mocked(getDeviceIdentity).mockResolvedValue({
       id: 'current',
