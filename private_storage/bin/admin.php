@@ -489,7 +489,42 @@ $t->test('a non-admin role can be promoted and the account keeps working', funct
     $t->assertTrue(is_string($session['token']) && $session['token'] !== '', 'a promoted agent can still hold a session');
 });
 
-/* -- Suspend / reinstate --------------------------------------------------- */
+    /* -- Registration approval ----------------------------------------------- */
+
+    $t->group('registration approval');
+
+    $t->test('an administrator can approve, reject and reopen a pending registration', function (TestRunner $t) use ($makeAgent, $agents, $update, $adminSession, $login) {
+        $pending = $makeAgent('approval');
+        $agents->setStatus($pending['id'], AgentRepository::PENDING);
+
+        $approved = $update($adminSession['token'], [
+            'id' => $pending['id'],
+            'action' => 'SET_STATUS',
+            'status' => 'ACTIVE',
+        ]);
+        $t->assertSame(200, $approved['status'], 'approval succeeds');
+        $t->assertSame('ACTIVE', $approved['body']['data']['status'] ?? null, 'approved registration becomes active');
+
+        $agents->setStatus($pending['id'], AgentRepository::PENDING);
+        $rejected = $update($adminSession['token'], [
+            'id' => $pending['id'],
+            'action' => 'SET_STATUS',
+            'status' => 'REJECTED',
+        ]);
+        $t->assertSame(200, $rejected['status'], 'rejection succeeds');
+        $t->assertSame('REJECTED', $rejected['body']['data']['status'] ?? null, 'rejected registration is retained');
+        $t->assertSame(401, $login($pending)['result']['status'], 'a rejected registration cannot sign in');
+
+        $reopened = $update($adminSession['token'], [
+            'id' => $pending['id'],
+            'action' => 'SET_STATUS',
+            'status' => 'PENDING',
+        ]);
+        $t->assertSame(200, $reopened['status'], 'an admin can reopen a rejected registration');
+        $t->assertSame(AgentRepository::PENDING, $reopened['body']['data']['status'] ?? null, 'reopened registration is pending again');
+    });
+
+    /* -- Suspend / reinstate --------------------------------------------------- */
 
 $t->group('suspend');
 

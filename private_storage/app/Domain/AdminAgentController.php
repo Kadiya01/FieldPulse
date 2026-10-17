@@ -51,7 +51,7 @@ use FieldPulse\Support\Logger;
 final class AdminAgentController implements ActionInterface
 {
     private const ROLES       = ['AGENT', 'SUPERVISOR', 'ADMIN'];
-    private const STATUS_TARGETS = ['ACTIVE', 'SUSPENDED', 'DELETED'];
+    private const STATUS_TARGETS = ['PENDING', 'ACTIVE', 'REJECTED', 'SUSPENDED', 'DELETED'];
 
     private const ACTIONS = [
         'SET_ROLE',
@@ -303,9 +303,14 @@ final class AdminAgentController implements ActionInterface
         }
 
         $action = match ($status) {
+            'PENDING'  => 'admin.agent.approval_reset',
+            'REJECTED' => 'admin.agent.registration_rejected',
+            'ACTIVE'   => (string) $target['status'] === AgentRepository::PENDING
+                ? 'admin.agent.registration_approved'
+                : 'admin.agent.reinstated',
             'SUSPENDED' => 'admin.agent.suspended',
             'DELETED'   => 'admin.agent.retired',
-            default     => 'admin.agent.reinstated',
+            default     => 'admin.agent.status_changed',
         };
 
         // Only the destructive transitions can create a lockout; reinstating
@@ -592,6 +597,8 @@ final class AdminAgentController implements ActionInterface
             'agent_code'          => (string) $row['agent_code'],
             'full_name'           => (string) $row['full_name'],
             'nin'                 => isset($row['nin']) ? (string) $row['nin'] : null,
+            'phone'               => isset($row['phone']) ? (string) $row['phone'] : null,
+            'self_registered'     => (bool) ($row['self_registered'] ?? false),
             'role'                => (string) $row['role'],
             'status'              => (string) $row['status'],
             'username'            => $row['username'] ?? null,

@@ -18,6 +18,8 @@ final class AgentRepository extends Repository
     public const INACTIVE  = 'INACTIVE';
     public const SUSPENDED = 'SUSPENDED';
     public const DELETED   = 'DELETED';
+    public const PENDING   = 'PENDING';
+    public const REJECTED  = 'REJECTED';
 
     /** @return array<string,mixed>|null */
     public function findById(int $id): ?array
@@ -125,20 +127,22 @@ final class AgentRepository extends Repository
         string $code,
         string $fullName,
         string $nin,
+        string $phone,
         string $imei,
         string $deviceType
     ): int {
         $this->exec(
             'INSERT INTO agents
-                (agent_code, full_name, nin, role, status, imei, device_type, self_registered, created_at, updated_at)
+                (agent_code, full_name, nin, phone, role, status, imei, device_type, self_registered, created_at, updated_at)
              VALUES
-                (:code, :name, :nin, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+                (:code, :name, :nin, :phone, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
             [
                 'code'        => $code,
                 'name'        => $fullName,
                 'nin'         => $nin,
+                'phone'       => $phone,
                 'role'        => 'AGENT',
-                'status'      => self::ACTIVE,
+                'status'      => self::PENDING,
                 'imei'        => $imei,
                 'device_type' => $deviceType,
             ]
@@ -174,7 +178,7 @@ final class AgentRepository extends Repository
 
     public function setStatus(int $agentId, string $status): void
     {
-        if (!in_array($status, [self::ACTIVE, self::INACTIVE, self::SUSPENDED, self::DELETED], true)) {
+        if (!in_array($status, [self::ACTIVE, self::INACTIVE, self::SUSPENDED, self::DELETED, self::PENDING, self::REJECTED], true)) {
             throw new \InvalidArgumentException('Unknown agent status: ' . $status);
         }
 
@@ -227,7 +231,8 @@ final class AgentRepository extends Repository
      */
     public function listForAdmin(int $limit, int $offset): array
     {
-        $sql = "SELECT a.id, a.agent_code, a.full_name, a.nin, a.role, a.status,
+        $sql = "SELECT a.id, a.agent_code, a.full_name, a.nin, a.phone,
+                       a.self_registered, a.role, a.status,
                        a.username, a.created_at,
                        (SELECT COUNT(*) FROM devices d
                          WHERE d.agent_id = a.id

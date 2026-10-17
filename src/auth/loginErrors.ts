@@ -2,7 +2,7 @@ import { ApiError } from '../api/client';
 
 export function loginErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) {
-    return 'Could not reach FieldPulse. Check your connection and try again.';
+    return 'Could not reach the service. Check your connection and try again.';
   }
 
   if (error.status === 429) {

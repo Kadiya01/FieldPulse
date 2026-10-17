@@ -24,6 +24,8 @@ import {
   Smartphone,
   Copy,
   Check,
+  CheckCircle2,
+  XCircle,
   X
 } from 'lucide-react';
 
@@ -248,8 +250,8 @@ export default function AdminPage() {
       </div>
 
       <aside className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
-        Agents register themselves from the registration page. Administrators do not create agent
-        accounts; use the review queue to approve or reject submitted records.
+        Agent registrations appear here as pending. Approve an agent before they can sign in; use
+        the review queue separately to approve or reject submitted records.
       </aside>
 
       {agents.length === 0 && !loading && (
@@ -283,6 +285,20 @@ export default function AdminPage() {
                   `Suspend ${agent.agent_code}? Their devices are revoked and they can no longer sign in until reinstated.`
                 )}
               onReinstate={() => void runAction(agent, { action: 'SET_STATUS', status: 'ACTIVE' })}
+              onApprove={() =>
+                void runAction(
+                  agent,
+                  { action: 'SET_STATUS', status: 'ACTIVE' },
+                  `Approve ${agent.full_name}'s agent registration? They will be able to sign in with their IMEI.`
+                )}
+              onReject={() =>
+                void runAction(
+                  agent,
+                  { action: 'SET_STATUS', status: 'REJECTED' },
+                  `Reject ${agent.full_name}'s registration? They will not be able to sign in.`
+                )}
+              onReviewAgain={() =>
+                void runAction(agent, { action: 'SET_STATUS', status: 'PENDING' })}
               onRetire={() =>
                 void runAction(
                   agent,
@@ -354,6 +370,9 @@ function AgentCard({
   onRoleChange,
   onSuspend,
   onReinstate,
+  onApprove,
+  onReject,
+  onReviewAgain,
   onRetire,
   onRevoke,
   onIssueCode,
@@ -373,12 +392,17 @@ function AgentCard({
   onRoleChange: (role: AdminAgentRole) => void;
   onSuspend: () => void;
   onReinstate: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+  onReviewAgain: () => void;
   onRetire: () => void;
   onRevoke: () => void;
   onIssueCode: () => void;
   onDismissCode: () => void;
 }) {
   const retired = agent.status === 'DELETED';
+  const pendingRegistration = agent.self_registered && agent.status === 'PENDING';
+  const rejectedRegistration = agent.self_registered && agent.status === 'REJECTED';
   const [copied, setCopied] = useState(false);
 
   const copyCode = async (code: string) => {
@@ -426,6 +450,7 @@ function AgentCard({
           <p className="text-sm text-gray-700">
             {agent.username ? `username ${agent.username}` : 'no username'}
             {agent.nin && <> · NIN {agent.nin}</>}
+            {agent.phone && <> · phone {agent.phone}</>}
             {' · '}{agent.active_device_count} active device{agent.active_device_count === 1 ? '' : 's'}
             {isSelf && <span className="text-gray-600"> · this is you</span>}
           </p>
@@ -450,6 +475,39 @@ function AgentCard({
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {pendingRegistration && (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onApprove}
+                className="inline-flex items-center gap-1 text-sm font-medium text-green-800 bg-white px-3 py-1.5 rounded border border-green-300 hover:bg-green-50 disabled:opacity-50"
+              >
+                <CheckCircle2 size={14} aria-hidden="true" />
+                Approve registration
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onReject}
+                className="inline-flex items-center gap-1 text-sm font-medium text-red-800 bg-white px-3 py-1.5 rounded border border-red-300 hover:bg-red-50 disabled:opacity-50"
+              >
+                <XCircle size={14} aria-hidden="true" />
+                Reject
+              </button>
+            </>
+          )}
+          {rejectedRegistration && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onReviewAgain}
+              className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+              Reopen registration
+            </button>
+          )}
           {!retired && agent.status === 'ACTIVE' && (
             <button
               type="button"
@@ -620,7 +678,10 @@ function validatePassword(password: string): string | null {
 }
 
 const STATUS_WORDS: Record<string, string> = {
+  PENDING: 'Pending approval',
   ACTIVE: 'Active',
+  INACTIVE: 'Inactive',
+  REJECTED: 'Registration rejected',
   SUSPENDED: 'Suspended',
   DELETED: 'Retired'
 };
@@ -636,7 +697,10 @@ function formatExpiry(seconds: number): string {
 }
 
 const STATUS_TONE: Record<string, string> = {
+  PENDING: 'text-amber-800 border-amber-300 bg-amber-50',
   ACTIVE: 'text-green-800 border-green-300 bg-green-50',
+  INACTIVE: 'text-gray-800 border-gray-300 bg-gray-100',
+  REJECTED: 'text-red-800 border-red-300 bg-red-50',
   SUSPENDED: 'text-amber-800 border-amber-300 bg-amber-50',
   DELETED: 'text-gray-800 border-gray-300 bg-gray-100'
 };

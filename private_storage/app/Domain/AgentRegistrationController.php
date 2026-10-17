@@ -30,9 +30,10 @@ final class AgentRegistrationController implements ActionInterface
         }
 
         $body = $request->json();
-        Validator::assertNoUnknownKeys($body, ['full_name', 'nin', 'imei', 'device_type'], 'agent registration');
+        Validator::assertNoUnknownKeys($body, ['full_name', 'nin', 'phone', 'imei', 'device_type'], 'agent registration');
         $fullName = trim(Validator::string($body['full_name'] ?? null, 2, 191, 'full_name'));
         $nin = Validator::nin($body['nin'] ?? null);
+        $phone = Validator::nigerianPhone($body['phone'] ?? null);
         $imei = Validator::imei($body['imei'] ?? null);
         $deviceType = Validator::deviceType($body['device_type'] ?? null);
 
@@ -60,6 +61,7 @@ final class AgentRegistrationController implements ActionInterface
                 $agentCode,
                 $fullName,
                 $nin,
+                $phone,
                 $imei,
                 $deviceType
             );
@@ -94,7 +96,7 @@ final class AgentRegistrationController implements ActionInterface
         RateLimiter::record(self::ENDPOINT, $nin, $ip, true);
 
         return Response::json([
-            'status' => 'ACTIVE',
+            'status' => 'PENDING',
             'agent' => [
                 'id' => $agentId,
                 'agent_code' => $agentCode,

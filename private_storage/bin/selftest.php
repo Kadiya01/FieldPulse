@@ -685,6 +685,16 @@ $t->test('IMEI length and Luhn are enforced', function (TestRunner $t): void {
     $t->assertSame('490154203237518', \FieldPulse\Domain\Validator::imei('490-154-203237518'));
 });
 
+$t->test('Nigerian mobile numbers normalize to E.164', function (TestRunner $t): void {
+    $t->assertSame('+2348012345678', \FieldPulse\Domain\Validator::nigerianPhone('08012345678'));
+    $t->assertSame('+2348012345678', \FieldPulse\Domain\Validator::nigerianPhone('+234 801 234 5678'));
+    $t->assertSame('+2348012345678', \FieldPulse\Domain\Validator::nigerianPhone('234-801-234-5678'));
+    $t->assertThrows(
+        static fn () => \FieldPulse\Domain\Validator::nigerianPhone('12345678901'),
+        'valid Nigerian mobile number'
+    );
+});
+
 $t->test('count_claimed range is enforced at the boundary', function (TestRunner $t): void {
     $t->assertSame(1, \FieldPulse\Domain\Validator::intRange(1, 1, 500, 'count_claimed'));
     $t->assertSame(500, \FieldPulse\Domain\Validator::intRange(500, 1, 500, 'count_claimed'));

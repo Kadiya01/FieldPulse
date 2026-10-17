@@ -85,31 +85,35 @@ export interface ApiRequestOptions extends RequestInit {
 export async function authenticatedFetch(path: string, options: ApiRequestOptions = {}): Promise<Response> {
   const device = await getDeviceIdentity();
   if (!device) {
-    // If the Web Crypto private key is cleared or missing from IndexedDB, transition to UNREGISTERED state
     handleAuthFailure('UNREGISTERED');
     throw new Error('Device not registered or private key missing');
   }
 
-  const accessToken = getAccessToken();
+  const hadToRefresh = !getAccessToken();
+  let accessToken = getAccessToken();
   if (!accessToken) {
-    throw new Error('No access token available');
+    const refreshed = await attemptTokenRefresh();
+    if (!refreshed) {
+      handleAuthFailure('FAILED_AUTH');
+      throw new Error('Authentication failed');
+    }
+
+    accessToken = getAccessToken();
+    if (!accessToken) {
+      handleAuthFailure('FAILED_AUTH');
+      throw new Error('Authentication failed');
+    }
   }
 
   const method = options.method || 'GET';
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = generateNonce();
 
-  // The signed content, which is NOT the same thing as the request body
-  // whenever the body is multipart. `signedBody` wins when supplied.
   let signedContent = options.signedBody;
   if (signedContent === undefined) {
     if (typeof options.body === 'string') {
       signedContent = options.body;
     } else if (options.body instanceof FormData) {
-      // No payload part was named, so there is nothing the server would sign.
-      // Hashing the empty string here would produce a request that is
-      // well-formed and guaranteed to be rejected at signature verification,
-      // which is far harder to diagnose than a loud failure now.
       throw new Error(
         'multipart request requires signedBody: the server signs the verbatim "payload" part'
       );
@@ -120,15 +124,6 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
 
   const bodyHash = await hashRequestBody(signedContent);
 
-  // The signed path must be the path exactly as the router resolves it, not
-  // the bare route. The server signs against Request::path(), which is the
-  // full incoming path — /api/v1/submit.php for a request the browser sent to
-  // that route — with the query string stripped, duplicate slashes collapsed
-  // and a trailing slash removed. Signing the bare route (submit.php) produced
-  // a canonical string whose digest matched nothing the server ever computes,
-  // so every authenticated request failed with an indistinguishable signature
-  // mismatch. Mirroring the server's normalization keeps the byte string the
-  // two sides build identical by construction.
   let signedPath = `${API_BASE}${path.split('?')[0]}`;
   if (!signedPath.startsWith('/')) signedPath = `/${signedPath}`;
   signedPath = signedPath.replace(/\/+/g, '/');
@@ -136,12 +131,6 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
     signedPath = signedPath.slice(0, -1);
   }
 
-  // The canonical signing payload MUST include:
-  // HTTP_METHOD
-  // REQUEST_PATH
-  // REQUEST_TIMESTAMP
-  // REQUEST_NONCE
-  // SHA256(REQUEST_BODY)
   const canonicalPayload = [
     method.toUpperCase(),
     signedPath,
@@ -151,14 +140,6 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
   ].join('\n');
 
   const signature = await signPayload(canonicalPayload, device.private_key);
-
-    // Diagnostic: lets a failing run be compared against the server's own
-    // digest of what it verified against, so a mismatch can be attributed to
-    // the canonical string rather than guessed at.
-    if (typeof console !== 'undefined') {
-      const dbg = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalPayload)));
-      console.log('[SIG] sha256=' + Array.from(dbg).map((b) => b.toString(16).padStart(2, '0')).join(''));
-    }
 
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', `Bearer ${accessToken}`);
@@ -173,12 +154,7 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
   });
 
   if (response.status === 401) {
-    // Refresh and retry exactly once. An unbounded retry here is not a slow
-    // loop, it is an outage: a token that is rejected on the retry as well
-    // would recurse until the tab dies, and each pass would present a refresh
-    // token that has already been rotated, which the server treats as theft
-    // and answers by revoking the whole token family.
-    if (options.__retried) {
+    if (options.__retried || hadToRefresh) {
       handleAuthFailure('FAILED_AUTH');
       throw new Error('Authentication failed');
     }
@@ -347,11 +323,12 @@ export async function loginAgent(imei: string): Promise<LoginResult> {
 export interface AgentRegistrationInput {
   full_name: string;
   nin: string;
+  phone: string;
   imei: string;
   device_type: string;
 }
 
-export async function registerAgent(input: AgentRegistrationInput): Promise<SessionAgent> {
+export async function registerAgent(input: AgentRegistrationInput): Promise<void> {
   const response = await fetch(`${API_BASE}/agents/register.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -362,8 +339,6 @@ export async function registerAgent(input: AgentRegistrationInput): Promise<Sess
     throw await toApiError(response);
   }
 
-  const data = (await response.json()) as { agent: SessionAgent };
-  return data.agent;
 }
 
 export interface RegisterResult {
@@ -414,28 +389,12 @@ export async function registerDevice(pairingCode?: string): Promise<RegisterResu
 
   const data = (await response.json()) as RegisterResult;
 
-  // The bound token replaces the bootstrap one, and the server has just revoked
-  // the bootstrap family, so the value swapped in here is the only session left.
   setAccessToken(data.access_token);
   announceAccessToken(data.access_token);
 
   return data;
 }
 
-/**
- * End the session on the server, so the refresh cookie stops being usable.
- *
- * Not a signed request and not bearer-only: the credential is the cookie, and
- * the server revokes the whole token family so the token is dead even if it was
- * copied. Deliberately not wrapped in `authenticatedFetch` — that helper signs
- * with the device key and retries on 401, and a logout must never be retried
- * into a second family revocation or made to depend on a device that may
- * already be unusable.
- *
- * The caller drops the in-memory access token regardless of the outcome; a
- * logout that failed because the network is down must still leave nothing usable
- * on this device.
- */
 export async function logout(): Promise<void> {
   try {
     await fetch(`${API_BASE}/auth/logout.php`, { method: 'POST' });
@@ -478,10 +437,7 @@ export async function restoreSession(): Promise<RestoreResult> {
   try {
     response = await fetch(`${API_BASE}/auth/refresh.php`, { method: 'POST' });
   } catch {
-    // fetch only rejects when the request never reached the server. An answer,
-    // any answer, is handled below.
     setAccessToken(null);
-
     return { status: 'offline' };
   }
 
@@ -495,17 +451,9 @@ export async function restoreSession(): Promise<RestoreResult> {
   announceAccessToken(data.access_token);
 
   if (!await getDeviceIdentity()) {
-    // The cookie is valid but this browser has no key, so any signed request
-    // would fail signature verification. Reported so the app can re-register
-    // instead of looping the user back to a login they have already passed.
     return { status: 'unregistered' };
   }
 
-  // The agent is normally present. A server that predates it — an unrefreshed
-  // deploy, or a proxy serving a stale response — still authenticates this
-  // session, so this is a working session with an unknown identity rather than a
-  // failure. Every consumer treats a missing agent as "not an operator", which
-  // hides the review link rather than showing a screen the server would refuse.
   return { status: 'authenticated', agent: data.agent ?? null };
 }
 
@@ -661,13 +609,15 @@ export async function decideReview(
  * privilege checks all happen against the database row on each call.
  */
 export type AdminAgentRole = 'AGENT' | 'SUPERVISOR' | 'ADMIN';
-export type AdminAgentStatus = 'ACTIVE' | 'SUSPENDED' | 'DELETED';
+export type AdminAgentStatus = 'PENDING' | 'ACTIVE' | 'INACTIVE' | 'REJECTED' | 'SUSPENDED' | 'DELETED';
 
 export interface AdminAgent {
   id: number;
   agent_code: string;
   full_name: string;
   nin: string | null;
+  phone: string | null;
+  self_registered: boolean;
   role: AdminAgentRole;
   status: AdminAgentStatus;
   /** The login username, when the account has one. Null after credential revoke/retire. */
@@ -743,7 +693,7 @@ export async function createAdminAgent(input: CreateAdminAgentInput): Promise<Ad
 /** The four state-changing actions the directory supports. */
 export type AdminAgentAction =
   | { action: 'SET_ROLE'; role: AdminAgentRole }
-  | { action: 'SET_STATUS'; status: 'ACTIVE' | 'SUSPENDED' | 'DELETED' }
+  | { action: 'SET_STATUS'; status: AdminAgentStatus }
   | { action: 'SET_PASSWORD'; password: string }
   | { action: 'REVOKE_CREDENTIAL' };
 

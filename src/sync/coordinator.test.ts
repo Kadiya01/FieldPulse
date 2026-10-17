@@ -3,7 +3,8 @@ import {
   parseSubmitAccepted,
   buildSubmitForm,
   uploadSubmission,
-  recoverStrandedSubmissions
+  recoverStrandedSubmissions,
+  retryAuthFailedSubmissions
 } from './coordinator';
 import type { Submission } from '../db/db';
 
@@ -438,5 +439,29 @@ expect(recovered).toBe(1);
 
     expect(await recoverStrandedSubmissions()).toBe(2);
     expect(db.submissions.update).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('retrying uploads after authentication recovers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns auth-failed uploads to the queue when sync is requested', async () => {
+    const modify = vi.fn().mockResolvedValue(1);
+    vi.mocked(db.submissions.where).mockReturnValue({
+      equals: () => ({ modify })
+    } as never);
+
+    const retried = await retryAuthFailedSubmissions();
+
+    expect(retried).toBe(1);
+    expect(db.submissions.where).toHaveBeenCalledWith('status');
+    expect(modify).toHaveBeenCalledWith({
+      status: 'PENDING',
+      next_retry_at: 0,
+      last_error_code: null,
+      last_error_message: null
+    });
   });
 });

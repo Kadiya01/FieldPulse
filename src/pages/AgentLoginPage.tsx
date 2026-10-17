@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LogIn, Smartphone, ShieldAlert } from 'lucide-react';
+import { LogIn, ShieldAlert } from 'lucide-react';
 import { generateAndStoreDeviceIdentity, getDeviceIdentity } from '../crypto/keys';
 import { ApiError, loginAgent, registerDevice, type SessionAgent } from '../api/client';
 import { loginErrorMessage } from '../auth/loginErrors';
+import BrandHeader from '../components/BrandHeader';
 
 type Stage = 'imei' | 'pairing';
 
@@ -27,7 +28,7 @@ export default function AgentLoginPage({
       }
     } catch {
       setErrorMsg(
-        'This browser could not create a device key. Open FieldPulse over HTTPS and allow site storage.'
+        'This browser could not create a device key. Open this site over HTTPS and allow site storage.'
       );
       return null;
     }
@@ -87,18 +88,13 @@ export default function AgentLoginPage({
   return (
     <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
       <section className="w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl sm:p-10">
-        <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-700">
-          <Smartphone size={28} aria-hidden="true" />
-        </div>
-        <p className="text-center text-sm font-semibold uppercase tracking-[0.2em] text-blue-700">
-          FieldPulse
-        </p>
+        <BrandHeader className="mb-4 flex justify-center" />
         <h1 className="mt-2 text-center text-3xl font-bold text-slate-900">
           {stage === 'imei' ? 'Agent sign in' : 'Pair this device'}
         </h1>
         <p className="mt-3 text-center text-sm leading-6 text-slate-600">
           {stage === 'imei'
-            ? 'Use the IMEI you entered during registration.'
+            ? 'After an administrator approves your registration, sign in with the IMEI you submitted.'
             : 'Enter the one-time code provided by your administrator.'}
         </p>
 
@@ -164,7 +160,7 @@ export default function AgentLoginPage({
         )}
 
         <div className="mt-7 border-t border-slate-100 pt-5 text-center text-sm text-slate-600">
-          New to FieldPulse?{' '}
+          New here?{' '}
           <Link to="/register" className="font-semibold text-blue-700 hover:underline">
             Register as an agent
           </Link>

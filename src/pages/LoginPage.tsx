@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LogIn, KeyRound, ShieldAlert } from 'lucide-react';
+import { LogIn, KeyRound } from 'lucide-react';
 import { generateAndStoreDeviceIdentity, getDeviceIdentity } from '../crypto/keys';
 import { login, registerDevice, ApiError, type SessionAgent } from '../api/client';
 import { loginErrorMessage } from '../auth/loginErrors';
+import BrandHeader from '../components/BrandHeader';
 
 type Stage = 'credentials' | 'pairing';
 
@@ -129,9 +130,7 @@ export default function LoginPage({
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-          <div className="flex justify-center mb-6 text-amber-700">
-            <ShieldAlert size={48} aria-hidden="true" />
-          </div>
+          <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Pair this device</h1>
           <p className="text-sm text-gray-700 text-center mb-6">
             Signed in as <span className="font-medium">{username}</span>.
@@ -180,9 +179,7 @@ export default function LoginPage({
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-        <div className="flex justify-center mb-6 text-blue-700">
-          <KeyRound size={48} aria-hidden="true" />
-        </div>
+        <BrandHeader className="mb-4 flex justify-center" />
         <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Admin sign in</h1>
         <p className="text-sm text-gray-600 text-center mb-6">For administrators and record reviewers.</p>
 

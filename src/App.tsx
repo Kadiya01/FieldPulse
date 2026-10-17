@@ -10,6 +10,7 @@ import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
 import AdminPage from './pages/AdminPage';
 import Layout from './components/Layout';
+import BrandHeader from './components/BrandHeader';
 import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
 import { triggerSync } from './sync/coordinator';
 import { SessionContext, useSessionValue } from './auth/sessionContext';
@@ -105,9 +106,10 @@ export default function App() {
   if (gate === 'checking') {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        {/* Announced, not just drawn: this is the first thing a screen reader
-            meets, and a silent pause reads as a blank page. */}
-        <p role="status" className="text-gray-700 text-sm">Restoring session…</p>
+        <div className="flex flex-col items-center gap-2">
+          <BrandHeader className="flex justify-center" />
+          <p role="status" className="text-gray-700 text-sm">Restoring session…</p>
+        </div>
       </div>
     );
   }
@@ -116,6 +118,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm text-center">
+          <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="text-xl font-bold text-gray-900 mb-2">Device key missing</h1>
           <p className="text-sm text-gray-700 mb-6">
             This browser&apos;s device key is no longer available, so it cannot prove
@@ -225,15 +228,10 @@ export default function App() {
               <Navigate to="/" replace />
             ) : (
               /*
-               * Public self-registration activates the agent and proceeds
-               * directly into the first-device binding flow.
+               * Public self-registration remains pending until an admin
+               * approves the new agent in account management.
                */
-              <RegisterPage
-                onAuthenticated={(authenticated) => {
-                  setAgent(authenticated);
-                  setGate('ready');
-                }}
-              />
+              <RegisterPage />
             )
           }
         />

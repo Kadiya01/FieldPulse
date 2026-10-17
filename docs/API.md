@@ -189,28 +189,31 @@ credentials for compatibility; new agents use IMEI login.
 
 ### POST /api/v1/agents/register.php
 
-Creates an active AGENT account immediately. Agent account registration is not
-queued for administrator approval; administrators approve submitted records
-through the review endpoints.
+Creates a `PENDING` AGENT registration. The applicant cannot sign in until an
+administrator approves it in the account directory.
 
 ```json
 {
   "full_name": "Ada Lovelace",
   "nin": "12345678901",
+  "phone": "08012345678",
   "imei": "490154203237518",
   "device_type": "SAMSUNG"
 }
 ```
 
+`phone` accepts a Nigerian mobile number as `08012345678`, `+2348012345678`
+or `2348012345678`; the server stores it in E.164 form. The NIN and phone are
+stored and exposed only through the ADMIN-only account directory.
 `device_type` must be one of `EACRUGGED`, `EASTAEON`, `HENA`, `MANTRA`,
-`OUKITEL`, `SAMSUNG` or `WHEATEK`. The NIN is stored and exposed only through
-the ADMIN-only account directory. Duplicate NIN or IMEI values receive a
+`OUKITEL`, `SAMSUNG` or `WHEATEK`. Duplicate NIN or IMEI values receive a
 generic `409 STATE_CONFLICT` response. Registration attempts are rate-limited
 by NIN and source IP.
 
-The successful response includes the active agent summary but never returns
-the NIN or IMEI. The browser then signs in with the submitted IMEI and binds its
-local device key.
+The successful response includes the registration status and an agent summary,
+but never returns the NIN, phone or IMEI. A pending registration cannot use
+`/api/v1/auth/agent-login.php`; after approval the agent can sign in with the
+registered IMEI and bind the browser's device key.
 
 ### POST /api/v1/auth/agent-login.php
 
@@ -262,6 +265,13 @@ A `device_uuid` that already exists and belongs to **this** agent re-binds
 idempotently; the same key must be presented, or it is refused. One belonging to
 another agent returns the same generic `401` as every other failure, so this
 route is not a device-enumeration oracle.
+
+If that same device was previously marked `REVOKED`, a successful login and
+presentation of its original key reactivate it without another pairing code.
+The device's previous refresh tokens are revoked during reactivation; the
+browser receives a fresh device-bound session. A different key or a device
+belonging to another agent is not reactivated. `DISABLED` devices still require
+an administrator to restore access.
 
 On success the bootstrap refresh family is **revoked** (`BOOTSTRAP_CONSUMED`)
 and a device-bound token and cookie are returned:
@@ -609,8 +619,10 @@ The account directory. Query: `limit` (1–200, default 50), `offset` (default 0
 }
 ```
 
-`nin` is the full NIN and is included only in this ADMIN-only directory response.
-Do not expose or log this field outside authorized administrator workflows.
+`nin` is the full NIN and `phone` is the normalized phone number. Both are
+included only in this ADMIN-only directory response. Do not expose or log
+these fields outside authorized administrator workflows. `self_registered`
+identifies records submitted from the public registration page.
 
 `username` is `null` and `has_credential` is `false` once a credential has been
 revoked or the account retired. `active_device_count` counts bound devices that
@@ -641,13 +653,15 @@ that action's own field list is a `422`.
 { "id": 12, "action": "ISSUE_PAIRING_CODE" }
 ```
 
-`SET_STATUS` accepts `ACTIVE`, `SUSPENDED` or `DELETED`. `DELETED` is retirement:
-devices and credential are revoked, the `DELETED` status is terminal, and the row
-and its history survive for compliance. Any transition away from `ACTIVE` revokes
-the account's devices, so a token that outlived the account stops working on its
-next request.
+`SET_STATUS` accepts `PENDING`, `ACTIVE`, `REJECTED`, `SUSPENDED` or `DELETED`.
+Set a self-registered `PENDING` row to `ACTIVE` to approve it, or `REJECTED` to
+reject it. Rejected registrations can be reopened to `PENDING` for reconsideration.
+`DELETED` is retirement: devices and credential are revoked, the `DELETED`
+status is terminal, and the row and its history survive for compliance. Any
+transition away from `ACTIVE` revokes the account's devices, so a token that
+outlived the account stops working on its next request.
 
-`ISSUE_PAIRING_CODE` mints the out-of-band code the `/register` page (or the
+`ISSUE_PAIRING_CODE` mints the out-of-band code a managed-account device-registration flow (or the
 device-registration step of the sign-in page) consumes to bind the account's
 first device. It is valid only for an `ACTIVE` account, so a suspended or retired
 account answers `409 STATE_CONFLICT`. The plaintext code is returned exactly

@@ -595,7 +595,7 @@ $t->test('login never accepts an IMEI where a username belongs', function (TestR
 
 $t->group('public agent registration');
 
-$t->test('self-registration activates an agent and allows IMEI login and device binding', function (TestRunner $t) use ($baseUrl, $appUrl, $runTag, $makeKeyPair, &$createdAgentIds, &$createdDeviceIds) {
+$t->test('self-registration awaits admin approval before IMEI login and device binding', function (TestRunner $t) use ($baseUrl, $appUrl, $runTag, $agents, $makeKeyPair, &$createdAgentIds, &$createdDeviceIds) {
     $imeiBase = '35' . substr(str_pad((string) hexdec(substr($runTag, 2)), 12, '0', STR_PAD_LEFT), -12);
     $imei = null;
     for ($check = 0; $check <= 9; $check++) {
@@ -619,13 +619,14 @@ $t->test('self-registration activates an agent and allows IMEI login and device 
         [
             'full_name' => 'Self Registered Agent',
             'nin' => $nin,
+            'phone' => '08012345678',
             'imei' => $imei,
             'device_type' => 'SAMSUNG',
         ]
     );
 
     $t->assertSame(201, $registration['status'], 'registration succeeds immediately');
-    $t->assertSame('ACTIVE', $registration['body']['status'] ?? null, 'the account is active without admin approval');
+    $t->assertSame('PENDING', $registration['body']['status'] ?? null, 'the account awaits administrator approval');
     $t->assertSame('AGENT', $registration['body']['agent']['role'] ?? null, 'self-registration creates an agent role');
     $t->assertTrue(
         !array_key_exists('nin', $registration['body']['agent'] ?? [])
@@ -643,6 +644,16 @@ $t->test('self-registration activates an agent and allows IMEI login and device 
     }
     $createdAgentIds[] = $agentId;
 
+    $pendingLogin = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/auth/agent-login.php',
+        ['imei' => $imei]
+    );
+    $t->assertSame(401, $pendingLogin['status'], 'pending agents cannot sign in before approval');
+
+    $agents->setStatus($agentId, AgentRepository::ACTIVE);
     $login = HttpServer::sendJson(
         $baseUrl,
         $appUrl,
@@ -684,6 +695,7 @@ $t->test('self-registration activates an agent and allows IMEI login and device 
         [
             'full_name' => 'Another Agent',
             'nin' => $nin,
+            'phone' => '08012345678',
             'imei' => $imei,
             'device_type' => 'SAMSUNG',
         ]
@@ -1209,6 +1221,52 @@ $t->test('re-registering the same device and key is idempotent', function (TestR
         'with a device-bound token');
 });
 
+$t->test('logging in reactivates the same previously paired device without a new code', function (TestRunner $t) use ($baseUrl, $appUrl, $cookieName, $login, $makeKeyPair, $issueCode, $freshAgent, $registerDevice, $devices, &$createdDeviceIds) {
+    $agent = $freshAgent('reactivate');
+    $keys  = $makeKeyPair();
+    $uuid  = Uuid::v4();
+
+    $first = $registerDevice($login($agent), [
+        'device_uuid'    => $uuid,
+        'public_key_jwk' => $keys['public'],
+        'pairing_code'   => $issueCode((int) $agent['id']),
+    ], $createdDeviceIds);
+
+    $t->assertSame(200, $first['result']['status'],
+        'the initial pairing succeeds, got ' . $first['result']['raw']);
+
+    $devices->setStatus($first['deviceId'], DeviceStatus::REVOKED);
+
+    $again = $registerDevice($login($agent), [
+        'device_uuid'    => $uuid,
+        'public_key_jwk' => $keys['public'],
+    ], $createdDeviceIds);
+
+    $t->assertSame(200, $again['result']['status'],
+        'the known device is restored without a pairing code, got ' . $again['result']['raw']);
+    $t->assertSame($first['deviceId'], $again['deviceId'],
+        'the existing device row is reused');
+
+    $restored = $devices->findById($first['deviceId']);
+    $t->assertSame(DeviceStatus::ACTIVE, $restored['status'] ?? null,
+        'the existing device is active again');
+    $t->assertNull($restored['revoked_at'] ?? null,
+        'the old revocation timestamp is cleared');
+
+    $oldCookie = HttpServer::cookieValue($first['result'], $cookieName);
+    $t->assertNotNull($oldCookie, 'the original pairing issued a refresh cookie');
+
+    $staleRefresh = HttpServer::sendJson(
+        $baseUrl, $appUrl, 'POST', '/api/v1/auth/refresh.php',
+        [], null, HttpServer::cookieHeader([$cookieName => (string) $oldCookie])
+    );
+
+    $t->assertSame(401, $staleRefresh['status'],
+        'the old refresh cookie remains invalid after reactivation');
+    $t->assertSame(DeviceStatus::ACTIVE, $devices->findById($first['deviceId'])['status'] ?? null,
+        'using the invalidated cookie does not revoke the restored device again');
+});
+
 $t->test('re-registering a device_uuid with a different key is refused', function (TestRunner $t) use ($login, $makeKeyPair, $issueCode, $freshAgent, $registerDevice, &$createdDeviceIds) {
     $agent = $freshAgent('rebind');
     $uuid  = Uuid::v4();
@@ -1433,7 +1491,6 @@ $makeImage = static function (int $seed = 1): array {
     ob_start();
     imagejpeg($image, null, 90);
     $bytes = (string) ob_get_clean();
-    imagedestroy($image);
 
     if ($bytes === '') {
         throw new RuntimeException('Could not encode the fixture image.');

@@ -209,10 +209,10 @@ verdict on screen.
 - **Validation details are safe in production.** `error.details.field` is
   allowlisted rather than gated behind `APP_DEBUG`, so a client can tell an agent
   which input is wrong without the debug flag leaking internals.
-- **Self-service agent signup.** Agents register with their name, NIN, IMEI and
-  device type, and accounts become active immediately. Administrators review
-  submitted records; they do not approve registrations. Full NIN is returned
-  only by the ADMIN-only account directory.
+- **Self-service agent registration.** Applicants submit their name, NIN,
+  Nigerian mobile number, IMEI and device type. Accounts remain pending until an
+  administrator approves or rejects them in account management. Full NIN and
+  phone are returned only by the ADMIN-only account directory.
 
 ## What this is not evidence of
 
@@ -260,6 +260,55 @@ model.
 - **It does not decide rewards from a live leaderboard.** The standing used for a
   reward is the one frozen when the period closed. A leaderboard that moves
   afterwards is informational.
+
+## Local development
+
+Use a local MySQL database only. In `private_storage/.env`, set
+`APP_URL=http://localhost:5173`, `DB_HOST=127.0.0.1`, `DB_PORT=3306`,
+`DB_NAME=fieldpulse_test`, and the local database username/password. From the
+repository root, apply migrations:
+
+```powershell
+php private_storage/bin/migrate.php
+```
+
+Run the API in one terminal:
+
+```powershell
+php -d auto_prepend_file=private_storage/bin/local_dev_https.php -S 127.0.0.1:8001 -t public_html
+```
+
+Run the frontend in a second terminal:
+
+```powershell
+npm run dev -- --host 127.0.0.1
+```
+
+Open `http://localhost:5173`. The Vite development server proxies `/api/v1`
+requests to the local PHP server. The loopback-only `local_dev_https.php` shim
+lets the HTTP-only PHP development server pass the application's HTTPS check;
+it does **not** encrypt traffic and must never be used on a network-facing or
+production server.
+
+### Windows PowerShell
+
+Keep MySQL running on port `3306`, then open two PowerShell terminals in the
+repository root. If PHP is installed at `C:\tools\php85` and is not on `PATH`,
+run the API in the first terminal (adjust `$repo` or `$php` if needed):
+
+```powershell
+$repo = (Get-Location).Path
+$php = 'C:\tools\php85\php.exe'
+& $php -d extension=pdo_mysql -d extension=openssl -d extension=mbstring -d extension=fileinfo -d extension=gd -d "auto_prepend_file=$repo\private_storage\bin\local_dev_https.php" -S 127.0.0.1:8001 -t "$repo\public_html"
+```
+
+From the repository root, run the frontend in the second terminal:
+
+```powershell
+npm.cmd run dev -- --host 127.0.0.1
+```
+
+Leave both terminals open and visit `http://localhost:5173`.
 
 ## Verification
 

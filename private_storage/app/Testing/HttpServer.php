@@ -517,8 +517,6 @@ final class HttpServer
             $err = curl_error($ch);
         }
 
-        curl_close($ch);
-
         if ($err !== '') {
             throw new \RuntimeException('The suite could not reach the server: ' . $err);
         }
@@ -705,8 +703,6 @@ final class HttpServer
             $err = curl_error($ch);
         }
 
-        curl_close($ch);
-
         if ($err !== '') {
             throw new \RuntimeException('The suite could not reach the server: ' . $err);
         }
@@ -776,8 +772,6 @@ final class HttpServer
         } else {
             $err = curl_error($ch);
         }
-
-        curl_close($ch);
 
         if ($err !== '') {
             throw new \RuntimeException('The suite could not reach the server: ' . $err);

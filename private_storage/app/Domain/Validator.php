@@ -122,6 +122,31 @@ final class Validator
         return trim($value);
     }
 
+    public static function nigerianPhone(mixed $value): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation('Enter a Nigerian mobile phone number.', ['field' => 'phone']);
+        }
+
+        $phone = preg_replace('/[\s()\-]/', '', trim($value));
+        if (!is_string($phone)) {
+            throw ApiException::validation('Enter a Nigerian mobile phone number.', ['field' => 'phone']);
+        }
+
+        if (preg_match('/^0([789]\d{9})$/', $phone, $matches) === 1) {
+            return '+234' . $matches[1];
+        }
+
+        if (preg_match('/^\+?234([789]\d{9})$/', $phone, $matches) === 1) {
+            return '+234' . $matches[1];
+        }
+
+        throw ApiException::validation(
+            'Enter a valid Nigerian mobile number, for example 08012345678 or +2348012345678.',
+            ['field' => 'phone']
+        );
+    }
+
     public static function deviceType(mixed $value): string
     {
         $types = [

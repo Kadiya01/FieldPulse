@@ -20,6 +20,6 @@ describe('login error messages', () => {
 
   it('distinguishes a connection failure from rejected credentials', () => {
     expect(loginErrorMessage(new TypeError('Failed to fetch')))
-      .toBe('Could not reach FieldPulse. Check your connection and try again.');
+      .toBe('Could not reach the service. Check your connection and try again.');
   });
 });

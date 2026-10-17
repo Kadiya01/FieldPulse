@@ -276,8 +276,9 @@ the update is in progress.
 
 1. Back up the production database and the existing `private_storage/app/` and
    web document-root trees. Do not overwrite `private_storage/.env`.
-2. Upload `private_storage/migrations/024_self_registration.sql` to the
-   existing sibling `private_storage/migrations/` directory.
+2. Upload `private_storage/migrations/024_self_registration.sql` and
+   `private_storage/migrations/025_pending_agent_approval.sql` to the existing
+   sibling `private_storage/migrations/` directory.
 3. From cPanel Terminal, check migration state, apply pending migrations, then
    confirm the result:
 
@@ -287,7 +288,7 @@ the update is in progress.
    php ~/private_storage/bin/migrate.php --status
    ```
 
-   The final status must show `024_self_registration.sql` as applied with no
+   The final status must show both migrations as applied with no
    checksum mismatch. Never edit a migration after it has been applied.
 4. Upload these production PHP files, preserving their directory structure:
 
@@ -302,6 +303,8 @@ the update is in progress.
    private_storage/app/Domain/Validator.php
    private_storage/app/Http/Kernel.php
    private_storage/app/Security/RateLimiter.php
+   private_storage/migrations/024_self_registration.sql
+   private_storage/migrations/025_pending_agent_approval.sql
    public_html/api/v1/agents/register.php                     (new)
    public_html/api/v1/auth/agent-login.php                    (new)
    ```
@@ -321,8 +324,10 @@ the update is in progress.
    return API responses rather than SPA HTML, and that an authorized
    administrator can view the account directory.
 
-Registration activates an agent account immediately; administrators approve
-submitted records, not registrations. IMEI is an identifier, not a secret.
+New registrations remain pending until an administrator approves them in
+account management; rejected registrations can be reopened there for
+reconsideration. The registration form requires a Nigerian mobile number.
+IMEI is an identifier, not a secret.
 Do not test registration using a person's NIN or IMEI unless that person is
 intentionally being registered.
 

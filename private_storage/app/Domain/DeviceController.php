@@ -169,17 +169,31 @@ final class DeviceController implements ActionInterface
             );
         }
 
-        if (!DeviceStatus::canSubmit((string) $device['status'])) {
+        $auditAction = 'DEVICE_REBOUND';
+
+        if ((string) $device['status'] === DeviceStatus::REVOKED) {
+            $deviceId = (int) $device['id'];
+
+            // A successful credential login can restore this exact paired
+            // device, but old refresh cookies must not become usable again.
+            TokenService::i()->revokeDeviceSessions($deviceId, 'DEVICE_REACTIVATED');
+            $this->devices->setStatus($deviceId, DeviceStatus::ACTIVE);
+            $device = $this->devices->findById($deviceId);
+
+            if ($device === null) {
+                throw new \RuntimeException('Device row vanished while reactivating it.');
+            }
+
+            $auditAction = 'DEVICE_REACTIVATED';
+        } elseif (!DeviceStatus::canSubmit((string) $device['status'])) {
             throw new ApiException(
                 403,
                 DeviceStatus::denialCode((string) $device['status']),
-                (string) $device['status'] === DeviceStatus::REVOKED
-                    ? 'This device has been revoked. Re-pairing is required.'
-                    : 'This device is not authorised.'
+                'This device is not authorised.'
             );
         }
 
-        return $this->issueBoundSession($request, $context, $device, 'DEVICE_REBOUND');
+        return $this->issueBoundSession($request, $context, $device, $auditAction);
     }
 
     /**
