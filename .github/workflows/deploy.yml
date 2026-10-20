@@ -2,7 +2,7 @@
 
 name: FieldPulse Frontend Deployment
 
-on:
+"on":
   workflow_dispatch:
 
 permissions:
