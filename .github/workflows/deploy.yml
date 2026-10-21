@@ -3,9 +3,9 @@
 name: FieldPulse Frontend Deployment
 
 "on":
-    push:
-      branch:
-        - main
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
