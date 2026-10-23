@@ -56,9 +56,9 @@ try {
      * MariaDB is the awkward one: the queue takes the native
      * `FOR UPDATE SKIP LOCKED` path on 10.6+ and a portable fallback below it,
      * so 10.3+ has always been plausible. Plausible is not supported. Only
-     * MariaDB 10.11 has actually been run through bin/db_matrix.php, so 10.11 is
-     * what is claimed — see docs/DEPLOYMENT.md. Raising this floor without
-     * testing the version first is how a matrix stops meaning anything.
+     * MariaDB 11.4.13 has actually been run through bin/db_matrix.php, so that is
+     * what is claimed — see docs/DEPLOYMENT.md and the certification table in
+     * docs/RELEASE.md. The 10.11 supported floor is not a certified run.
      */
     $isMariaDb = str_contains($version, 'MariaDB');
     $tooOld    = $isMariaDb
