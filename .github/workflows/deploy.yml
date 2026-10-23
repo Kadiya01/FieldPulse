@@ -47,7 +47,7 @@ jobs:
           protocol: ftps
           port: 21
           local-dir: dist/
-          server-dir: ./
+          server-dir: ${{ vars.FTP_DOCROOT_DIR || './' }}
           state-name: .ftp-deploy-sync-state-frontend.json
           dangerous-clean-slate: false
 
@@ -60,7 +60,7 @@ jobs:
           protocol: ftps
           port: 21
           local-dir: public_html/
-          server-dir: ./
+          server-dir: ${{ vars.FTP_DOCROOT_DIR || './' }}
           state-name: .ftp-deploy-sync-state-public-html.json
           dangerous-clean-slate: false
 
