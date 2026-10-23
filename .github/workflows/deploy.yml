@@ -83,3 +83,57 @@ jobs:
             fieldpulse/
             logs/
             *.log
+
+      # A green upload step only proves the bytes went somewhere. This proves
+      # they went to the docroot that actually serves the site: the API entry
+      # point has to reach the PHP kernel (405 on GET, not 404), and the served
+      # index.html has to reference the asset hash this run just built.
+      - name: Smoke test deployment
+        env:
+          SITE_URL: ${{ vars.SITE_URL || 'https://monthlyperformance.abhglobalinformationtechnologysolutions.com.ng' }}
+        run: |
+          set -euo pipefail
+
+          code=""
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -sS -H 'Cache-Control: no-cache' \
+              -o /tmp/agent-login.json -w '%{http_code}' \
+              "$SITE_URL/api/v1/auth/agent-login.php" || true)
+            [ "$code" = "405" ] && break
+            sleep 5
+          done
+
+          if [ "$code" != "405" ]; then
+            echo "agent-login.php returned $code from $SITE_URL"
+            cat /tmp/agent-login.json || true
+            exit 1
+          fi
+
+          grep -q METHOD_NOT_ALLOWED /tmp/agent-login.json || {
+            echo "agent-login.php did not reach the kernel:"
+            cat /tmp/agent-login.json
+            exit 1
+          }
+
+          asset=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' dist/index.html | head -n1)
+
+          if [ -z "$asset" ]; then
+            echo "dist/index.html references no hashed asset"
+            exit 1
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if curl -sS -f -H 'Cache-Control: no-cache' \
+              "$SITE_URL/index.html" -o /tmp/live-index.html \
+              && grep -q "$asset" /tmp/live-index.html; then
+              break
+            fi
+            sleep 5
+          done
+
+          grep -q "$asset" /tmp/live-index.html || {
+            echo "live index.html does not reference $asset"
+            exit 1
+          }
+
+          echo "Smoke test passed: $asset is live and the API entry point is routed."
