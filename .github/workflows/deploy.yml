@@ -48,6 +48,7 @@ jobs:
           port: 21
           local-dir: dist/
           server-dir: ./
+          state-name: .ftp-deploy-sync-state-frontend.json
           dangerous-clean-slate: false
 
       - name: Upload PHP entry points (public_html/) to document root
@@ -60,6 +61,7 @@ jobs:
           port: 21
           local-dir: public_html/
           server-dir: ./
+          state-name: .ftp-deploy-sync-state-public-html.json
           dangerous-clean-slate: false
 
       - name: Upload application code (private_storage/)
@@ -73,6 +75,7 @@ jobs:
           port: 21
           local-dir: private_storage/
           server-dir: ${{ vars.PRIVATE_STORAGE_SERVER_DIR }}
+          state-name: .ftp-deploy-sync-state-private-storage.json
           dangerous-clean-slate: false
           exclude: |
             .env
