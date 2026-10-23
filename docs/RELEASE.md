@@ -76,6 +76,51 @@ The supported floor and the certified version are not the same claim. MariaDB
 against. MariaDB 10.11 was **not** independently certified in this environment
 and is not presented as if it were.
 
+## Certification record
+
+The last full gate run was on 2026-10-23 against the code at `8b20eff`
+(PHP 8.2.33, Apache 2.4.69):
+
+| Group | Result |
+|---|---|
+| `build`, `lint` | ok |
+| `unit` | 93 passed |
+| `healthcheck` | PASS |
+| `selftest` | 69 passed, 0 failed |
+| `auth` | 46 passed, 0 failed |
+| `contract` | 15 passed, 0 failed |
+| `integrity` | 60 passed, 0 failed |
+| `integration` | 18 passed, 0 failed |
+| `verification` | 78 passed, 0 failed |
+| `queue` | 13 passed, 0 failed |
+| `deploy_test` | 33 passed, 0 failed; Apache `.htaccess` tier ran |
+| `e2e` | 5 passed |
+| `db_matrix` | MySQL 8.0.40, MariaDB 11.4.13 |
+
+Verdict: `FIELDPULSE RELEASE CANDIDATE: PASS`.
+
+## Production environment (observed, not certified)
+
+The deployment at `monthlyperformance.abhglobalinformationtechnologysolutions.com.ng`
+reports **MySQL 8.4.13** and **PHP 8.4.27** from its own host. Both are outside
+the cells the matrix above ran, so they are recorded as observed and are not
+claimed as certified. Agent registration, admin approval, IMEI login, device
+pairing and the deployed API entry point were exercised against that host and
+worked, but a working smoke test is not a matrix run.
+
+## Migration checksums and line endings
+
+`schema_migrations` stores a SHA-256 of each migration file's bytes, so the
+ledger is sensitive to line endings. Applying migrations from Windows (CRLF)
+copies and later deploying the same files from Git (LF) leaves every row
+reporting a checksum mismatch even though the SQL is identical, and a future
+`migrate.php` run refuses to proceed until the ledger is reconciled.
+
+The production ledger was reconciled on 2026-10-23 after confirming that every
+mismatch was reproducible by converting the current LF file to CRLF and nothing
+else. Apply migrations from the same copy that is deployed; do not edit an
+applied migration to fix the checksum.
+
 ## Running it by hand instead
 
 The gate is a convenience over the individual suites, not a replacement for
