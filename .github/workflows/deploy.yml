@@ -50,3 +50,57 @@ jobs:
           local-dir: dist/
           server-dir: ./
           dangerous-clean-slate: false
+
+      - name: Upload backend files (private_storage/ + public_html/) to cPanel
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          local-dir: .
+          server-dir: ./
+          exclude: |
+            *.git
+            node_modules/
+            dist/
+            .github/
+            .e2e_*
+            *.log
+            private_storage/fieldpulse/
+            .vscode/
+            .idea/
+            *.sw?
+            .DS_Store
+            public_html/assets/
+            public_html/favicon.svg
+            public_html/index.html
+            public_html/manifest.webmanifest
+            public_html/pwa-*.png
+            public_html/registerSW.js
+            public_html/sw.js
+            public_html/workbox-*.js
+            .gitignore
+            README.md
+            docs/
+            src/
+            vite.config.ts
+            tsconfig*.json
+            oxlintrc.json
+            logo.jpeg
+            abh-global-logo.jpeg
+            package.json
+            package-lock.json
+            playwright.config.ts
+            e2e/
+            .e2e_docroot/
+            .e2e_faults.json
+            .e2e_creds.json
+            .e2e_profiles/
+            playwright-report/
+            test-results/
+            .opencode/
+            probe-restart.mjs
+            private_storage/bin/inspect_tokens.php
+            private_storage/bin/jwk_browser_shape.php
