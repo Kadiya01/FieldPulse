@@ -91,32 +91,14 @@ export async function firstPage(context: BrowserContext): Promise<Page> {
 }
 
 /**
- * Sign in through the real login form and land on the capture screen.
+ * Complete the device binding step, if the deployment's policy asks for it.
  *
- * Typed into the actual inputs and submitted with the actual button, so the
- * whole authentication path runs: POST /auth/login.php, device key generation,
- * POST /device/register.php, and the pairing exchange when the deployment
- * policy demands one.
- *
- * Not shortcut by seeding localStorage or calling the API directly — a test that
- * skipped this would never exercise the gate that decides whether the app is
- * usable at all.
+ * The policy decides whether sign-in stops at a pairing screen, so the suite
+ * branches on what the app actually rendered rather than assuming one policy.
+ * That is what lets the same suite run against a deployment configured either
+ * way, and against both the agent and the operator entry points.
  */
-export async function signIn(page: Page, creds: Credentials = readCredentials()): Promise<void> {
-  await page.goto('/login');
-
-  await expect(page.getByRole('heading', { name: 'FieldPulse sign in' })).toBeVisible();
-
-  await page.locator('#username').fill(creds.username);
-  await page.locator('#password').fill(creds.password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-
-  /*
-   * The deployment's pairing policy decides whether this stops at a pairing
-   * screen. Branching on what the app actually rendered, rather than assuming
-   * one policy, is what lets the same suite run against a deployment configured
-   * either way.
-   */
+async function completePairingIfAsked(page: Page, creds: Credentials): Promise<void> {
   const pairHeading = page.getByRole('heading', { name: 'Pair this device' });
 
   await Promise.race([
@@ -125,7 +107,7 @@ export async function signIn(page: Page, creds: Credentials = readCredentials())
   ]);
 
   if (await pairHeading.isVisible().catch(() => false)) {
-    await page.locator('#pairing').fill(creds.pairingCode);
+    await page.locator('input[autocomplete="one-time-code"]').fill(creds.pairingCode);
     await page.getByRole('button', { name: 'Pair device' }).click();
   }
 
@@ -133,9 +115,40 @@ export async function signIn(page: Page, creds: Credentials = readCredentials())
   await expect(page.getByRole('heading', { name: 'Capture' })).toBeVisible();
 }
 
+/**
+ * Sign in an agent through the real IMEI form and land on the capture screen.
+ *
+ * Typed into the actual input and submitted with the actual button, so the
+ * whole authentication path runs: POST /auth/agent-login.php, device key
+ * generation, POST /device/register.php, and the pairing exchange when the
+ * deployment policy demands one.
+ *
+ * Not shortcut by seeding localStorage or calling the API directly - a test
+ * that skipped this would never exercise the gate that decides whether the app
+ * is usable at all.
+ */
+export async function signIn(page: Page, creds: Credentials = readCredentials()): Promise<void> {
+  await page.goto('/login');
+
+  await expect(page.getByRole('heading', { name: 'Agent sign in' })).toBeVisible();
+
+  await page.locator('#agent-imei').fill(creds.imei);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await completePairingIfAsked(page, creds);
+}
+
 /** Sign in as the provisioned SUPERVISOR rather than the agent. */
 export async function signInOperator(page: Page, creds: Credentials = readOperatorCredentials()): Promise<void> {
-  await signIn(page, creds);
+  await page.goto('/admin/login');
+
+  await expect(page.getByRole('heading', { name: 'Admin sign in' })).toBeVisible();
+
+  await page.locator('#username').fill(creds.username);
+  await page.locator('#password').fill(creds.password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await completePairingIfAsked(page, creds);
 }
 
 /**

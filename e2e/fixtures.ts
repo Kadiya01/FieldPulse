@@ -38,8 +38,43 @@ export type Credentials = {
   username: string;
   password: string;
   pairingCode: string;
+  imei: string;
   role: CredentialRole;
 };
+
+/**
+ * A unique, Luhn-valid 15-digit IMEI.
+ *
+ * Agents sign in with the IMEI they registered, so a provisioned identity
+ * without one cannot exercise the real login path. The TAC prefix is constant
+ * and the six serial digits are random, which keeps the value valid while
+ * making a collision between concurrently provisioned identities negligible.
+ */
+function luhnImei(): string {
+  let base = '35693803';
+
+  for (let i = 0; i < 6; i++) {
+    base += Math.floor(Math.random() * 10);
+  }
+
+  let sum = 0;
+
+  for (let i = 0; i < 14; i++) {
+    let digit = Number(base[i]);
+
+    if (i % 2 === 1) {
+      digit *= 2;
+
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+
+    sum += digit;
+  }
+
+  return base + ((10 - (sum % 10)) % 10);
+}
 
 /**
  * The suite needs two identities, not one.
@@ -131,9 +166,16 @@ function provision(role: CredentialRole): Credentials {
   const agentCode = 'e2e_' + runId();
   const username = 'e2e_' + runId();
   const password = 'E2e-' + runId() + '-pw';
+  const imei = luhnImei();
   const bin = ['bin/provision_agent.php'];
 
-  php([...bin, `--code=${agentCode}`, `--name=E2E ${role}`, `--role=${role}`]);
+  php([
+    ...bin,
+    `--code=${agentCode}`,
+    `--name=E2E ${role}`,
+    `--role=${role}`,
+    `--imei=${imei}`
+  ]);
   php(['bin/set_credentials.php', `--code=${agentCode}`, `--username=${username}`, '--password-stdin'], password);
 
   const pairing = php(['bin/pair_device.php', `--code=${agentCode}`, '--label=e2e']);
@@ -146,7 +188,7 @@ function provision(role: CredentialRole): Credentials {
     throw new Error('could not read the pairing code from pair_device.php output:\n' + pairing);
   }
 
-  return { agentCode, username, password, pairingCode: match[1], role };
+  return { agentCode, username, password, pairingCode: match[1], imei, role };
 }
 
 function writeCreds(slot: 'agent' | 'operator', creds: Credentials): void {
