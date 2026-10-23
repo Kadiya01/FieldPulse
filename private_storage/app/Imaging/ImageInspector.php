@@ -185,11 +185,7 @@ final class ImageInspector
             throw new ApiException(500, ErrorCode::INTERNAL_ERROR, 'Unable to initialise fileinfo.');
         }
 
-        try {
-            $mime = finfo_file($finfo, $path);
-        } finally {
-            finfo_close($finfo);
-        }
+        $mime = finfo_file($finfo, $path);
 
         return is_string($mime) ? strtolower(trim($mime)) : 'application/octet-stream';
     }
@@ -214,7 +210,7 @@ final class ImageInspector
             return false;
         }
 
-        imagedestroy($image);
+        unset($image);
 
         return true;
     }

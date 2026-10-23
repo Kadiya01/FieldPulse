@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo } from 'react';
 import type { SessionAgent } from '../api/client';
-import { isOperatorRole } from './roles';
+import { isOperatorRole, isAdminRole } from './roles';
 
 /**
  * Who is signed in, shared by the whole tree.
@@ -20,6 +20,8 @@ export interface SessionState {
   agent: SessionAgent | null;
   /** True for SUPERVISOR and ADMIN. False for anything unknown or absent. */
   isOperator: boolean;
+  /** True only for ADMIN. False for anything unknown or absent. */
+  isAdmin: boolean;
   /** `AG-001 · Ada Lovelace`, or null when the server did not say. */
   label: string | null;
 }
@@ -27,6 +29,7 @@ export interface SessionState {
 export const SessionContext = createContext<SessionState>({
   agent: null,
   isOperator: false,
+  isAdmin: false,
   label: null
 });
 
@@ -47,6 +50,7 @@ export function useSessionValue(agent: SessionAgent | null): SessionState {
   return useMemo<SessionState>(() => ({
     agent,
     isOperator: isOperatorRole(agent?.role),
+    isAdmin: isAdminRole(agent?.role),
     label: agent && agent.agent_code
       ? `${agent.agent_code} · ${agent.full_name || 'Unnamed agent'}`
       : null

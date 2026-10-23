@@ -766,12 +766,27 @@ $t->test('docs/API.md documents the route and all three submission codes', funct
     $t->assertContains('submission_id', $doc, 'submission_id is documented');
 });
 
-$t->test('docs/API.md does not still claim a 201 is the success code', function () use ($t, $repoRoot) {
+$t->test('docs/API.md does not still claim a 201 is the submit success code', function () use ($t, $repoRoot) {
     $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
 
+    /*
+     * Scoped to the submission section rather than the whole document.
+     *
+     * The rule is about submit.php: its success is 202/200, and a stale 201 there
+     * tells a client integrator to build the wrong branch. It is not a claim that
+     * no endpoint in the product may ever answer 201 — the admin directory's POST
+     * creates an account and does exactly that — so the scan is over the section
+     * that owns the invariant, not over every byte of the file.
+     */
+    $start = strpos($doc, '### POST /api/v1/submit.php');
+    $end   = strpos($doc, '### GET /api/v1/submission.php');
+    $t->assertTrue($start !== false && $end !== false && $end > $start, 'the submission section is present');
+
+    $section = substr($doc, (int) $start, (int) $end - (int) $start);
+
     $t->assertTrue(
-        preg_match('/(^|[^0-9])201([^0-9]|$)/m', $doc) !== 1,
-        'a stale 201 in docs/API.md would tell a client integrator to build the wrong branch'
+        preg_match('/(^|[^0-9])201([^0-9]|$)/m', $section) !== 1,
+        'a stale 201 in the submission section would tell a client integrator to build the wrong branch'
     );
 });
 
@@ -932,6 +947,45 @@ $t->test('the reward routes are documented, shimmed, and gated as claimed', func
         (string) file_get_contents($rewardsDoc),
         'docs/REWARDS.md states the cutoff rule verbatim'
     );
+});
+
+$t->test('the admin routes are documented, shimmed, and gated admin-only', function () use ($t, $repoRoot) {
+    $doc = (string) file_get_contents($repoRoot . '/docs/API.md');
+
+    foreach (['/api/v1/admin/agents.php', '/api/v1/admin/agent.php'] as $path) {
+        $t->assertContains($path, $doc, 'the ' . $path . ' route is documented');
+    }
+
+    /*
+     * The directory and the per-account action are two different files; both must
+     * resolve to the router. A path under api/ with no file is a bare 404 — not
+     * the SPA fallback, and not a redirect — so a documented path the shim does
+     * not serve is a dead screen for whoever builds the client.
+     */
+    $shim = (string) file_get_contents($repoRoot . '/public_html/api/v1/admin/agents.php');
+    $t->assertContains("Kernel::handle('admin.agents')", $shim, 'the directory shim serves the documented path');
+
+    $shim = (string) file_get_contents($repoRoot . '/public_html/api/v1/admin/agent.php');
+    $t->assertContains("Kernel::handle('admin.agent')", $shim, 'the action shim serves the documented path');
+
+    /*
+     * The point of the surface is that it is narrower than "operator": a
+     * supervisor runs the review queue and the rewards ledger, but only an admin
+     * mints, demotes or retires accounts. If either route were downgraded to
+     * 'operator', the prose above would still read correctly while the code let a
+     * supervisor escalate, so the gate is asserted rather than trusted.
+     */
+    $kernel = (string) file_get_contents($repoRoot . '/private_storage/app/Http/Kernel.php');
+
+    $t->assertMatches("/'admin\.agents'\s*=>\s*'admin'/", $kernel, 'admin.agents requires admin');
+    $t->assertMatches("/'admin\.agent'\s*=>\s*'admin'/", $kernel, 'admin.agent requires admin');
+    $t->assertContains('Administrator access is required.', $kernel, 'the role gate refuses with the documented 403');
+
+    // The refusals an integrator meets must be the ones the documentation names.
+    $controller = (string) file_get_contents($repoRoot . '/private_storage/app/Domain/AdminAgentController.php');
+    $t->assertContains('STATE_CONFLICT', $controller, 'the self and last-admin guards report STATE_CONFLICT');
+    $t->assertContains('UNKNOWN_AGENT', $controller, 'an unknown target is UNKNOWN_AGENT');
+    $t->assertContains('IDEMPOTENCY_CONFLICT', $controller, 'a duplicate code or username is IDEMPOTENCY_CONFLICT');
 });
 
 /* ---------------------------------------------------------------------------

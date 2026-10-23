@@ -6,6 +6,16 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  server: {
+    watch: {
+      ignored: ['**/private_storage/**']
+    },
+    proxy: {
+      '/api/v1': {
+        target: 'http://127.0.0.1:8001'
+      }
+    }
+  },
   test: {
     // Node, not jsdom: the only test today mocks IndexedDB and exercises Web
     // Crypto, both of which Node provides natively. Standing up the jsdom
@@ -15,6 +25,11 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // On this machine, a fresh worker for each file can time out even though the
+    // tests themselves pass, so keep the suite in one worker and reuse it across
+    // files to avoid the false-negative runner crash.
+    fileParallelism: false,
+    maxWorkers: 1,
   },
   plugins: [
     react(),
@@ -32,8 +47,8 @@ export default defineConfig({
         ]
       },
       manifest: {
-        name: 'FieldPulse',
-        short_name: 'FieldPulse',
+        name: 'ABH Global Information Technology Solutions',
+        short_name: 'ABH Global',
         // Not an attestation claim: nothing in this app reads a fingerprint or a
         // face, and a browser cannot attest to hardware. What it does is take a
         // report of weekly activity, let a server verify it, and freeze the

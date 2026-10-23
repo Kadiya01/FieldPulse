@@ -140,12 +140,19 @@ describe('route table and navigation agree', () => {
   });
 
   it('links to every authenticated destination the app routes to', () => {
-    // `/login` is deliberately absent: it renders outside the layout, because a
-    // session that does not exist cannot render chrome that needs one.
-    const reachable = routedPaths.filter((p) => p !== '/login' && p !== '*');
+    // Login and registration routes render outside the authenticated layout.
+    const publicRoutes = ['/admin/login', '/login', '/register', '*'];
+    const reachable = routedPaths.filter((p) => !publicRoutes.includes(p));
     const unlinked = reachable.filter((p) => !navTargets.includes(p));
 
     expect(unlinked).toEqual([]);
+  });
+
+  it('keeps agent and administrator sign-in on separate public routes', () => {
+    expect(appSource).toMatch(/path="\/login"/);
+    expect(appSource).toMatch(/path="\/admin\/login"/);
+    expect(appSource).toMatch(/AgentLoginPage/);
+    expect(appSource).toMatch(/LoginPage/);
   });
 
   it('has exactly one review route, and it is operator-only', () => {
@@ -163,9 +170,36 @@ describe('route table and navigation agree', () => {
     expect(read('pages/ReviewsPage.tsx')).toContain('isOperator');
   });
 
+  it('has exactly one account route, and it is admin-only', () => {
+    // Same reasoning as the review route: one declaration, one nav entry, and a
+    // page that checks the role itself rather than trusting the link's absence.
+    const occurrences = (source: string, pattern: RegExp): number =>
+      [...source.matchAll(pattern)].length;
+
+    expect(occurrences(appSource, /path="\/admin"/g)).toBe(1);
+    expect(occurrences(navSource, /to: '\/admin'/g)).toBe(1);
+
+    expect(appSource).toMatch(/AdminPage/);
+    expect(read('pages/AdminPage.tsx')).toContain('isAdmin');
+  });
+
   it('sends an unknown path to the capture screen rather than a blank page', () => {
     // A client-side route that falls through to nothing renders an empty
     // document, which an agent reports as "the app is broken".
     expect(appSource).toContain('path="*"');
+  });
+
+  it('has exactly one registration route, and it is public', () => {
+    // Self-registration is declared once outside the authenticated layout; a
+    // signed-in agent is redirected back to the capture screen.
+    const occurrences = (source: string, pattern: RegExp): number =>
+      [...source.matchAll(pattern)].length;
+
+    expect(occurrences(appSource, /path="\/register"/g)).toBe(1);
+    expect(appSource).toMatch(/RegisterPage/);
+    expect(read('pages/RegisterPage.tsx')).toContain('registerAgent');
+
+    // The agent sign-in page points new agents to registration.
+    expect(read('pages/AgentLoginPage.tsx')).toMatch(/to="\/register"/);
   });
 });

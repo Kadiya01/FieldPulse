@@ -3,11 +3,16 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import CapturePage from './pages/CapturePage';
 import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
+import AgentLoginPage from './pages/AgentLoginPage';
+import RegisterPage from './pages/RegisterPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
+import AdminPage from './pages/AdminPage';
 import Layout from './components/Layout';
+import BrandHeader from './components/BrandHeader';
 import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
+import { triggerSync } from './sync/coordinator';
 import { SessionContext, useSessionValue } from './auth/sessionContext';
 
 type Gate = 'checking' | 'ready' | 'login' | 'unregistered';
@@ -44,11 +49,37 @@ export default function App() {
           return;
         }
         setAgent(result.status === 'authenticated' ? result.agent : null);
+
+        if (result.status === 'offline') {
+          // The session could not be checked because the server could not be
+          // reached, which says nothing about whether the agent is signed in.
+          // The app opens with no identity and no token — nothing is granted,
+          // and the first request once the network returns still has to
+          // authenticate — but the captures already queued on this handset stay
+          // visible, which is the whole point of a queue that is supposed to
+          // survive going offline.
+          setGate('ready');
+
+          // A no-op while the network is down, and the thing that starts the
+          // queue moving again once it is not.
+          void triggerSync();
+
+          return;
+        }
+
         setGate(
           result.status === 'authenticated' ? 'ready'
             : result.status === 'unregistered' ? 'unregistered'
             : 'login'
         );
+
+        // A capture taken before the last reload is still on this handset
+        // waiting for the connection it could not get. Opening the app is the
+        // signal that it is worth trying again, and waiting for the agent to
+        // notice a queue that is supposed to empty itself is not a design.
+        if (result.status === 'authenticated') {
+          void triggerSync();
+        }
       })
       .catch(() => {
         if (live) {
@@ -75,9 +106,10 @@ export default function App() {
   if (gate === 'checking') {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        {/* Announced, not just drawn: this is the first thing a screen reader
-            meets, and a silent pause reads as a blank page. */}
-        <p role="status" className="text-gray-700 text-sm">Restoring session…</p>
+        <div className="flex flex-col items-center gap-2">
+          <BrandHeader className="flex justify-center" />
+          <p role="status" className="text-gray-700 text-sm">Restoring session…</p>
+        </div>
       </div>
     );
   }
@@ -86,6 +118,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm text-center">
+          <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="text-xl font-bold text-gray-900 mb-2">Device key missing</h1>
           <p className="text-sm text-gray-700 mb-6">
             This browser&apos;s device key is no longer available, so it cannot prove
@@ -138,10 +171,17 @@ export default function App() {
             role revoked server-side should not leave a stale screen.
           */}
           <Route path="/reviews" element={<ReviewsPage />} />
+          {/*
+            The account directory is mounted for every authenticated session and
+            the page checks `isAdmin` itself, exactly like Reviews. An
+            administrator demoted server-side since this tab loaded must land on
+            a "no longer admin" panel, not on stale controls.
+          */}
+          <Route path="/admin" element={<AdminPage />} />
         </Route>
 
         <Route
-          path="/login"
+          path="/admin/login"
           element={
             gate === 'ready' ? (
               <Navigate to="/" replace />
@@ -161,6 +201,37 @@ export default function App() {
                   setGate('ready');
                 }}
               />
+            )
+          }
+        />
+
+        <Route
+          path="/login"
+          element={
+            gate === 'ready' ? (
+              <Navigate to="/" replace />
+            ) : (
+              <AgentLoginPage
+                onAuthenticated={(authenticated) => {
+                  setAgent(authenticated);
+                  setGate('ready');
+                }}
+              />
+            )
+          }
+        />
+
+        <Route
+          path="/register"
+          element={
+            gate === 'ready' ? (
+              <Navigate to="/" replace />
+            ) : (
+              /*
+               * Public self-registration remains pending until an admin
+               * approves the new agent in account management.
+               */
+              <RegisterPage />
             )
           }
         />

@@ -154,7 +154,7 @@ function runSuite(string $script, array $args, string $env): array
     $command[] = '--env=' . $env;
 
     $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-    $process     = proc_open($command, $descriptors, $pipes, dirname(__DIR__), null);
+    $process     = proc_open($command, $descriptors, $pipes, dirname(__DIR__, 2), null);
 
     if (!is_resource($process)) {
         return ['code' => -1, 'out' => 'could not start ' . basename($script)];

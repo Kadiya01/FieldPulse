@@ -7,22 +7,19 @@ namespace FieldPulse\Database;
 /**
  * agents access.
  *
- * The credential lookup is by username, and the only thing that proves an agent
- * is who they claim to be is a password verified with password_verify() against
- * the bcrypt hash in password_hash.
- *
- * IMEI is not a credential and is not used to authenticate anything. It is
- * retained as an administrative attribute — useful for support and for matching
- * a handset to an ERP record — and deliberately reachable only through
- * findByImei(), which no authentication path calls. It is not a secret: it is
- * printed on the handset, printed on the box, and recycled between owners, and
- * a browser cannot read it at all.
+ * Administrator/reviewer credentials are stored as password hashes. New
+ * self-registered agents identify themselves with the IMEI stored on their
+ * account; this is intentionally a weak identifier-only login because an IMEI
+ * is printed on the handset/box and can be copied.
  */
 final class AgentRepository extends Repository
 {
     public const ACTIVE    = 'ACTIVE';
     public const INACTIVE  = 'INACTIVE';
     public const SUSPENDED = 'SUSPENDED';
+    public const DELETED   = 'DELETED';
+    public const PENDING   = 'PENDING';
+    public const REJECTED  = 'REJECTED';
 
     /** @return array<string,mixed>|null */
     public function findById(int $id): ?array
@@ -106,8 +103,7 @@ final class AgentRepository extends Repository
     }
 
     /**
-     * The lookup that used to sit behind login. Retained for administrative
-     * and support use only.
+     * Lookup for agent IMEI login and the administrative account directory.
      *
      * @return array<string,mixed>|null
      */
@@ -117,6 +113,42 @@ final class AgentRepository extends Repository
             'SELECT * FROM agents WHERE imei = :imei AND imei IS NOT NULL',
             ['imei' => $imei]
         );
+    }
+
+    public function registrationExists(string $nin, string $imei): bool
+    {
+        return $this->one(
+            'SELECT id FROM agents WHERE nin = :nin OR imei = :imei LIMIT 1',
+            ['nin' => $nin, 'imei' => $imei]
+        ) !== null;
+    }
+
+    public function createSelfRegistered(
+        string $code,
+        string $fullName,
+        string $nin,
+        string $phone,
+        string $imei,
+        string $deviceType
+    ): int {
+        $this->exec(
+            'INSERT INTO agents
+                (agent_code, full_name, nin, phone, role, status, imei, device_type, self_registered, created_at, updated_at)
+             VALUES
+                (:code, :name, :nin, :phone, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+            [
+                'code'        => $code,
+                'name'        => $fullName,
+                'nin'         => $nin,
+                'phone'       => $phone,
+                'role'        => 'AGENT',
+                'status'      => self::PENDING,
+                'imei'        => $imei,
+                'device_type' => $deviceType,
+            ]
+        );
+
+        return (int) Connection::lastInsertId();
     }
 
     public function create(string $code, string $fullName, ?string $imei = null): int
@@ -146,7 +178,7 @@ final class AgentRepository extends Repository
 
     public function setStatus(int $agentId, string $status): void
     {
-        if (!in_array($status, [self::ACTIVE, self::INACTIVE, self::SUSPENDED], true)) {
+        if (!in_array($status, [self::ACTIVE, self::INACTIVE, self::SUSPENDED, self::DELETED, self::PENDING, self::REJECTED], true)) {
             throw new \InvalidArgumentException('Unknown agent status: ' . $status);
         }
 
@@ -154,6 +186,68 @@ final class AgentRepository extends Repository
             'UPDATE agents SET status = :s, updated_at = UTC_TIMESTAMP() WHERE id = :id',
             ['s' => $status, 'id' => $agentId]
         );
+    }
+
+    /**
+     * Re-role an agent. The Kernel re-reads the role from the row on every
+     * request (see Authenticator), so this change is effective immediately
+     * and does not depend on any token expiring.
+     */
+    public function setRole(int $agentId, string $role): void
+    {
+        if (!in_array($role, ['AGENT', 'SUPERVISOR', 'ADMIN'], true)) {
+            throw new \InvalidArgumentException('Unknown agent role: ' . $role);
+        }
+
+        $this->exec(
+            'UPDATE agents SET role = :r, updated_at = UTC_TIMESTAMP() WHERE id = :id',
+            ['r' => $role, 'id' => $agentId]
+        );
+    }
+
+    /**
+     * The count that protects against locking the last ADMIN out.
+     *
+     * A demotion or suspension of an ACTIVE ADMIN is refused while this would
+     * drop below one, because the whole account-management surface is gated on
+     * the ADMIN role, and an ADMIN without ADMINs is a system nobody can ever
+     * administer again.
+     */
+    public function countActiveAdmins(): int
+    {
+        return (int) $this->value(
+            'SELECT COUNT(*) FROM agents WHERE role = :role AND status = :status',
+            ['role' => 'ADMIN', 'status' => self::ACTIVE]
+        );
+    }
+
+    /**
+     * The account-management directory, newest-created first.
+     *
+     * Only the ADMIN surface needs this, so the slow EXISTS subquery for the
+     * credential flag lives here rather than on the agent hot path.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function listForAdmin(int $limit, int $offset): array
+    {
+        $sql = "SELECT a.id, a.agent_code, a.full_name, a.nin, a.phone,
+                       a.self_registered, a.role, a.status,
+                       a.username, a.created_at,
+                       (SELECT COUNT(*) FROM devices d
+                         WHERE d.agent_id = a.id
+                           AND d.status = :dstatus) AS active_device_count,
+                       (a.password_hash IS NOT NULL) AS has_credential
+                  FROM agents a
+                 ORDER BY a.id DESC"
+            . self::limitClause($limit, 200, $offset);
+
+        return $this->all($sql, ['dstatus' => \FieldPulse\Security\DeviceStatus::ACTIVE]);
+    }
+
+    public function countAll(): int
+    {
+        return (int) $this->value('SELECT COUNT(*) FROM agents');
     }
 
     public function isActive(int $agentId): bool

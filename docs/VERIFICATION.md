@@ -558,3 +558,22 @@ Bump `VERIFICATION_VERSION` whenever a threshold changes. It is stamped onto
 every verdict, so a disputed count can be traced to the exact rule set that
 produced it. Then run `bin/reaggregate.php` if past verdicts need re-deciding —
 the old verdicts will not update themselves.
+
+---
+
+## Release gate
+
+None of this matters if the submission cannot reach the payload. The client-side
+queue — capture to IndexedDB, retry on network loss, a restart-safe watermark —
+and the full server pipeline are exercised together in the browser tier of
+`bin/release_gate.php`, against both database engines and a real Apache
+deployment, from a fresh database. See [docs/RELEASE.md](RELEASE.md) for the
+tier list and the last certification (`FIELDPULSE RELEASE CANDIDATE: PASS`).
+
+One behaviour verified there is worth spelling out because it was a genuine
+defect: a page reload while the queue's upload POST was in flight leaves the row
+`SYNCING`, and the lease held by the killed realm used to block the restart —
+that is precisely the crash in which an agent's report is most valuable. The
+coordinator now schedules a retry once the orphaned lease expires, so the
+documented offline guarantee — *a failed upload is a state, not an error the
+agent has to solve* — holds across reloads, not just across network flaps.

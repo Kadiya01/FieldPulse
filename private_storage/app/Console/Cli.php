@@ -36,7 +36,7 @@ final class Cli
 
         Config::boot();
 
-        set_exception_handler(static function (\Throwable $e): void {
+        set_exception_handler(static function (\Throwable $e) use ($entryScript): void {
             Logger::channel('app')->error('cli.unhandled_exception', [
                 'entry'  => basename($entryScript),
                 'class'  => $e::class,

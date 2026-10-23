@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { LogIn, KeyRound, ShieldAlert } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { LogIn, KeyRound } from 'lucide-react';
 import { generateAndStoreDeviceIdentity, getDeviceIdentity } from '../crypto/keys';
 import { login, registerDevice, ApiError, type SessionAgent } from '../api/client';
+import { loginErrorMessage } from '../auth/loginErrors';
+import BrandHeader from '../components/BrandHeader';
 
 type Stage = 'credentials' | 'pairing';
 
@@ -41,13 +43,23 @@ export default function LoginPage({
    * after three, which is why the code field is cleared on every attempt.
    */
   const completeRegistration = async (code?: string): Promise<SessionAgent | null> => {
-    // Reuse the stored key if the browser already has one. Re-generating on
-    // every login would leave an orphan key per attempt and, worse, would
-    // present a different device_uuid to a policy that may only permit the
-    // first device.
-    const existing = await getDeviceIdentity();
-    if (!existing) {
-      await generateAndStoreDeviceIdentity();
+    // Getting or minting the key pair is its own failure domain: if crypto or
+    // storage is unavailable, that is a browser problem, not a credential
+    // problem, and must never be reported as a rejected password. Reuse the
+    // stored key if the browser already has one — regenerating on every login
+    // would leave an orphan key per attempt and present a different device_uuid
+    // to a policy that may only permit the first device.
+    try {
+      const existing = await getDeviceIdentity();
+      if (!existing) {
+        await generateAndStoreDeviceIdentity();
+      }
+    } catch {
+      setErrorMsg(
+        'This browser could not create a device key. Open this page over HTTPS, ' +
+        'allow storage for this site, or try another browser.'
+      );
+      return null;
     }
 
     try {
@@ -84,13 +96,10 @@ export default function LoginPage({
         navigate('/', { replace: true });
       }
     } catch (err) {
-      // Every credential failure is deliberately identical server-side, so
-      // there is nothing more specific to say than the status allows.
-      setErrorMsg(
-        err instanceof ApiError && err.status === 429
-          ? 'Too many attempts. Wait a few minutes and try again.'
-          : 'Sign in failed. Check your username and password.'
-      );
+      // Device and pairing failures are handled by completeRegistration; here,
+      // preserve safe server errors so transport/configuration failures are not
+      // misreported as bad credentials.
+      setErrorMsg(loginErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -121,9 +130,7 @@ export default function LoginPage({
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-          <div className="flex justify-center mb-6 text-amber-700">
-            <ShieldAlert size={48} aria-hidden="true" />
-          </div>
+          <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Pair this device</h1>
           <p className="text-sm text-gray-700 text-center mb-6">
             Signed in as <span className="font-medium">{username}</span>.
@@ -172,10 +179,9 @@ export default function LoginPage({
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
-        <div className="flex justify-center mb-6 text-blue-700">
-          <KeyRound size={48} aria-hidden="true" />
-        </div>
-        <h1 className="text-2xl font-bold text-center text-gray-900 mb-6">FieldPulse sign in</h1>
+        <BrandHeader className="mb-4 flex justify-center" />
+        <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Admin sign in</h1>
+        <p className="text-sm text-gray-600 text-center mb-6">For administrators and record reviewers.</p>
 
         {errorMsg && (
           <div role="alert" className="bg-red-100 text-red-800 p-3 rounded mb-4 text-sm">
@@ -186,7 +192,7 @@ export default function LoginPage({
         <form onSubmit={handleCredentials} className="space-y-4">
           <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-800">
-              Agent username
+              Username
             </label>
             <input
               id="username"
@@ -221,8 +227,15 @@ export default function LoginPage({
           </button>
         </form>
         <p className="mt-4 text-xs text-gray-700 text-center">
-          This device gets its own cryptographic key on first sign-in. The key never leaves it,
-          and it is not sent to the server in any form.
+          This browser gets a cryptographic device key after sign-in. The private key stays on
+          this device.
+        </p>
+
+        <p className="mt-4 text-sm text-gray-700 text-center">
+          Are you an agent?{' '}
+          <Link to="/login" className="text-blue-700 font-medium hover:underline">
+            Sign in with IMEI
+          </Link>
         </p>
       </div>
     </div>

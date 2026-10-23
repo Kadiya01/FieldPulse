@@ -685,6 +685,16 @@ $t->test('IMEI length and Luhn are enforced', function (TestRunner $t): void {
     $t->assertSame('490154203237518', \FieldPulse\Domain\Validator::imei('490-154-203237518'));
 });
 
+$t->test('Nigerian mobile numbers normalize to E.164', function (TestRunner $t): void {
+    $t->assertSame('+2348012345678', \FieldPulse\Domain\Validator::nigerianPhone('08012345678'));
+    $t->assertSame('+2348012345678', \FieldPulse\Domain\Validator::nigerianPhone('+234 801 234 5678'));
+    $t->assertSame('+2348012345678', \FieldPulse\Domain\Validator::nigerianPhone('234-801-234-5678'));
+    $t->assertThrows(
+        static fn () => \FieldPulse\Domain\Validator::nigerianPhone('12345678901'),
+        'valid Nigerian mobile number'
+    );
+});
+
 $t->test('count_claimed range is enforced at the boundary', function (TestRunner $t): void {
     $t->assertSame(1, \FieldPulse\Domain\Validator::intRange(1, 1, 500, 'count_claimed'));
     $t->assertSame(500, \FieldPulse\Domain\Validator::intRange(500, 1, 500, 'count_claimed'));
@@ -934,6 +944,43 @@ $t->test('a malformed JWK is refused', function (TestRunner $t): void {
     $t->assertThrows(static fn () => \FieldPulse\Security\Jwk::validatePublicJwk([
         'kty' => 'EC', 'crv' => 'P-256', 'x' => 'not base64url!!', 'y' => 'zz',
     ]), null, 'coordinates must be base64url');
+});
+
+$t->test('a JWK as WebCrypto exports it is accepted', function (TestRunner $t) use ($makeKey): void {
+    /*
+     * The shape a browser actually sends.
+     *
+     * This test exists because of a defect it would have caught: the allowlist
+     * omitted the optional RFC 7517 members `ext` and `key_ops`, which
+     * `crypto.subtle.exportKey('jwk', publicKey)` includes on every engine, so
+     * device registration failed in a real browser while every suite passed —
+     * they all built their JWKs by hand and left those two members out.
+     *
+     * The regression is in both directions: the browser's shape must be accepted,
+     * and `d` must still be refused, since allowing the harmless members is only
+     * safe while the dangerous one keeps its hard rejection.
+     */
+    [, $exported] = $makeKey();
+
+    // A real key's coordinates, carrying the two members a browser adds on export.
+    $browserJwk = $exported + ['ext' => true, 'key_ops' => ['verify']];
+
+    $normalised = \FieldPulse\Security\Jwk::validatePublicJwk($browserJwk);
+
+    $t->assertSame('EC', $normalised['kty']);
+    $t->assertSame('P-256', $normalised['crv']);
+
+    // Neither member is secret or trusted, so neither is kept.
+    $t->assertFalse(array_key_exists('ext', $normalised), 'ext must not be persisted');
+    $t->assertFalse(array_key_exists('key_ops', $normalised), 'key_ops must not be persisted');
+
+    $t->assertThrows(static fn () => \FieldPulse\Security\Jwk::validatePublicJwk(
+        $browserJwk + ['d' => \FieldPulse\Support\Str::base64UrlEncode(str_repeat("\x33", 32))]
+    ), null, 'a private key member must still be a hard rejection');
+
+    $t->assertThrows(static fn () => \FieldPulse\Security\Jwk::validatePublicJwk(
+        $browserJwk + ['something_else' => 'x']
+    ), null, 'an unknown member must still be rejected');
 });
 
 $t->test('a signature from the matching key verifies', function (TestRunner $t) use ($makeKey): void {

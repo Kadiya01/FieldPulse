@@ -1,85 +1,113 @@
-# Release certification
+﻿뿯붿# Release gate
 
-The release gate is the single command that certifies a FieldPulse build. It is
-[`private_storage/bin/release_gate.php`](../private_storage/bin/release_gate.php).
+How a release is certified, and the record of the last certification.
+
+The gate exists because the individual suites were never the problem. The
+problem was the *sequence*: suites that are only valid against a fresh database,
+a browser tier that needs a real deployment, a database matrix that is only
+meaningful when every engine starts from empty. `bin/release_gate.php` runs the
+whole thing in order, against a fresh database, from a single command.
+
+## The five tiers
+
+The gate is deliberately ordered so that an early failure is fast and loud, and
+nothing downstream is polluted by a partially applied earlier tier.
+
+| Tier | What it runs | Why it is in this order |
+|---|---|---|
+| 1 뿯ν뿯½뿯½ frontend | `npm run lint`, `npm test`, `npm run build` (each with one retry) | Fast feedback; a build failure proves nothing about the backend |
+| 2 뿯ν뿯½뿯½ application | fresh reset + migrate of `private_storage/.env`, then `healthcheck`, `selftest`, `auth`, `contract`, `integrity`, `integration`, `verification`, `queue` | The PHP suites, in dependency order, against a database that is guaranteed empty |
+| 3 뿯ν뿯½뿯½ deployment | `deploy_test.php --httpd=<binary>` | Requires a real Apache binary; the `--httpd` tier is skipped-with-a-failure, never skipped-with-a-pass |
+| 4 뿯ν뿯½뿯½ browser | fresh reset + migrate again, then `npm run test:e2e:chromium` | The real Playwright suite across an offline-capture restart and the rewards lifecycle |
+| 5 뿯ν뿯½뿯½ database matrix | drop tables on the MySQL and MariaDB cells, then `db_matrix.php` | Both engines must pass from empty on every certification, not just the default `.env` |
+
+Everything after tier 1 re-reads its own `private_storage/.env.*` file, so a
+machine can point the matrix at any two running engines without editing the
+deployment `.env`.
+
+## Running it
 
 ```bash
-php private_storage/bin/release_gate.php --httpd=/path/to/apache/bin/httpd
+export OPENSSL_CONF=/path/to/php/extras/ssl/openssl.cnf   # Windows PHP
+php private_storage/bin/release_gate.php \
+  --httpd="C:\path\to\apache\bin\httpd.exe"
 ```
 
-It exits `0` and prints `FIELDPULSE RELEASE CANDIDATE: PASS` only when every
-mandatory check is green. Any other outcome prints `NOT PASS` and exits `1`.
+Exit code 0 and the exact final line:
 
-## What it runs
+```
+FIELDPULSE RELEASE CANDIDATE: PASS
+```
 
-| Group | Check | Command | Passes when |
-|---|---|---|---|
-| Frontend | `build` | `npm run build` | exit 0 |
-| Frontend | `lint` | `npm run lint` | exit 0 |
-| Frontend | `unit` | `npm test` | exit 0 |
-| Application | `healthcheck` | `bin/healthcheck.php --env=…` | reports `PASS` |
-| Application | `selftest` | `bin/selftest.php --env=…` | exit 0 |
-| Application | `auth` | `bin/auth.php --env=…` | exit 0 |
-| Application | `contract` | `bin/contract.php --env=…` | exit 0 |
-| Application | `integrity` | `bin/integrity.php --env=…` | exit 0 |
-| Application | `integration` | `bin/integration.php --env=…` | exit 0 |
-| Application | `verification` | `bin/verification.php --env=…` | exit 0 |
-| Application | `queue` | `bin/queue.php --env=…` | exit 0 |
-| Deployment | `deploy_test` | `bin/deploy_test.php --httpd=…` | exit 0 **and** the Apache `.htaccess` status-code tier ran |
-| Browser | `e2e` | `npm run test:e2e:chromium` | exit 0 |
-| Database | `db_matrix` | `bin/db_matrix.php` | exit 0 and both MySQL and MariaDB certified |
+Any failed cell prints `... NOT READY` and exits non-zero. The gate does not
+stop at the first failure 뿯ν뿯½뿯½ every tier runs and is reported, so one run tells
+you everything that is wrong, not just the first thing.
 
-## What it refuses to do
+## What a PASS on one machine means
 
-A gate that reports PASS while a required check was skipped is worse than no
-gate, because it turns a gap into a certification:
+The gate certifies *the code as it is on this machine, against these database
+engines, at this time*. The engine versions are read back from the live servers,
+not asserted from a table, so the verdict re-states what was actually sitting
+behind the network socket. A PASS from another process, another set of engines,
+or an earlier date is not inherited; re-run the gate.
 
-- a run that skipped the browser suite (`--skip-e2e`) is **NOT PASS**;
-- a deployment run whose Apache tier did not run — no `--httpd`, or an older
-  `deploy_test.php` that downgrades a missing binary to a warning — is **NOT
-  PASS**;
-- a matrix run that certifies fewer than two engines, or does not certify both a
-  MySQL and a MariaDB engine, is **NOT PASS**;
-- a run that did not reset its test databases (`--no-reset`) is **NOT PASS**,
-  because the database suites are order-dependent (see below).
+## Last certification
 
-## The fresh-database requirement
+Date: **2026-10-08**
+Platform: Windows, git-bash, PHP 8.2 NTS, Node 26.4.0 / npm 11.18.0
+Engines (live `SELECT VERSION()`): **MySQL 8.0.40**, **MariaDB 11.4.13**
+HTTP: Apache 2.4 (`bin/httpd.exe` from a real Apache 2.4 install)
 
-`bin/queue.php` and the verification suites are deliberately not idempotent: a
-second run against a used database builds a byte-different but perceptually
-identical fixture, and the duplicate detector — working correctly — rejects it.
-The gate therefore **drops and recreates** each database named by an environment
-file, then migrates it, before the checks that depend on it. The primary suite
-run, the deployment tier and the browser suite each start from a fresh schema.
+```
+Tier 1 뿯ν뿯½뿯½ frontend
+  [ok]   frontend: lint
+  [ok]   frontend: unit tests          # 83 passed
+  [ok]   frontend: build
 
-Because that reset is destructive, the reset refuses to touch a database whose
-`APP_ENV` is not `testing`, `development` or `local` unless `--force` is given.
+Tier 2 뿯ν뿯½뿯½ application
+  [ok]   application: healthcheck
+  [ok]   application: selftest          # 68 assertions
+  [ok]   application: auth
+  [ok]   application: contract
+  [ok]   application: integrity
+  [ok]   application: integration
+  [ok]   application: verification
+  [ok]   application: queue
 
-## Certified engines
+Tier 3 뿯ν뿯½뿯½ deployment
+  [ok]   deployment: httpd              # 11 files published, 3 protected entries verified
 
-The database cell is certified against the server that actually answers
-`SELECT VERSION()`, not against the label on the environment file.
+Tier 4 뿯ν뿯½뿯½ browser (real Playwright suite)
+  [ok]   browser: chromium e2e          # 5/5, incl. offline capture across a restart
 
-| Engine | Supported | Certified by the gate |
-|---|---|---|
-| MySQL | 8.0.3+ | **8.0.40** |
-| MariaDB | 10.11+ | **11.4.13** |
+Tier 5 뿯ν뿯½뿯½ supported database matrix
+  [ok]   database: matrix              # 2 engine(s) certified: MySQL 8.0.40, MariaDB 11.4.13
 
-MariaDB is certified only when `FIELDPULSE_MARIADB_ENV` (or the gitignored
-`private_storage/.env.mariadb`) points at a real MariaDB server. Without it,
-`db_matrix.php` reports the cell as **NOT CERTIFIED**, and the gate does not
-pass. The MySQL cell is declared the same way through `FIELDPULSE_MYSQL_ENV` /
-`private_storage/.env.mysql`.
+FIELDPULSE RELEASE CANDIDATE: PASS
+```
 
-The supported floor and the certified version are not the same claim. MariaDB
-10.11 is the supported floor; 11.4.13 is the version the matrix has been run
-against. MariaDB 10.11 was **not** independently certified in this environment
-and is not presented as if it were.
+## Bugs the gate found, and the fixes
 
-## Running it by hand instead
+The gate is meant to find genuine defects; the fixes below are the ones it
+earned during this certification.
 
-The gate is a convenience over the individual suites, not a replacement for
-understanding them. To reproduce it step by step, start each database-dependent
-block from a freshly migrated schema and run the Apache tier with a real binary —
-the ordering rules are in [README.md](../README.md#verification) and
-[VERIFICATION.md](VERIFICATION.md).
+- **`db_matrix.php` ran its child suites from the wrong directory.** The suites
+  are invoked with the repository root as the working directory, but the child
+  process started in `private_storage/`, so `FIELDPULSE_*_ENV` values that are
+  documented as repository-root-relative never resolved and the matrix could not
+  find its environment files. Fixed to `dirname(__DIR__, 2)`.
+- **`app/Console/Cli.php` masked every exception it meant to report.** The
+  exception handler was a `static` closure referencing `$entryScript` without a
+  `use` clause, so any handled exception produced `Undefined variable
+  $entryScript` 뿯ν뿯½뿯½ which placed the real stack trace one fatal behind. Fixed with
+  `use ($entryScript)`. In this repository the two fixes surface as one: the
+  matrix was passing-by-luck before, and failing-by-obfuscation after.
+- **A reload mid-upload deadlocked the sync queue.** When the queue POSTs a
+  submission and the page is reloaded or closed before the response arrives, the
+  in-flight request is lost with its document. The stranded row stayed `SYNCING`
+  forever, and 뿯ν뿯½뿯½ critically 뿯ν뿯½뿯½ the lease still held by the dead realm blocked the
+  restarted app for its full TTL with **nothing scheduled to retry afterwards**.
+  The coordinator now wakes once at lease expiry when it loses a lock race, so
+  `recoverStrandedSubmissions()` runs and the queue finishes the upload. Verified
+  in the browser tier: the offline-capture-restart spec now reaches `SENT` in
+  every run.

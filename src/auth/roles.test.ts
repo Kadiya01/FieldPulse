@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isOperatorRole, OPERATOR_ROLES } from './roles';
+import { isOperatorRole, OPERATOR_ROLES, isAdminRole, ADMIN_ROLES } from './roles';
 import type { SessionAgent } from '../api/client';
 
 /**
@@ -24,7 +24,7 @@ const AGENT: SessionAgent = {
 };
 
 /** Every destination the app routes to, as the nav should list them. */
-const ALL_ROUTES = ['/', '/queue', '/leaderboard', '/rewards', '/reviews'] as const;
+const ALL_ROUTES = ['/', '/queue', '/leaderboard', '/rewards', '/reviews', '/admin'] as const;
 
 describe('operator roles', () => {
   it.each(OPERATOR_ROLES)('treats %s as an operator', (role) => {
@@ -49,6 +49,27 @@ describe('operator roles', () => {
   });
 });
 
+describe('admin roles', () => {
+  it.each(ADMIN_ROLES)('treats %s as an administrator', (role) => {
+    expect(isAdminRole(role)).toBe(true);
+  });
+
+  it.each(['AGENT', 'SUPERVISOR'] as const)('does not treat %s as an administrator', (role) => {
+    expect(isAdminRole(role)).toBe(false);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['unknown', 'OWNER'],
+    ['lowercase', 'admin'],
+    ['padded', ' ADMIN ']
+  ])('does not treat a %s role as an administrator', (_case, role) => {
+    expect(isAdminRole(role as string | null | undefined)).toBe(false);
+  });
+});
+
 describe('session-derived navigation', () => {
   /**
    * Mirrors the shape of `SiteNav`'s item list, so a route added in one place
@@ -62,9 +83,15 @@ describe('session-derived navigation', () => {
    */
   const routesFor = (agent: SessionAgent | null): string[] => {
     // Rewards is public because every agent has a standing; only the operator
-    // controls inside the page are role-gated.
-    const base = ['/', '/queue', '/leaderboard', '/rewards'];
-    return isOperatorRole(agent?.role) ? [...base, '/reviews'] : base;
+    // and admin controls inside the page are role-gated.
+    const routes = ['/', '/queue', '/leaderboard', '/rewards'];
+    if (isOperatorRole(agent?.role)) {
+      routes.push('/reviews');
+    }
+    if (isAdminRole(agent?.role)) {
+      routes.push('/admin');
+    }
+    return routes;
   };
 
   it('offers every public destination to an agent', () => {
@@ -72,7 +99,13 @@ describe('session-derived navigation', () => {
   });
 
   it('adds reviews for an operator', () => {
-    expect(routesFor({ ...AGENT, role: 'SUPERVISOR' })).toEqual([...ALL_ROUTES]);
+    expect(routesFor({ ...AGENT, role: 'SUPERVISOR' })).toEqual([
+      '/', '/queue', '/leaderboard', '/rewards', '/reviews'
+    ]);
+  });
+
+  it('adds reviews and the directory for an administrator', () => {
+    expect(routesFor({ ...AGENT, role: 'ADMIN' })).toEqual([...ALL_ROUTES]);
   });
 
   it('leaves an unidentified session with the narrow set', () => {

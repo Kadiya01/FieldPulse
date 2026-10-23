@@ -591,6 +591,118 @@ $t->test('login never accepts an IMEI where a username belongs', function (TestR
     $t->assertSame(422, $r['status'], 'an IMEI is not a valid username, so it is refused as malformed, got ' . $r['raw']);
 });
 
+/* -- Public agent registration ------------------------------------------ */
+
+$t->group('public agent registration');
+
+$t->test('self-registration awaits admin approval before IMEI login and device binding', function (TestRunner $t) use ($baseUrl, $appUrl, $runTag, $agents, $makeKeyPair, &$createdAgentIds, &$createdDeviceIds) {
+    $imeiBase = '35' . substr(str_pad((string) hexdec(substr($runTag, 2)), 12, '0', STR_PAD_LEFT), -12);
+    $imei = null;
+    for ($check = 0; $check <= 9; $check++) {
+        $candidate = $imeiBase . $check;
+        if (\FieldPulse\Domain\Validator::luhn($candidate)) {
+            $imei = $candidate;
+            break;
+        }
+    }
+
+    if ($imei === null) {
+        throw new RuntimeException('Could not create a valid test IMEI.');
+    }
+
+    $nin = str_pad((string) random_int(0, 99999999999), 11, '0', STR_PAD_LEFT);
+    $registration = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/agents/register.php',
+        [
+            'full_name' => 'Self Registered Agent',
+            'nin' => $nin,
+            'phone' => '08012345678',
+            'imei' => $imei,
+            'device_type' => 'SAMSUNG',
+        ]
+    );
+
+    $t->assertSame(201, $registration['status'], 'registration succeeds immediately');
+    $t->assertSame('PENDING', $registration['body']['status'] ?? null, 'the account awaits administrator approval');
+    $t->assertSame('AGENT', $registration['body']['agent']['role'] ?? null, 'self-registration creates an agent role');
+    $t->assertTrue(
+        !array_key_exists('nin', $registration['body']['agent'] ?? [])
+            && !array_key_exists('imei', $registration['body']['agent'] ?? []),
+        'the public response never includes NIN or IMEI'
+    );
+
+    $agentCode = (string) ($registration['body']['agent']['agent_code'] ?? '');
+    $agentId = (int) Connection::fetchValue(
+        'SELECT id FROM agents WHERE agent_code = :code',
+        ['code' => $agentCode]
+    );
+    if ($agentId < 1) {
+        throw new RuntimeException('Self-registered fixture row was not created.');
+    }
+    $createdAgentIds[] = $agentId;
+
+    $pendingLogin = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/auth/agent-login.php',
+        ['imei' => $imei]
+    );
+    $t->assertSame(401, $pendingLogin['status'], 'pending agents cannot sign in before approval');
+
+    $agents->setStatus($agentId, AgentRepository::ACTIVE);
+    $login = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/auth/agent-login.php',
+        ['imei' => $imei]
+    );
+    $t->assertSame(200, $login['status'], 'the new agent can sign in immediately with the registered IMEI');
+    $t->assertSame('AGENT', $login['body']['agent']['role'] ?? null, 'IMEI login returns an agent session');
+
+    $keys = $makeKeyPair();
+    $deviceUuid = Uuid::v4();
+    $device = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/device/register.php',
+        [
+            'device_uuid' => $deviceUuid,
+            'public_key_jwk' => $keys['public'],
+        ],
+        (string) ($login['body']['access_token'] ?? '')
+    );
+    $t->assertSame(200, $device['status'], 'self-registered agents can bind their first device without a pairing code');
+
+    $deviceId = (int) Connection::fetchValue(
+        'SELECT id FROM devices WHERE device_uuid = :uuid',
+        ['uuid' => $deviceUuid]
+    );
+    if ($deviceId > 0) {
+        $createdDeviceIds[] = $deviceId;
+    }
+
+    $duplicate = HttpServer::sendJson(
+        $baseUrl,
+        $appUrl,
+        'POST',
+        '/api/v1/agents/register.php',
+        [
+            'full_name' => 'Another Agent',
+            'nin' => $nin,
+            'phone' => '08012345678',
+            'imei' => $imei,
+            'device_type' => 'SAMSUNG',
+        ]
+    );
+    $t->assertSame(409, $duplicate['status'], 'a duplicate registration does not create a second account');
+});
+
 /* -- Device registration -------------------------------------------------- */
 
 $t->group('device registration');
@@ -1109,6 +1221,52 @@ $t->test('re-registering the same device and key is idempotent', function (TestR
         'with a device-bound token');
 });
 
+$t->test('logging in reactivates the same previously paired device without a new code', function (TestRunner $t) use ($baseUrl, $appUrl, $cookieName, $login, $makeKeyPair, $issueCode, $freshAgent, $registerDevice, $devices, &$createdDeviceIds) {
+    $agent = $freshAgent('reactivate');
+    $keys  = $makeKeyPair();
+    $uuid  = Uuid::v4();
+
+    $first = $registerDevice($login($agent), [
+        'device_uuid'    => $uuid,
+        'public_key_jwk' => $keys['public'],
+        'pairing_code'   => $issueCode((int) $agent['id']),
+    ], $createdDeviceIds);
+
+    $t->assertSame(200, $first['result']['status'],
+        'the initial pairing succeeds, got ' . $first['result']['raw']);
+
+    $devices->setStatus($first['deviceId'], DeviceStatus::REVOKED);
+
+    $again = $registerDevice($login($agent), [
+        'device_uuid'    => $uuid,
+        'public_key_jwk' => $keys['public'],
+    ], $createdDeviceIds);
+
+    $t->assertSame(200, $again['result']['status'],
+        'the known device is restored without a pairing code, got ' . $again['result']['raw']);
+    $t->assertSame($first['deviceId'], $again['deviceId'],
+        'the existing device row is reused');
+
+    $restored = $devices->findById($first['deviceId']);
+    $t->assertSame(DeviceStatus::ACTIVE, $restored['status'] ?? null,
+        'the existing device is active again');
+    $t->assertNull($restored['revoked_at'] ?? null,
+        'the old revocation timestamp is cleared');
+
+    $oldCookie = HttpServer::cookieValue($first['result'], $cookieName);
+    $t->assertNotNull($oldCookie, 'the original pairing issued a refresh cookie');
+
+    $staleRefresh = HttpServer::sendJson(
+        $baseUrl, $appUrl, 'POST', '/api/v1/auth/refresh.php',
+        [], null, HttpServer::cookieHeader([$cookieName => (string) $oldCookie])
+    );
+
+    $t->assertSame(401, $staleRefresh['status'],
+        'the old refresh cookie remains invalid after reactivation');
+    $t->assertSame(DeviceStatus::ACTIVE, $devices->findById($first['deviceId'])['status'] ?? null,
+        'using the invalidated cookie does not revoke the restored device again');
+});
+
 $t->test('re-registering a device_uuid with a different key is refused', function (TestRunner $t) use ($login, $makeKeyPair, $issueCode, $freshAgent, $registerDevice, &$createdDeviceIds) {
     $agent = $freshAgent('rebind');
     $uuid  = Uuid::v4();
@@ -1333,7 +1491,6 @@ $makeImage = static function (int $seed = 1): array {
     ob_start();
     imagejpeg($image, null, 90);
     $bytes = (string) ob_get_clean();
-    imagedestroy($image);
 
     if ($bytes === '') {
         throw new RuntimeException('Could not encode the fixture image.');
@@ -1675,7 +1832,7 @@ $t->test('the retired IMEI challenge route no longer exists', function (TestRunn
     $t->assertSame(404, $r['status'], 'the challenge endpoint is gone, got ' . $r['status']);
 });
 
-$t->test('no executable code treats an IMEI as a credential', function (TestRunner $t) {
+$t->test('IMEI access is limited to approved credential and admin code', function (TestRunner $t) {
     /*
      * A structural check, because the behavioural version is what the tests
      * above already are.
@@ -1688,16 +1845,22 @@ $t->test('no executable code treats an IMEI as a credential', function (TestRunn
      * test could only ever pass while the explanation was deleted.
      *
      * What is left is executable code. Each entry in $allow is a place the
-     * column is legitimately touched, and none of them is an authentication
-     * decision — the new list below is a second IMEI test to add to if a real
-     * need appears, which is the point of naming them.
+     * column is legitimately touched, including the self-registration and
+     * IMEI-login endpoints. Keep this list explicit so IMEI use does not spread
+     * into unrelated authentication or authorization paths.
      */
     $allow = [
+        // Public self-registration stores the IMEI and the public agent-login
+        // endpoint uses it to issue the deliberately weak bootstrap session.
+        'Domain/AgentRegistrationController.php' => 'credential',
+        'Domain/AgentLoginController.php' => 'credential',
         // The administrative lookup and the enrolment writes, for the
         // provision_agent.php and pair_device.php CLIs.
         'Database/AgentRepository.php' => 'administrative',
         // The column, when writing or reading a device row.
         'Database/DeviceRepository.php' => 'administrative',
+        // The administrative enrolment write from the account-management UI.
+        'Domain/AdminAgentController.php' => 'administrative',
         // Shown to a reviewer so a disputed device can be identified. Operator
         // only, and a display concern rather than an identity decision.
         'Database/ReviewRepository.php' => 'display',
@@ -1754,7 +1917,7 @@ $t->test('no executable code treats an IMEI as a credential', function (TestRunn
         $found[] = $relative;
     }
 
-    $t->assertSame([], $found, 'IMEI appears in executable code only in the administrative files listed');
+    $t->assertSame([], $found, 'IMEI appears only in the explicitly approved credential and administrative files');
 });
 
 /* ---------------------------------------------------------------------------

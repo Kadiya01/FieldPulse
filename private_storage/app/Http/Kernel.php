@@ -27,6 +27,8 @@ final class Kernel
     /** @var array<string,class-string> */
     private const ROUTES = [
         'auth.login'       => \FieldPulse\Domain\LoginController::class,
+        'auth.agent_login' => \FieldPulse\Domain\AgentLoginController::class,
+        'agent.register'   => \FieldPulse\Domain\AgentRegistrationController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
@@ -38,6 +40,8 @@ final class Kernel
         'rewards.self'     => \FieldPulse\Domain\RewardController::class,
         'rewards.index'    => \FieldPulse\Domain\RewardController::class,
         'rewards.decide'   => \FieldPulse\Domain\RewardController::class,
+        'admin.agents'     => \FieldPulse\Domain\AdminAgentController::class,
+        'admin.agent'      => \FieldPulse\Domain\AdminAgentController::class,
     ];
 
     /**
@@ -59,17 +63,22 @@ final class Kernel
      *   bearer     access JWT, plus a live agent and ACTIVE device
      *   signed     bearer, plus a valid device signature over this request
      *   operator   bearer, plus SUPERVISOR or ADMIN role
+     *   admin      bearer, plus the ADMIN role only. User administration is a
+     *              single-role privilege: the access it grants (suspend, retire,
+     *              re-role) can lock other people out, so allowing every
+     *              SUPERVISOR to hold it would be one misassigned role away
+     *              from a hostile supervisor.
      *
-     * device.register is `bootstrap`, not `public`. It was public while login
-     * was IMEI-based, because a first-time pairing had to happen before the
-     * agent had any credential. That is no longer true: login is username and
-     * password, so by the time a device is registered the agent is
-     * authenticated, and the route is gated on that bootstrap token plus the
-     * configured pairing policy. Making it public would let anyone with a
-     * stolen password bind their own key to the account.
+     * device.register is `bootstrap`, not `public`. Both login routes issue a
+     * bootstrap token and the route upgrades it to a device-bound session.
+     * Existing accounts still follow the configured pairing policy; public
+     * self-registered agents can bind their first browser without an operator
+     * code because registration is immediately active.
      */
     private const AUTH = [
         'auth.login'       => 'public',
+        'auth.agent_login' => 'public',
+        'agent.register'   => 'public',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
         'device.register'  => 'bootstrap',
@@ -85,6 +94,8 @@ final class Kernel
         'rewards.self'     => 'bearer',
         'rewards.index'    => 'operator',
         'rewards.decide'   => 'operator',
+        'admin.agents'     => 'admin',
+        'admin.agent'      => 'admin',
     ];
 
     private static bool $booted = false;
@@ -345,6 +356,10 @@ final class Kernel
         if ($requirement === 'operator') {
             self::assertOperator($context, $route);
         }
+
+        if ($requirement === 'admin') {
+            self::assertAdmin($context, $route);
+        }
     }
 
     /**
@@ -367,6 +382,29 @@ final class Kernel
             ]);
 
             throw new ApiException(403, ErrorCode::FORBIDDEN, 'Supervisor access is required.');
+        }
+    }
+
+    /**
+     * ADMIN-only endpoints.
+     *
+     * The check mirrors assertOperator() but with a single role. The agent row
+     * is re-read from the database on every request (see Authenticator), so a
+     * role change takes effect immediately and cannot be papered over by a
+     * token issued before the demotion.
+     */
+    private static function assertAdmin(\FieldPulse\Security\AuthContext $context, string $route): void
+    {
+        $role = (string) ($context->agent()['role'] ?? 'AGENT');
+
+        if ($role !== 'ADMIN') {
+            Logger::channel('app')->warning('request.rejected_non_admin', [
+                'route' => $route,
+                'agent' => $context->agentCode(),
+                'role'  => $role,
+            ]);
+
+            throw new ApiException(403, ErrorCode::FORBIDDEN, 'Administrator access is required.');
         }
     }
 

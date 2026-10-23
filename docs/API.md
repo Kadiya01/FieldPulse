@@ -47,6 +47,8 @@ leaves an agent staring at a form that refuses to say which box is wrong.
 | `FORBIDDEN` | 403 | Authenticated, but not permitted |
 | `RATE_LIMITED` | 429 | Too many attempts; see `Retry-After` |
 | `IDEMPOTENCY_CONFLICT` | 409 | `submission_uuid` belongs to another agent |
+| `STATE_CONFLICT` | 409 | The row is in a state that forbids the change |
+| `UNKNOWN_AGENT` | 404 | No such agent row |
 | `FILE_HASH_MISMATCH` | 422 | Uploaded bytes ≠ signed `file_sha256` |
 | `FILE_TOO_LARGE` | 413 | Over `MAX_UPLOAD_BYTES` |
 | `UNSUPPORTED_MEDIA` | 415 | Not `multipart/form-data` |
@@ -110,10 +112,12 @@ uses a bearer header, which a browser will not attach cross-origin.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/api/v1/auth/login.php` | public, username + password |
+| POST | `/api/v1/agents/register.php` | public, self-registration |
+| POST | `/api/v1/auth/agent-login.php` | public, IMEI |
+| POST | `/api/v1/auth/login.php` | public, username + password for administrators/reviewers |
 | POST | `/api/v1/auth/refresh.php` | refresh cookie + Origin |
 | POST | `/api/v1/auth/logout.php` | refresh cookie + Origin |
-| POST | `/api/v1/device/register.php` | bootstrap token + pairing code |
+| POST | `/api/v1/device/register.php` | bootstrap token; new self-registered agents do not need a pairing code |
 | POST | `/api/v1/submit.php` | **signed** |
 | GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
 | GET | `/api/v1/leaderboard.php` | bearer |
@@ -122,6 +126,9 @@ uses a bearer header, which a browser will not attach cross-origin.
 | GET | `/api/v1/rewards/self.php` | bearer, own entitlements only |
 | GET | `/api/v1/rewards/index.php` | operator |
 | POST | `/api/v1/rewards/decide.php` | operator |
+| GET | `/api/v1/admin/agents.php` | admin |
+| POST | `/api/v1/admin/agents.php` | admin, disabled; agents self-register |
+| POST | `/api/v1/admin/agent.php` | admin |
 
 Every path is the literal file on disk, `.php` suffix included. There is no
 extensionless rewrite in `.htaccess`, so `/api/v1/auth/login` is a 404 and not a
@@ -133,7 +140,8 @@ the first cPanel request.
 
 ### POST /api/v1/auth/login.php
 
-Exchanges a username and password for a **bootstrap** session.
+Exchanges an administrator/reviewer username and password for a **bootstrap**
+session. Agent accounts use `/api/v1/auth/agent-login.php`.
 
 ```json
 { "username": "ada", "password": "…" }
@@ -173,8 +181,47 @@ them being distinguishable is a way to learn things about the account.
 limit is keyed on the username **and** the source IP; per-IP is what stops a
 single host walking the whole user table.
 
-IMEI is not accepted, read, or required anywhere in this flow. It is not an
-authentication factor and is not used as one.
+This route does not authenticate AGENT-role accounts created through public
+self-registration. Pre-existing agent accounts retain their current login
+credentials for compatibility; new agents use IMEI login.
+
+---
+
+### POST /api/v1/agents/register.php
+
+Creates a `PENDING` AGENT registration. The applicant cannot sign in until an
+administrator approves it in the account directory.
+
+```json
+{
+  "full_name": "Ada Lovelace",
+  "nin": "12345678901",
+  "phone": "08012345678",
+  "imei": "490154203237518",
+  "device_type": "SAMSUNG"
+}
+```
+
+`phone` accepts a Nigerian mobile number as `08012345678`, `+2348012345678`
+or `2348012345678`; the server stores it in E.164 form. The NIN and phone are
+stored and exposed only through the ADMIN-only account directory.
+`device_type` must be one of `EACRUGGED`, `EASTAEON`, `HENA`, `MANTRA`,
+`OUKITEL`, `SAMSUNG` or `WHEATEK`. Duplicate NIN or IMEI values receive a
+generic `409 STATE_CONFLICT` response. Registration attempts are rate-limited
+by NIN and source IP.
+
+The successful response includes the registration status and an agent summary,
+but never returns the NIN, phone or IMEI. A pending registration cannot use
+`/api/v1/auth/agent-login.php`; after approval the agent can sign in with the
+registered IMEI and bind the browser's device key.
+
+### POST /api/v1/auth/agent-login.php
+
+Exchanges an active agent's IMEI for a **bootstrap** session. The IMEI is an
+identifier, not a secret; anyone who knows or copies it may impersonate that
+agent. Requests are rate-limited by IMEI and source IP. The client must bind
+the browser's device key at `/api/v1/device/register.php` before making signed
+requests.
 
 ---
 
@@ -218,6 +265,13 @@ A `device_uuid` that already exists and belongs to **this** agent re-binds
 idempotently; the same key must be presented, or it is refused. One belonging to
 another agent returns the same generic `401` as every other failure, so this
 route is not a device-enumeration oracle.
+
+If that same device was previously marked `REVOKED`, a successful login and
+presentation of its original key reactivate it without another pairing code.
+The device's previous refresh tokens are revoked during reactivation; the
+browser receives a fresh device-bound session. A different key or a device
+belonging to another agent is not reactivated. `DISABLED` devices still require
+an administrator to restore access.
 
 On success the bootstrap refresh family is **revoked** (`BOOTSTRAP_CONSUMED`)
 and a device-bound token and cookie are returned:
@@ -529,7 +583,134 @@ would read as though the payee had approved their own payment.
 
 ---
 
+### GET /api/v1/admin/agents.php  ·  POST /api/v1/admin/agents.php
+### POST /api/v1/admin/agent.php
+
+Administrator-only (`ADMIN`). A `SUPERVISOR` or `AGENT` receives `403 FORBIDDEN`,
+and an unauthenticated caller `401 UNAUTHENTICATED`. The gate is the Kernel's
+`admin` requirement, declared in one table beside the operator one, so a
+controller mistake cannot leave the surface open.
+
+#### GET `/api/v1/admin/agents.php`
+
+The account directory. Query: `limit` (1–200, default 50), `offset` (default 0).
+
+```json
+{
+  "data": [
+    {
+      "id": 3,
+      "agent_code": "AG-001",
+      "full_name": "Ada Lovelace",
+      "nin": "12345678901",
+      "role": "ADMIN",
+      "status": "ACTIVE",
+      "username": "mpadmin",
+      "has_credential": true,
+      "active_device_count": 1,
+      "created_at": "2026-09-28 09:41:05"
+    }
+  ],
+  "meta": {
+    "pagination": { "total": 12, "limit": 50, "offset": 0 },
+    "active_admins": 2,
+    "requested_by": "AG-001"
+  }
+}
+```
+
+`nin` is the full NIN and `phone` is the normalized phone number. Both are
+included only in this ADMIN-only directory response. Do not expose or log
+these fields outside authorized administrator workflows. `self_registered`
+identifies records submitted from the public registration page.
+
+`username` is `null` and `has_credential` is `false` once a credential has been
+revoked or the account retired. `active_device_count` counts bound devices that
+are not revoked, so it is the number that matters for "can this person still get
+in". `meta.requested_by` is the caller's own `agent_code` and `meta.active_admins`
+the count the last-admin guard is applied against; a client uses both to disable
+the controls the server would refuse, rather than offering a button that 409s.
+
+#### POST `/api/v1/admin/agents.php` (disabled)
+
+Returns `405 METHOD_NOT_ALLOWED`. Agent accounts are created by the public
+self-registration endpoint; administrators do not approve or create agent
+registrations. Existing account management remains available through
+`POST /api/v1/admin/agent.php`.
+
+
+#### POST `/api/v1/admin/agent.php`
+
+Applies one state-changing action to one account. The body always carries the
+target `id` and an `action`; the rest depends on the action, and anything outside
+that action's own field list is a `422`.
+
+```json
+{ "id": 12, "action": "SET_ROLE",            "role": "SUPERVISOR" }
+{ "id": 12, "action": "SET_STATUS",          "status": "SUSPENDED" }
+{ "id": 12, "action": "SET_PASSWORD",        "password": "…" }
+{ "id": 12, "action": "REVOKE_CREDENTIAL" }
+{ "id": 12, "action": "ISSUE_PAIRING_CODE" }
+```
+
+`SET_STATUS` accepts `PENDING`, `ACTIVE`, `REJECTED`, `SUSPENDED` or `DELETED`.
+Set a self-registered `PENDING` row to `ACTIVE` to approve it, or `REJECTED` to
+reject it. Rejected registrations can be reopened to `PENDING` for reconsideration.
+`DELETED` is retirement: devices and credential are revoked, the `DELETED`
+status is terminal, and the row and its history survive for compliance. Any
+transition away from `ACTIVE` revokes the account's devices, so a token that
+outlived the account stops working on its next request.
+
+`ISSUE_PAIRING_CODE` mints the out-of-band code a managed-account device-registration flow (or the
+device-registration step of the sign-in page) consumes to bind the account's
+first device. It is valid only for an `ACTIVE` account, so a suspended or retired
+account answers `409 STATE_CONFLICT`. The plaintext code is returned exactly
+once, in the response — the server stores only its SHA-256 and records the
+issuer as `created_by` — and the response adds `pairing_code`, `expires_at`
+(ISO-8601 with offset) and `ttl_seconds` to the account row. An optional `label`
+(e.g. an agent's name) is stored with the code for an operator to recognise.
+Issuing a code is a way in for somebody, never a way out, so — like a password
+reset — it is also allowed on the caller's **own** account.
+
+Each call returns the updated account as `{ "data": <agent> }`, in the same shape
+as the directory.
+
+**Two guards, both `409 STATE_CONFLICT`.** An administrator cannot re-role,
+suspend, retire or revoke their **own** account — changing your own password, or
+issuing yourself a pairing code, is allowed, because both add a way in and cannot
+lock anything. And the last remaining active administrator cannot be demoted,
+suspended or retired. The first is what makes the second unreachable through the
+API (the actor is always an active admin, so at least one remains), but both are
+enforced against the current row on every call, so neither depends on the other
+holding.
+
+`404 UNKNOWN_AGENT` means the `id` does not exist. `409` also covers a change to a
+retired account, which is immutable. `403` means the caller is not an `ADMIN`.
+
+Every action appends an immutable audit row: `admin.agent.created`,
+`admin.agent.role_changed`, `admin.agent.suspended`, `admin.agent.reinstated`,
+`admin.agent.retired`, `admin.agent.password_reset`,
+`admin.agent.credential_revoked` or `admin.agent.pairing_code_issued`. The
+audit metadata for a pairing code records who issued it, the TTL and the expiry —
+never the code itself.
+
+**Suspension and retirement are not distinguishable at login.** Any non-`ACTIVE`
+account returns the same `401 UNAUTHENTICATED` as a wrong password, for the same
+reason every login failure is byte-identical: the response must not become an
+account-status oracle.
+
+---
+
 ## Client integration order
+
+For agents, register at `/register` with full name, NIN, IMEI and one of the
+supported device types. Registration activates the account immediately. Then
+sign in at `/login` with the registered IMEI; the agent flow binds the browser's
+device key without an administrator-issued code. An IMEI is an identifier, not
+a secret.
+
+For administrators and reviewers, sign in at `/admin/login` with username and
+password:
 
 1. `POST /api/v1/auth/login.php` with username and password. Keep the returned access token
    in memory only — never in `localStorage` or `sessionStorage` — and let the
@@ -539,8 +720,9 @@ would read as though the payee had approved their own payment.
    `CryptoKey` handle and its public JWK in IndexedDB, and never send the
    private half anywhere.
 3. `POST /api/v1/device/register.php` with the bootstrap token, `device_uuid`,
-   `public_key_jwk`, and a pairing code if the server asks for one. This returns
-   the device-bound token that replaces the bootstrap one.
+   `public_key_jwk`, and a pairing code if the server asks for one. For
+   pre-existing managed accounts, this returns the device-bound token that
+   replaces the bootstrap one.
 4. On a page load with no token in memory, call `/api/v1/auth/refresh.php` once to restore
    it. If that succeeds but IndexedDB has no private key, the state is
    `UNREGISTERED` — the cookie is fine, the browser cannot prove the device —
