@@ -46,6 +46,10 @@ final class Kernel
         'rewards.decide'   => \FieldPulse\Domain\RewardController::class,
         'admin.agents'     => \FieldPulse\Domain\AdminAgentController::class,
         'admin.agent'      => \FieldPulse\Domain\AdminAgentController::class,
+        'admin.dashboard'  => \FieldPulse\Domain\AdminDashboardController::class,
+        'admin.targets'    => \FieldPulse\Domain\AdminTargetController::class,
+        'admin.periods'    => \FieldPulse\Domain\AdminPeriodController::class,
+        'admin.audit'      => \FieldPulse\Domain\AdminAuditController::class,
     ];
 
     /**
@@ -104,6 +108,10 @@ final class Kernel
         'rewards.decide'   => 'operator',
         'admin.agents'     => 'admin',
         'admin.agent'      => 'admin',
+        'admin.dashboard'  => 'admin',
+        'admin.targets'    => 'admin',
+        'admin.periods'    => 'admin',
+        'admin.audit'      => 'admin',
     ];
 
     private static bool $booted = false;

@@ -131,6 +131,26 @@ final class PeriodResolver
     }
 
     /**
+     * The last business-calendar day of a period, inclusive.
+     *
+     * Used only for display and period labels; all window maths stays in UTC
+     * through utcRangeForPeriodType().
+     */
+    public static function periodEndDateForType(string $periodDate, string $type = self::TYPE_WEEKLY): string
+    {
+        $start = new \DateTimeImmutable(
+            $periodDate . ' 00:00:00',
+            Config::instance()->businessTimezone()
+        );
+
+        $end = $type === self::TYPE_MONTHLY
+            ? $start->modify('+1 month -1 day')
+            : $start->modify('+6 days');
+
+        return $end->format('Y-m-d');
+    }
+
+    /**
      * Enumerate monthly period dates (1st of month), newest first.
      *
      * @return list<string>

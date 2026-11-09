@@ -219,6 +219,8 @@ register_shutdown_function(static function () use (
         $delete('DELETE FROM pairing_codes WHERE agent_id = :a', ['a' => $agentId]);
         $delete('DELETE FROM agent_performance_summary WHERE agent_id = :a', ['a' => $agentId]);
         $delete('DELETE FROM agent_sites WHERE agent_id = :a', ['a' => $agentId]);
+        $delete("DELETE FROM monthly_targets WHERE scope_type = 'AGENT' AND scope_key = :k", ['k' => (string) $agentId]);
+        $delete('DELETE FROM monthly_targets WHERE created_by = :a', ['a' => $agentId]);
         $delete('DELETE FROM audit_logs WHERE actor_agent_id = :a', ['a' => $agentId]);
         $delete('DELETE FROM agents WHERE id = :a', ['a' => $agentId]);
     }
@@ -300,6 +302,14 @@ $list   = static fn (?string $token, array $overrides = []) => HttpServer::sendJ
 );
 $createRequest = static fn (string $token, array $body) => HttpServer::sendJson(
     $baseUrl, $appUrl, 'POST', '/api/v1/admin/agents.php', $body, $token
+);
+$adminGet = static fn (string $token, string $path, array $query = []) => HttpServer::sendJson(
+    $baseUrl,
+    $appUrl,
+    'GET',
+    $path . ($query === [] ? '' : '?' . http_build_query($query)),
+    [],
+    $token
 );
 $create = static function (string $token, array $body) use ($agents, &$createdAgentIds): array {
     $id = $agents->create((string) $body['agent_code'], (string) $body['full_name'], $body['imei'] ?? null);
@@ -407,21 +417,78 @@ $t->test('an ADMIN lists the account directory', function (TestRunner $t) use ($
 
 $t->group('create');
 
-$t->test('administrators cannot create agent registrations', function (TestRunner $t) use ($createRequest, $adminSession, $runTag, $errorCode) {
-    $r = $createRequest($adminSession['token'], [
-        'agent_code' => $runTag . '-created',
-        'full_name'  => 'Created Agent',
-        'username'   => $runTag . '.created',
-        'password'   => 'created-pass-4921',
-    ]);
+$t->test('administrators create an account through POST /admin/agents.php', function (TestRunner $t) use ($createRequest, $adminSession, $runTag, $errorCode, &$createdAgentIds) {
+    $body = [
+        'agent_code'     => $runTag . '-created',
+        'full_name'      => 'Created Agent',
+        'username'       => $runTag . '.created',
+        'password'       => 'created-pass-4921',
+        'email'          => strtolower($runTag) . '.created@example.test',
+        'location'       => 'Ikeja',
+        'monthly_target' => 25,
+    ];
 
-    $t->assertSame(405, $r['status'], 'the registration endpoint is disabled for administrators');
-    $t->assertSame('METHOD_NOT_ALLOWED', $errorCode($r), 'the endpoint clearly reports the disabled operation');
+    $r = $createRequest($adminSession['token'], $body);
+
+    $t->assertSame(201, $r['status'], 'the account is created, got ' . $r['status']);
+    $id = (int) ($r['body']['data']['id'] ?? 0);
+    $t->assertTrue($id > 0, 'the response carries the new account id');
+
+    if ($id > 0) {
+        $createdAgentIds[] = $id;
+    }
+
+    $t->assertSame('ACTIVE', $r['body']['data']['status'] ?? null, 'a created account is active');
+    $t->assertSame('Ikeja', $r['body']['data']['location'] ?? null, 'optional profile fields are stored');
+    $t->assertSame(25, $r['body']['data']['monthly_target'] ?? null, 'the initial target is stored');
+
+    $duplicate = $createRequest($adminSession['token'], $body);
+    $t->assertSame(409, $duplicate['status'], 'a duplicate agent code is refused');
+    $t->assertSame('IDEMPOTENCY_CONFLICT', $errorCode($duplicate), 'the duplicate is a conflict');
 });
 
-/* -- Role changes ---------------------------------------------------------- */
+/* -- Phase 4 management surfaces ------------------------------------------ */
 
-$t->group('role');
+$t->group('management');
+
+$t->test('dashboard, targets, periods and audit are real admin reads', function (TestRunner $t) use ($adminGet, $adminSession, $runTag, $errorCode, $baseUrl, $appUrl) {
+    $period = \FieldPulse\Domain\PeriodResolver::monthlyPeriodStartDate();
+
+    $dashboard = $adminGet($adminSession['token'], '/api/v1/admin/dashboard.php', ['period' => $period]);
+    $t->assertSame(200, $dashboard['status'], 'dashboard succeeds, got ' . $dashboard['status']);
+    $t->assertSame($period, $dashboard['body']['data']['period']['period_start_date'] ?? null, 'dashboard reports the requested period');
+    $t->assertTrue(is_int($dashboard['body']['data']['agents']['total'] ?? null), 'dashboard carries an agent total');
+    $t->assertTrue(array_key_exists('approved', $dashboard['body']['data']['enrollments'] ?? []), 'dashboard carries approved enrollments');
+    $t->assertTrue(is_array($dashboard['body']['data']['locations'] ?? null), 'dashboard carries the location breakdown');
+    $t->assertTrue(array_key_exists('configured', $dashboard['body']['data']['target'] ?? []), 'dashboard target says whether it is configured');
+
+    $targets = $adminGet($adminSession['token'], '/api/v1/admin/targets.php', ['period' => $period]);
+    $t->assertSame(200, $targets['status'], 'targets list succeeds, got ' . $targets['status']);
+    $t->assertSame($period, $targets['body']['meta']['period_start_date'] ?? null, 'targets list reports its period');
+
+    $set = HttpServer::sendJson($baseUrl, $appUrl, 'POST', '/api/v1/admin/targets.php', [
+        'scope_type' => 'ORGANIZATION',
+        'period'     => $period,
+        'target'     => 40,
+    ], $adminSession['token']);
+    $t->assertSame(200, $set['status'], 'organization target set succeeds, got ' . $set['status']);
+    $t->assertSame(40, $set['body']['data']['target'] ?? null, 'the organization target is stored');
+
+    $periods = $adminGet($adminSession['token'], '/api/v1/admin/periods.php', ['period_type' => 'MONTHLY', 'limit' => 3]);
+    $t->assertSame(200, $periods['status'], 'period history succeeds, got ' . $periods['status']);
+    $t->assertTrue(is_array($periods['body']['data'] ?? null), 'period history returns rows');
+    $t->assertSame(3, count($periods['body']['data'] ?? []), 'period history honours the limit');
+
+    $audit = $adminGet($adminSession['token'], '/api/v1/admin/audit.php', ['action' => 'admin.target.set', 'limit' => 5]);
+    $t->assertSame(200, $audit['status'], 'audit search succeeds, got ' . $audit['status']);
+    $t->assertTrue(($audit['body']['meta']['pagination']['total'] ?? 0) >= 1, 'the target change is audited');
+
+    $agentGet = $adminGet($adminSession['token'], '/api/v1/admin/agent.php', ['id' => $adminSession['agentId']]);
+    $t->assertSame(200, $agentGet['status'], 'agent detail succeeds, got ' . $agentGet['status']);
+    $t->assertTrue(is_array($agentGet['body']['data']['devices'] ?? null), 'agent detail carries sanitized devices');
+    $t->assertTrue(is_array($agentGet['body']['data']['recent_audit'] ?? null), 'agent detail carries recent audit');
+    $t->assertTrue(is_array($agentGet['body']['data']['targets'] ?? null), 'agent detail carries target history');
+});
 
 $t->test('the last-active-admin guard and the self-guard protect the surface', function (TestRunner $t) use ($update, $adminSession, $admin) {
     $demoteSelf = $update($adminSession['token'], [

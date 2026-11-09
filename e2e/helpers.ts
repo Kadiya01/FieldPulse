@@ -28,12 +28,14 @@ function writeFakeCameraVideo(testInfo: TestInfo, profileName: string): string {
   );
   mkdirSync(path.dirname(file), { recursive: true });
 
-  const width = 320;
-  const height = 240;
-  const blockWidth = 16;
-  const blockHeight = 16;
+  const width = 160;
+  const height = 120;
+  const blockWidth = 40;
+  const blockHeight = 30;
   const blocksX = width / blockWidth;
   const blocksY = height / blockHeight;
+  const frameCount = 300;
+  const fps = 10;
 
   let state = (Math.random() * 0xffffffff) >>> 0;
   const next = (): number => {
@@ -41,29 +43,35 @@ function writeFakeCameraVideo(testInfo: TestInfo, profileName: string): string {
     return state;
   };
 
-  /*
-   * Random grayscale blocks at 16px keep the variation in the low-frequency
-   * band pHash retains. Coarser binary blocks sit at the DCT edge and collapse
-   * to the same hash, which is what made cross-run duplicates inevitable.
-   */
-  const blockValues = Array.from({ length: blocksX * blocksY }, () => next() % 256);
-  const y = Buffer.alloc(width * height);
-
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
-      y[row * width + col] = blockValues[Math.floor(row / blockHeight) * blocksX + Math.floor(col / blockWidth)];
-    }
-  }
-
   const u = Buffer.alloc((width / 2) * (height / 2), 128);
   const v = Buffer.alloc((width / 2) * (height / 2), 128);
+  const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F${fps}:1 Ip A1:1 C420jpeg\n`, 'ascii');
+  const frames: Buffer[] = [];
 
-  const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F30:1 Ip A1:1 C420jpeg\n`, 'ascii');
-  const frame = Buffer.concat([Buffer.from('FRAME\n', 'ascii'), y, u, v]);
+  /*
+   * A long, per-launch stream of coarse random blocks. Coarse blocks survive
+   * pHash downsampling, so different frames and different runs do not collapse
+   * into a cross-agent duplicate. The stream lasts long enough that the camera
+   * is still playing when the test captures; a short file can end before the
+   * app asks for a stream and Chrome then falls back to its default pattern.
+   */
+  for (let index = 0; index < frameCount; index++) {
+    const blockValues = Array.from({ length: blocksX * blocksY }, () => next() % 256);
+    const y = Buffer.alloc(width * height);
 
-  writeFileSync(file, Buffer.concat([header, ...Array.from({ length: 10 }, () => frame)]));
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        y[row * width + col] =
+          blockValues[Math.floor(row / blockHeight) * blocksX + Math.floor(col / blockWidth)];
+      }
+    }
 
-  return path.win32.normalize(file);
+    frames.push(Buffer.concat([Buffer.from('FRAME\n', 'ascii'), y, u, v]));
+  }
+
+  writeFileSync(file, Buffer.concat([header, ...frames]));
+
+  return path.win32.normalize(file).replace(/\\/g, '/');
 }
 
 /**
@@ -121,14 +129,13 @@ export async function launchApp(
      * upload path.
      */
     geolocation: { latitude: 6.5244, longitude: 3.3792, accuracy: 12 },
-    launchOptions: {
-      channel,
-      args: [
-        '--use-fake-ui-for-media-stream',
-        `--use-file-for-fake-video-capture=${fakeCamera}`,
-        '--autoplay-policy=no-user-gesture-required'
-      ]
-    }
+    channel,
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      `--use-file-for-fake-video-capture=${fakeCamera}`,
+      '--autoplay-policy=no-user-gesture-required'
+    ]
   });
 
   // Forward the browser's own diagnostics to the test output. Playwright does

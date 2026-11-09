@@ -215,6 +215,55 @@ final class Validator
      * report work that has not happened yet, and accepting one would let an
      * agent park a count outside every closed period.
      */
+    /**
+     * Normalise a management period to the first day of that month.
+     *
+     * Unlike reportingMonth(), a future month is allowed by default: an
+     * administrator sets next month's target before it starts. The calendar
+     * check is the same strict one, so 2026-02-30 can never roll into March.
+     */
+    public static function periodMonth(mixed $value, string $field = 'period', bool $allowFuture = true): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is required.',
+                ['field' => $field]
+            );
+        }
+
+        $raw = trim($value);
+
+        if (preg_match('/^(\d{4})-(\d{2})$/', $raw, $m) === 1) {
+            $date = $m[1] . '-' . $m[2] . '-01';
+        } elseif (preg_match('/^(\d{4})-(\d{2})-01$/', $raw, $m) === 1) {
+            $date = $raw;
+        } else {
+            throw ApiException::validation(
+                'Field "' . $field . '" must be a month in YYYY-MM form.',
+                ['field' => $field]
+            );
+        }
+
+        $year = (int) $m[1];
+        $month = (int) $m[2];
+
+        if ($year < 1900 || $year > 2999 || !self::isIsoDate($date) || $month < 1 || $month > 12) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is not a valid calendar month.',
+                ['field' => $field]
+            );
+        }
+
+        if (!$allowFuture && $date > PeriodResolver::monthlyPeriodStartDate()) {
+            throw ApiException::validation(
+                'Field "' . $field . '" cannot be in the future.',
+                ['field' => $field]
+            );
+        }
+
+        return $date;
+    }
+
     public static function reportingMonth(mixed $value, string $field = 'reporting_month'): string
     {
         if (!is_string($value)) {

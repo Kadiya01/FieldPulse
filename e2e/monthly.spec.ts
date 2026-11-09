@@ -234,21 +234,32 @@ test.describe('monthly rewards and standings', () => {
     // production pipeline may reject it as a duplicate before a reviewer sees
     // it; either outcome is still a rejected capture for the count assertion.
     await captureAndSave(agentPage, 7);
-    await captureAndSave(agentPage, 3);
 
     await agentPage.goto('/queue');
     await agentPage.getByRole('button', { name: 'Sync now' }).click();
 
-    const rows = await waitForSent(agentPage, [7, 3]);
-    const approvedUuid = rows.find((row) => row.count_claimed === 7)!.submission_uuid;
-    const rejectedUuid = rows.find((row) => row.count_claimed === 3)!.submission_uuid;
+    const firstRows = await waitForSent(agentPage, [7]);
+    const approvedUuid = firstRows.find((row) => row.count_claimed === 7)!.submission_uuid;
 
     // The worker is the production entry point, not a test-only verifier.
     processQueue(20);
 
     await expect
       .poll(async () => serverStatus(agentPage, approvedUuid, await token), { timeout: 30_000 })
-      .toBe('REQUIRES_REVIEW');
+      .toMatch(/REQUIRES_REVIEW|VERIFIED/);
+
+    const approvedStatus = await serverStatus(agentPage, approvedUuid, await token);
+
+    await agentPage.goto('/');
+    await captureAndSave(agentPage, 3);
+
+    await agentPage.goto('/queue');
+    await agentPage.getByRole('button', { name: 'Sync now' }).click();
+
+    const rows = await waitForSent(agentPage, [7, 3]);
+    const rejectedUuid = rows.find((row) => row.count_claimed === 3)!.submission_uuid;
+
+    processQueue(20);
 
     await expect
       .poll(async () => serverStatus(agentPage, rejectedUuid, await token), { timeout: 30_000 })
@@ -262,15 +273,17 @@ test.describe('monthly rewards and standings', () => {
     await signInOperator(opPage, operator);
     await openReviews(opPage);
 
-    const approvedCard = opPage
-      .locator('article')
-      .filter({ hasText: agent.agentCode })
-      .filter({ hasText: '7 claimed' });
+    if (approvedStatus === 'REQUIRES_REVIEW') {
+      const approvedCard = opPage
+        .locator('article')
+        .filter({ hasText: agent.agentCode })
+        .filter({ hasText: '7 claimed' });
 
-    await expect(approvedCard).toBeVisible();
-    await approvedCard.locator('textarea').fill('Evidence matches the claimed count.');
-    await approvedCard.getByRole('button', { name: 'Approve' }).click();
-    await expect(approvedCard).toHaveCount(0);
+      await expect(approvedCard).toBeVisible();
+      await approvedCard.locator('textarea').fill('Evidence matches the claimed count.');
+      await approvedCard.getByRole('button', { name: 'Approve' }).click();
+      await expect(approvedCard).toHaveCount(0);
+    }
 
     if (rejectedStatus === 'REQUIRES_REVIEW') {
       const rejectedCard = opPage

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace FieldPulse\Domain;
 
+use FieldPulse\Database\AdminDashboardRepository;
 use FieldPulse\Database\AgentRepository;
 use FieldPulse\Database\AuditRepository;
 use FieldPulse\Database\Connection;
 use FieldPulse\Database\DeviceRepository;
+use FieldPulse\Database\MonthlyTargetRepository;
 use FieldPulse\Database\NotificationRepository;
 use FieldPulse\Http\ApiException;
 use FieldPulse\Http\ErrorCode;
@@ -53,6 +55,7 @@ final class AdminAgentController implements ActionInterface
 {
     private const ROLES       = ['AGENT', 'SUPERVISOR', 'ADMIN'];
     private const STATUS_TARGETS = ['PENDING', 'ACTIVE', 'REJECTED', 'SUSPENDED', 'DELETED'];
+    private const FILTER_STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'DELETED', 'PENDING', 'REJECTED'];
 
     private const ACTIONS = [
         'SET_ROLE',
@@ -61,28 +64,31 @@ final class AdminAgentController implements ActionInterface
         'REVOKE_CREDENTIAL',
         'ISSUE_PAIRING_CODE',
         'SET_MONTHLY_TARGET',
+        'SET_PROFILE',
     ];
 
     public function __construct(
         private readonly AgentRepository $agents = new AgentRepository(),
         private readonly DeviceRepository $devices = new DeviceRepository(),
         private readonly AuditRepository $audit = new AuditRepository(),
-        private readonly NotificationRepository $notifications = new NotificationRepository()
+        private readonly NotificationRepository $notifications = new NotificationRepository(),
+        private readonly MonthlyTargetRepository $targets = new MonthlyTargetRepository(),
+        private readonly AdminDashboardRepository $reports = new AdminDashboardRepository()
     ) {
     }
 
     public function __invoke(Request $request): Response
     {
         if ($request->endpoint() === 'agent') {
+            if (in_array($request->method(), ['GET', 'HEAD'], true)) {
+                return $this->show($request);
+            }
+
             return $this->update($request);
         }
 
         if ($request->method() === 'POST') {
-            throw new ApiException(
-                405,
-                ErrorCode::METHOD_NOT_ALLOWED,
-                'Agent accounts are self-registered. Administrators review submitted records.'
-            );
+            return $this->create($request);
         }
 
         return $this->index($request);
@@ -101,20 +107,69 @@ final class AdminAgentController implements ActionInterface
         $limit  = $this->clamp($request->queryInt('limit'), 50, 1, 200);
         $offset = $this->clamp($request->queryInt('offset'), 0, 0, 100000);
 
-        $items = $this->agents->listForAdmin($limit, $offset);
+        $filters = $this->filters($request);
+
+        $items = $this->agents->listForAdmin($limit, $offset, $filters);
 
         return Response::json([
             'data' => array_map(fn (array $row): array => $this->present($row), $items),
             'meta' => [
                 'pagination' => [
-                    'total'  => $this->agents->countAll(),
+                    'total'  => $this->agents->countAll($filters),
                     'limit'  => $limit,
                     'offset' => $offset,
                 ],
+                'filters'       => $filters,
+                'locations'     => $this->agents->distinctLocations(),
                 'active_admins' => $this->agents->countActiveAdmins(),
                 'requested_by'  => $context->agentCode(),
             ],
         ]);
+    }
+
+    /* -- Detail ------------------------------------------------------------ */
+
+    private function show(Request $request): Response
+    {
+        $request->requireAuth();
+
+        $id = Validator::intRange($request->query('id'), 1, PHP_INT_MAX, 'id');
+        $target = $this->requireAgent($id);
+
+        $periodDate = PeriodResolver::monthlyPeriodStartDate();
+        $effective = $this->targets->effectiveTarget(
+            $id,
+            $target['location'] ?? null,
+            (int) ($target['monthly_target'] ?? 0),
+            $periodDate
+        );
+
+        $data = $this->present($target);
+        $data['devices'] = array_map(static fn (array $row): array => [
+            'id'            => (int) $row['id'],
+            'device_uuid'   => (string) $row['device_uuid'],
+            'status'        => (string) $row['status'],
+            'registered_at' => $row['registered_at'] ?? null,
+            'last_seen_at'  => $row['last_seen_at'] ?? null,
+            'imei'          => $row['imei'] ?? null,
+        ], $this->devices->listForAgent($id));
+        $data['recent_audit'] = AdminPresenter::auditRows(
+            $this->audit->forEntity('agent', $id, 20)
+        );
+        $data['targets'] = array_map(
+            [AdminPresenter::class, 'target'],
+            $this->targets->forAgent($id, 12)
+        );
+        $data['target'] = $effective + [
+            'period_start_date' => $periodDate,
+        ];
+        $data['summary'] = $this->reports->agentPeriodSummary(
+            $id,
+            $periodDate,
+            PeriodResolver::TYPE_MONTHLY
+        );
+
+        return Response::json(['data' => $data]);
     }
 
     /* -- Create ------------------------------------------------------------ */
@@ -131,7 +186,11 @@ final class AdminAgentController implements ActionInterface
 
         Validator::assertNoUnknownKeys(
             $body,
-            ['agent_code', 'full_name', 'username', 'password', 'role', 'imei'],
+            [
+                'agent_code', 'full_name', 'username', 'password', 'role', 'status',
+                'status_reason', 'nin', 'phone', 'email', 'location', 'monthly_target',
+                'imei', 'device_type',
+            ],
             'admin.agent.create'
         );
 
@@ -140,11 +199,44 @@ final class AdminAgentController implements ActionInterface
         $username  = Validator::username($body['username'] ?? null);
         $password  = Validator::password($body['password'] ?? null);
         $role      = $this->role($body['role'] ?? 'AGENT');
-        $imei      = $body['imei'] ?? null;
+        $status    = $this->statusTarget($body['status'] ?? 'ACTIVE');
 
-        if ($imei !== null && $imei !== '') {
-            $imei = Validator::imei($imei);
+        if ($status === 'DELETED') {
+            throw ApiException::validation(
+                'A new account cannot be created retired.',
+                ['field' => 'status']
+            );
         }
+
+        $statusReason = $body['status_reason'] ?? null;
+        if ($statusReason !== null && $statusReason !== '') {
+            $statusReason = Validator::string($statusReason, 1, 500, 'status_reason');
+        } else {
+            $statusReason = null;
+        }
+
+        $nin = $body['nin'] ?? null;
+        $nin = ($nin === null || $nin === '') ? null : Validator::nin($nin);
+
+        $phone = $body['phone'] ?? null;
+        $phone = ($phone === null || $phone === '') ? null : Validator::nigerianPhone($phone);
+
+        $email = Validator::email($body['email'] ?? null, 'email');
+        $location = Validator::location($body['location'] ?? null, 'location');
+        $monthlyTarget = Validator::intRange(
+            $body['monthly_target'] ?? 0,
+            0,
+            1000000,
+            'monthly_target'
+        );
+
+        $imei = $body['imei'] ?? null;
+        $imei = ($imei === null || $imei === '') ? null : Validator::imei($imei);
+
+        $deviceType = $body['device_type'] ?? null;
+        $deviceType = ($deviceType === null || $deviceType === '')
+            ? null
+            : Validator::deviceType($deviceType);
 
         if ($this->agents->findByCode($agentCode) !== null) {
             throw ApiException::conflict(
@@ -160,17 +252,71 @@ final class AdminAgentController implements ActionInterface
             );
         }
 
-        $agentId = $this->agents->create($agentCode, $fullName, $imei);
+        if ($nin !== null && $this->agents->findByNin($nin) !== null) {
+            throw ApiException::conflict(
+                ErrorCode::IDEMPOTENCY_CONFLICT,
+                'An account with this NIN already exists.'
+            );
+        }
+
+        if ($email !== null && $this->agents->findByEmail($email) !== null) {
+            throw ApiException::conflict(
+                ErrorCode::IDEMPOTENCY_CONFLICT,
+                'An account with this email already exists.'
+            );
+        }
+
+        if ($imei !== null && $this->agents->findByImei($imei) !== null) {
+            throw ApiException::conflict(
+                ErrorCode::IDEMPOTENCY_CONFLICT,
+                'This device IMEI is already bound to an account.'
+            );
+        }
 
         try {
-            $this->agents->setRole($agentId, $role);
-            $this->agents->setCredentials($agentId, $username, Credentials::hash($password));
-        } catch (\Throwable $e) {
-            // A partial create would leave a directory row with no credential
-            // and no way to know why. The row is cheap to remove and the caller
-            // still needs a coherent answer, so tear down what the failure may
-            // have left and rethrow.
-            Connection::execute('DELETE FROM agents WHERE id = :id', ['id' => $agentId]);
+            $agentId = Connection::transaction(function () use (
+                $agentCode,
+                $fullName,
+                $nin,
+                $phone,
+                $email,
+                $location,
+                $monthlyTarget,
+                $role,
+                $status,
+                $statusReason,
+                $imei,
+                $deviceType,
+                $username,
+                $password
+            ): int {
+                $id = $this->agents->createManaged([
+                    'agent_code'      => $agentCode,
+                    'full_name'       => $fullName,
+                    'nin'             => $nin,
+                    'phone'           => $phone,
+                    'email'           => $email,
+                    'location'        => $location,
+                    'monthly_target'  => $monthlyTarget,
+                    'role'            => $role,
+                    'status'          => $status,
+                    'status_reason'   => $statusReason,
+                    'imei'            => $imei,
+                    'device_type'     => $deviceType,
+                ]);
+
+                $this->agents->setCredentials($id, $username, Credentials::hash($password));
+
+                return $id;
+            });
+        } catch (\PDOException $e) {
+            if ($this->isDuplicate($e)) {
+                throw ApiException::conflict(
+                    ErrorCode::IDEMPOTENCY_CONFLICT,
+                    'An account with one of these unique details already exists.'
+                );
+            }
+
             throw $e;
         }
 
@@ -183,6 +329,7 @@ final class AdminAgentController implements ActionInterface
             'metadata'       => [
                 'agent_code' => $agentCode,
                 'role'       => $role,
+                'status'     => $status,
                 'imei_bound' => $imei !== null,
             ],
         ]);
@@ -228,11 +375,12 @@ final class AdminAgentController implements ActionInterface
 
         $allowed = [
             'SET_ROLE'           => ['id', 'action', 'role'],
-            'SET_STATUS'         => ['id', 'action', 'status'],
+            'SET_STATUS'         => ['id', 'action', 'status', 'reason'],
             'SET_PASSWORD'       => ['id', 'action', 'password'],
             'REVOKE_CREDENTIAL'  => ['id', 'action'],
             'ISSUE_PAIRING_CODE' => ['id', 'action', 'label'],
             'SET_MONTHLY_TARGET' => ['id', 'action', 'monthly_target'],
+            'SET_PROFILE'        => ['id', 'action', 'email', 'location', 'phone'],
         ];
 
         Validator::assertNoUnknownKeys($body, $allowed[$action], 'admin.agent.' . strtolower($action));
@@ -245,6 +393,7 @@ final class AdminAgentController implements ActionInterface
             $action !== 'SET_PASSWORD'
             && $action !== 'ISSUE_PAIRING_CODE'
             && $action !== 'SET_MONTHLY_TARGET'
+            && $action !== 'SET_PROFILE'
             && (int) $target['id'] === $context->agentId()
         ) {
             $this->denySelf();
@@ -257,6 +406,7 @@ final class AdminAgentController implements ActionInterface
             'REVOKE_CREDENTIAL'  => $this->revokeCredential($request, $context, $target),
             'ISSUE_PAIRING_CODE' => $this->issuePairingCode($request, $context, $target, $body),
             'SET_MONTHLY_TARGET' => $this->setMonthlyTarget($request, $context, $target, $body),
+            'SET_PROFILE'        => $this->setProfile($request, $context, $target, $body),
         };
 
         $data = $this->present($this->requireAgent($id));
@@ -308,6 +458,11 @@ final class AdminAgentController implements ActionInterface
             return null;
         }
 
+        $reason = $body['reason'] ?? null;
+        $reason = ($reason === null || $reason === '')
+            ? null
+            : Validator::string($reason, 1, 500, 'reason');
+
         $action = match ($status) {
             'PENDING'  => 'admin.agent.approval_reset',
             'REJECTED' => 'admin.agent.registration_rejected',
@@ -334,7 +489,7 @@ final class AdminAgentController implements ActionInterface
             $this->agents->clearCredentials((int) $target['id']);
         }
 
-        $this->agents->setStatus((int) $target['id'], $status);
+        $this->agents->setStatus((int) $target['id'], $status, $reason);
 
         $this->audit->recordSafe([
             'actor_agent_id' => $context->agentId(),
@@ -345,6 +500,7 @@ final class AdminAgentController implements ActionInterface
             'metadata'       => [
                 'agent_code'      => (string) $target['agent_code'],
                 'status'          => $status,
+                'reason'          => $reason,
                 'devices_revoked' => $status !== 'ACTIVE',
             ],
         ]);
@@ -355,7 +511,7 @@ final class AdminAgentController implements ActionInterface
             'status'   => $status,
         ]);
 
-        $this->notifyStatusChange($target, $status);
+        $this->notifyStatusChange($target, $status, $reason);
 
         return null;
     }
@@ -371,7 +527,7 @@ final class AdminAgentController implements ActionInterface
      *
      * @param array<string,mixed> $target
      */
-    private function notifyStatusChange(array $target, string $status): void
+    private function notifyStatusChange(array $target, string $status, ?string $reason = null): void
     {
         $previous = (string) $target['status'];
 
@@ -385,6 +541,10 @@ final class AdminAgentController implements ActionInterface
             'DELETED' => ['ACCOUNT_RETIRED', 'Account retired', 'Your account has been retired and can no longer be used.'],
             default => ['ACCOUNT_UPDATED', 'Account updated', 'Your account status changed to ' . $status . '.'],
         };
+
+        if ($reason !== null && $reason !== '') {
+            $message .= ' Reason: ' . $reason;
+        }
 
         try {
             $this->notifications->create(
@@ -432,6 +592,52 @@ final class AdminAgentController implements ActionInterface
             'agent_id'      => (int) $target['id'],
             'admin'         => $context->agentCode(),
             'monthly_target' => $targetValue,
+        ]);
+
+        return null;
+    }
+
+    private function setProfile(Request $request, AuthContext $context, array $target, array $body): ?array
+    {
+        $email = array_key_exists('email', $body)
+            ? Validator::email($body['email'], 'email')
+            : ($target['email'] ?? null);
+        $location = array_key_exists('location', $body)
+            ? Validator::location($body['location'], 'location')
+            : ($target['location'] ?? null);
+
+        $phone = $target['phone'] ?? null;
+        if (array_key_exists('phone', $body)) {
+            $rawPhone = $body['phone'];
+            $phone = ($rawPhone === null || $rawPhone === '')
+                ? null
+                : Validator::nigerianPhone($rawPhone);
+        }
+
+        if ($email !== null) {
+            $owner = $this->agents->findByEmail($email);
+
+            if ($owner !== null && (int) $owner['id'] !== (int) $target['id']) {
+                throw ApiException::conflict(
+                    ErrorCode::IDEMPOTENCY_CONFLICT,
+                    'This email is already in use by another account.'
+                );
+            }
+        }
+
+        $this->agents->updateAdminProfile((int) $target['id'], $email, $location, $phone);
+
+        $this->audit->recordSafe([
+            'actor_agent_id' => $context->agentId(),
+            'action'         => 'admin.agent.profile_changed',
+            'entity_type'    => 'agent',
+            'entity_id'      => (int) $target['id'],
+            'ip_address'     => $request->clientIp(),
+            'metadata'       => [
+                'agent_code' => (string) $target['agent_code'],
+                'email'      => $email,
+                'location'   => $location,
+            ],
         ]);
 
         return null;
@@ -689,11 +895,84 @@ final class AdminAgentController implements ActionInterface
             'self_registered'     => (bool) ($row['self_registered'] ?? false),
             'role'                => (string) $row['role'],
             'status'              => (string) $row['status'],
+            'status_reason'       => $row['status_reason'] ?? null,
+            'status_changed_at'   => $row['status_changed_at'] ?? null,
+            'imei'                => $row['imei'] ?? null,
+            'device_type'         => $row['device_type'] ?? null,
             'username'            => $row['username'] ?? null,
             'has_credential'      => (bool) ($row['has_credential'] ?? (($row['password_hash'] ?? null) !== null)),
             'active_device_count' => (int) ($row['active_device_count'] ?? $this->agents->countActiveDevices($id)),
             'created_at'          => (string) $row['created_at'],
+            'updated_at'          => $row['updated_at'] ?? null,
         ];
+    }
+
+    /**
+     * @return array{q?:string,status?:string,role?:string,location?:string,self_registered?:bool}
+     */
+    private function filters(Request $request): array
+    {
+        $filters = [];
+
+        $q = trim((string) ($request->query('q') ?? ''));
+        if ($q !== '') {
+            $filters['q'] = Validator::string($q, 1, 191, 'q');
+        }
+
+        $status = $request->query('status');
+        if ($status !== null && trim($status) !== '') {
+            $status = strtoupper(trim($status));
+
+            if (!in_array($status, self::FILTER_STATUSES, true)) {
+                throw ApiException::validation(
+                    'status filter must be one of ' . implode(', ', self::FILTER_STATUSES) . '.',
+                    ['field' => 'status', 'allowed' => self::FILTER_STATUSES]
+                );
+            }
+
+            $filters['status'] = $status;
+        }
+
+        $role = $request->query('role');
+        if ($role !== null && trim($role) !== '') {
+            $filters['role'] = $this->role($role);
+        }
+
+        $location = $request->query('location');
+        if ($location !== null && trim($location) !== '') {
+            $location = Validator::location($location, 'location');
+
+            if ($location !== null) {
+                $filters['location'] = $location;
+            }
+        }
+
+        $selfRegistered = $request->query('self_registered');
+        if ($selfRegistered !== null && $selfRegistered !== '') {
+            $normalized = strtolower(trim($selfRegistered));
+
+            if (in_array($normalized, ['1', 'true', 'yes'], true)) {
+                $filters['self_registered'] = true;
+            } elseif (in_array($normalized, ['0', 'false', 'no'], true)) {
+                $filters['self_registered'] = false;
+            } else {
+                throw ApiException::validation(
+                    'self_registered filter must be true or false.',
+                    ['field' => 'self_registered']
+                );
+            }
+        }
+
+        return $filters;
+    }
+
+    private function isDuplicate(\PDOException $e): bool
+    {
+        $sqlState = (string) ($e->getCode() ?? '');
+
+        return $sqlState === '23000'
+            || $sqlState === '23505'
+            || str_contains(strtolower($e->getMessage()), 'duplicate');
     }
 
     private function clamp(?int $value, int $default, int $min, int $max): int

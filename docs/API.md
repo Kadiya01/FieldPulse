@@ -131,9 +131,16 @@ uses a bearer header, which a browser will not attach cross-origin.
 | GET | `/api/v1/rewards/self.php` | bearer, own entitlements only |
 | GET | `/api/v1/rewards/index.php` | operator |
 | POST | `/api/v1/rewards/decide.php` | operator |
-| GET | `/api/v1/admin/agents.php` | admin |
-| POST | `/api/v1/admin/agents.php` | admin, disabled; agents self-register |
-| POST | `/api/v1/admin/agent.php` | admin |
+| GET | `/api/v1/admin/agents.php` | admin, searchable account directory |
+| POST | `/api/v1/admin/agents.php` | admin, create an account |
+| GET | `/api/v1/admin/agent.php?id=` | admin, account detail |
+| POST | `/api/v1/admin/agent.php` | admin, update one account |
+| GET | `/api/v1/admin/dashboard.php` | admin, management statistics |
+| GET | `/api/v1/admin/targets.php` | admin, monthly targets |
+| POST | `/api/v1/admin/targets.php` | admin, set or clear a target |
+| GET | `/api/v1/admin/periods.php` | admin, closing history |
+| POST | `/api/v1/admin/periods.php` | admin, close a period |
+| GET | `/api/v1/admin/audit.php` | admin, append-only audit search |
 
 Every path is the literal file on disk, `.php` suffix included. There is no
 extensionless rewrite in `.htaccess`, so `/api/v1/auth/login` is a 404 and not a
@@ -653,8 +660,9 @@ would read as though the payee had approved their own payment.
 
 ---
 
+### Admin account management
 ### GET /api/v1/admin/agents.php  ·  POST /api/v1/admin/agents.php
-### POST /api/v1/admin/agent.php
+### GET /api/v1/admin/agent.php  ·  POST /api/v1/admin/agent.php
 
 Administrator-only (`ADMIN`). A `SUPERVISOR` or `AGENT` receives `403 FORBIDDEN`,
 and an unauthenticated caller `401 UNAUTHENTICATED`. The gate is the Kernel's
@@ -663,7 +671,11 @@ controller mistake cannot leave the surface open.
 
 #### GET `/api/v1/admin/agents.php`
 
-The account directory. Query: `limit` (1–200, default 50), `offset` (default 0).
+The account directory. Query: `limit` (1–200, default 50), `offset` (default 0),
+`q` (case-insensitive match on name, agent code, username, email or phone),
+`status`, `role`, `location`, and `self_registered` (`1` or `0`). Filters are
+applied server-side and echoed back in `meta.filters`; `meta.locations` lists the
+locations present in the directory for the location selector.
 
 ```json
 {
@@ -678,13 +690,21 @@ The account directory. Query: `limit` (1–200, default 50), `offset` (default 0
       "username": "mpadmin",
       "has_credential": true,
       "active_device_count": 1,
+      "email": "ada@example.test",
+      "location": "Lagos",
+      "monthly_target": 40,
+      "status_reason": null,
+      "status_changed_at": null,
+      "self_registered": true,
       "created_at": "2026-09-28 09:41:05"
     }
   ],
   "meta": {
     "pagination": { "total": 12, "limit": 50, "offset": 0 },
     "active_admins": 2,
-    "requested_by": "AG-001"
+    "requested_by": "AG-001",
+    "filters": { "q": null, "status": null, "role": null, "location": null, "self_registered": null },
+    "locations": ["Lagos", "Abuja"]
   }
 }
 ```
@@ -701,13 +721,43 @@ in". `meta.requested_by` is the caller's own `agent_code` and `meta.active_admin
 the count the last-admin guard is applied against; a client uses both to disable
 the controls the server would refuse, rather than offering a button that 409s.
 
-#### POST `/api/v1/admin/agents.php` (disabled)
+#### POST `/api/v1/admin/agents.php`
 
-Returns `405 METHOD_NOT_ALLOWED`. Agent accounts are created by the public
-self-registration endpoint; administrators do not approve or create agent
-registrations. Existing account management remains available through
-`POST /api/v1/admin/agent.php`.
+Creates a managed account with a credential and returns `201`. Unlike public
+self-registration, an administrator supplies the agent code, username and
+password; `role` defaults to `AGENT` and `status` defaults to `ACTIVE`.
 
+```json
+{
+  "agent_code": "AG-014",
+  "full_name": "Ada Lovelace",
+  "username": "ada",
+  "password": "…",
+  "role": "AGENT",
+  "status": "ACTIVE",
+  "nin": "12345678901",
+  "phone": "08012345678",
+  "email": "ada@example.test",
+  "location": "Lagos",
+  "monthly_target": 40,
+  "imei": "490154203237518",
+  "device_type": "SAMSUNG"
+}
+```
+
+`agent_code`, `full_name`, `username` and `password` are required. `status` may
+not be `DELETED` at creation; retirement remains a separate, audited action.
+`imei` and `device_type` must be supplied together. Duplicate agent code,
+username, NIN, email or IMEI returns `409 IDEMPOTENCY_CONFLICT`. The response is
+`{ "data": <agent> }` in directory shape, and the creation appends
+`admin.agent.created`.
+
+#### GET `/api/v1/admin/agent.php?id=`
+
+Returns one account's administrator detail: the directory fields, sanitized
+devices (never public-key material), recent audit rows, recent monthly targets,
+the effective target for the current month, and the current monthly summary
+(approved, submitted, pending, rejected and achievement).
 
 #### POST `/api/v1/admin/agent.php`
 
@@ -717,11 +767,12 @@ that action's own field list is a `422`.
 
 ```json
 { "id": 12, "action": "SET_ROLE",            "role": "SUPERVISOR" }
-{ "id": 12, "action": "SET_STATUS",          "status": "SUSPENDED" }
+{ "id": 12, "action": "SET_STATUS",          "status": "SUSPENDED", "reason": "repeated evidence mismatch" }
 { "id": 12, "action": "SET_PASSWORD",        "password": "…" }
 { "id": 12, "action": "REVOKE_CREDENTIAL" }
 { "id": 12, "action": "ISSUE_PAIRING_CODE" }
 { "id": 12, "action": "SET_MONTHLY_TARGET", "monthly_target": 40 }
+{ "id": 12, "action": "SET_PROFILE",         "email": "ada@example.test", "location": "Lagos", "phone": "08012345678" }
 ```
 
 `SET_STATUS` accepts `PENDING`, `ACTIVE`, `REJECTED`, `SUSPENDED` or `DELETED`.
@@ -730,7 +781,14 @@ reject it. Rejected registrations can be reopened to `PENDING` for reconsiderati
 `DELETED` is retirement: devices and credential are revoked, the `DELETED`
 status is terminal, and the row and its history survive for compliance. Any
 transition away from `ACTIVE` revokes the account's devices, so a token that
-outlived the account stops working on its next request.
+outlived the account stops working on its next request. An optional `reason`
+(up to 500 characters) is stored as `status_reason`/`status_changed_at`, shown in
+the directory and detail responses, appended to the agent's notification, and
+recorded in the audit row.
+
+`SET_PROFILE` updates `email`, `location` and `phone`; the same validators and
+uniqueness rules as self-registration apply. It cannot change identity, role,
+status or credentials.
 
 `ISSUE_PAIRING_CODE` mints the out-of-band code a managed-account device-registration flow (or the
 device-registration step of the sign-in page) consumes to bind the account's
@@ -768,9 +826,71 @@ retired account, which is immutable. `403` means the caller is not an `ADMIN`.
 Every action appends an immutable audit row: `admin.agent.created`,
 `admin.agent.role_changed`, `admin.agent.suspended`, `admin.agent.reinstated`,
 `admin.agent.retired`, `admin.agent.password_reset`,
-`admin.agent.credential_revoked` or `admin.agent.pairing_code_issued`. The
-audit metadata for a pairing code records who issued it, the TTL and the expiry —
-never the code itself.
+`admin.agent.credential_revoked`, `admin.agent.pairing_code_issued`,
+`admin.agent.monthly_target_changed` or `admin.agent.profile_changed`. Status
+changes also record the reason. The audit metadata for a pairing code records
+who issued it, the TTL and the expiry — never the code itself.
+
+---
+
+### Admin dashboard, targets, periods and audit
+
+Administrator-only (`ADMIN`); `SUPERVISOR` and `AGENT` receive `403`.
+
+#### GET `/api/v1/admin/dashboard.php`
+
+Query: `period` (`YYYY-MM`, default the current month) and `period_type`
+(`MONTHLY` default, `WEEKLY`). Returns agent, device, enrollment, target, reward
+and location aggregates for that period, plus the top agents and the period's
+closing state. Achievement is `approved ÷ effective target × 100`; a target of
+`0` is returned with `configured: false` and is never presented as `0%`.
+
+#### GET `/api/v1/admin/targets.php`
+
+Query: `period` (`YYYY-MM`, default current month), `period_type`, and optional
+`scope_type` (`ORGANIZATION` | `LOCATION` | `AGENT`) plus `scope_key`. Returns
+the configured targets, the effective organization/location values, the
+period's month, and `meta.agents`/`meta.locations` for selectors.
+
+Effective target precedence for an agent is: agent period target → legacy
+account `monthly_target` when greater than `0` → location period target →
+organization period target → not configured.
+
+#### POST `/api/v1/admin/targets.php`
+
+```json
+{ "period": "2026-11", "scope_type": "AGENT", "agent_id": 12, "target": 40 }
+{ "period": "2026-11", "scope_type": "LOCATION", "location": "Lagos", "target": 120 }
+{ "period": "2026-11", "scope_type": "ORGANIZATION", "target": 500 }
+{ "period": "2026-11", "scope_type": "AGENT", "agent_id": 12, "action": "CLEAR" }
+```
+
+`target` is `0..1000000`; `0` clears the period override and means "not
+configured". Setting or clearing audits `admin.target.set` /
+`admin.target.cleared`.
+
+#### GET `/api/v1/admin/periods.php`
+
+Query: `period_type` (default `MONTHLY`) and `limit` (default 6). Returns recent
+periods with submission totals, reward totals, due/frozen/published state, the
+business timezone and the close grace window.
+
+#### POST `/api/v1/admin/periods.php`
+
+```json
+{ "period": "2026-10", "period_type": "MONTHLY" }
+```
+
+Requests a close through the reward service. A period that is not yet due (or
+already frozen) returns `200` with `closed: false` and a reason rather than
+pretending to close. A real close freezes rankings/rewards and audits
+`admin.period.close_requested`.
+
+#### GET `/api/v1/admin/audit.php`
+
+Query: `limit` (1–200), `offset`, `action`, `entity_type`, `entity_id`,
+`actor_agent_id`, `from` and `to` (`YYYY-MM-DD`). Returns append-only audit rows
+with actor codes and decoded metadata. Audit rows are never edited or deleted.
 
 **Suspension and retirement are not distinguishable at login.** Any non-`ACTIVE`
 account returns the same `401 UNAUTHENTICATED` as a wrong password, for the same

@@ -1,13 +1,31 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   fetchAdminAgents,
+  fetchAdminDashboard,
+  fetchAdminTargets,
+  fetchAdminPeriods,
+  fetchAdminAudit,
+  fetchAdminAgentDetail,
+  createAdminAgent,
   actOnAdminAgent,
   issuePairingCode,
+  saveAdminTarget,
+  clearAdminTarget,
+  closeAdminPeriod,
   ApiError,
   type AdminAgent,
   type AdminAgentAction,
   type AdminAgentRole,
+  type AdminAgentFilters,
   type AdminAgentList,
+  type AdminAgentDetail,
+  type AdminDashboard,
+  type AdminTarget,
+  type AdminTargetsResponse,
+  type AdminPeriodRow,
+  type AdminPeriodsResponse,
+  type AdminAuditEntry,
+  type CreateAdminAgentInput,
   type IssuePairingCodeResult
 } from '../api/client';
 import { useSession } from '../auth/sessionContext';
@@ -26,10 +44,46 @@ import {
   Check,
   CheckCircle2,
   XCircle,
-  X
+  X,
+  Plus,
+  Search,
+  Target,
+  CalendarDays,
+  Activity,
+  Eye,
+  Trash2
 } from 'lucide-react';
 
 const LIMIT = 50;
+
+const EMPTY_FILTERS: AdminAgentFilters = {};
+
+const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'Any status' },
+  { value: 'PENDING', label: 'Pending approval' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'INACTIVE', label: 'Inactive' },
+  { value: 'REJECTED', label: 'Registration rejected' },
+  { value: 'SUSPENDED', label: 'Suspended' },
+  { value: 'DELETED', label: 'Retired' }
+];
+
+function currentMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatMonth(value: string): string {
+  if (!/^\d{4}-\d{2}/.test(value)) {
+    return value;
+  }
+
+  const [year, month] = value.slice(0, 7).split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric'
+  });
+}
 
 /**
  * The account directory.
@@ -61,19 +115,64 @@ export default function AdminPage() {
   const [resetPassword, setResetPassword] = useState('');
   const [issuedCode, setIssuedCode] = useState<{ id: number; result: IssuePairingCodeResult } | null>(null);
 
+  const [filters, setFilters] = useState<AdminAgentFilters>(EMPTY_FILTERS);
+  const [searchDraft, setSearchDraft] = useState('');
+  const [statusDraft, setStatusDraft] = useState('');
+  const [roleDraft, setRoleDraft] = useState('');
+  const [locationDraft, setLocationDraft] = useState('');
+  const [selfRegisteredDraft, setSelfRegisteredDraft] = useState('');
+
+  const [dashboard, setDashboard] = useState<AdminDashboard | null>(null);
+  const [dashboardError, setDashboardError] = useState('');
+
+  const [targetPeriod, setTargetPeriod] = useState(currentMonth());
+  const [targets, setTargets] = useState<AdminTarget[]>([]);
+  const [targetMeta, setTargetMeta] = useState<AdminTargetsResponse['meta'] | null>(null);
+  const [targetScope, setTargetScope] = useState<'ORGANIZATION' | 'LOCATION' | 'AGENT'>('ORGANIZATION');
+  const [targetKey, setTargetKey] = useState('');
+  const [targetValue, setTargetValue] = useState('0');
+  const [targetBusy, setTargetBusy] = useState(false);
+  const [targetError, setTargetError] = useState('');
+
+  const [periods, setPeriods] = useState<AdminPeriodRow[]>([]);
+  const [periodMeta, setPeriodMeta] = useState<AdminPeriodsResponse['meta'] | null>(null);
+  const [periodError, setPeriodError] = useState('');
+  const [periodBusy, setPeriodBusy] = useState<string | null>(null);
+
+  const [auditEntries, setAuditEntries] = useState<AdminAuditEntry[]>([]);
+  const [auditAction, setAuditAction] = useState('');
+  const [auditError, setAuditError] = useState('');
+  const [auditBusy, setAuditBusy] = useState(false);
+
+  const [detail, setDetail] = useState<AdminAgentDetail | null>(null);
+  const [detailBusy, setDetailBusy] = useState<number | null>(null);
+  const [detailError, setDetailError] = useState('');
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [createForm, setCreateForm] = useState<CreateAdminAgentInput>({
+    agent_code: '',
+    full_name: '',
+    username: '',
+    password: '',
+    role: 'AGENT',
+    status: 'ACTIVE'
+  });
+
   const total = meta?.pagination.total ?? 0;
   const maxOffset = Math.max(0, Math.floor((total - 1) / LIMIT) * LIMIT);
+  const locationOptions = meta?.locations ?? targetMeta?.locations ?? [];
 
   /** Load the visible page. A press or an effect: state is set after the await. */
-  const fetchDir = async (at: number) => {
+  const fetchDir = async (at: number, activeFilters: AdminAgentFilters = filters) => {
     setLoading(true);
     setErrorMsg('');
 
     try {
-      const dir = await fetchAdminAgents(LIMIT, at);
+      const dir = await fetchAdminAgents(LIMIT, at, activeFilters);
       setAgents(dir.agents);
       setMeta(dir.meta);
-      setNotice('');
     } catch (err) {
       setAgents([]);
 
@@ -105,7 +204,7 @@ export default function AdminPage() {
       setErrorMsg('');
 
       try {
-        const dir = await fetchAdminAgents(LIMIT, offset);
+        const dir = await fetchAdminAgents(LIMIT, offset, filters);
 
         if (live) {
           setAgents(dir.agents);
@@ -133,7 +232,95 @@ export default function AdminPage() {
     return () => {
       live = false;
     };
-  }, [isAdmin, offset]);
+  }, [isAdmin, offset, filters]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+
+    let live = true;
+
+    (async () => {
+      try {
+        const [nextDashboard, nextPeriods, nextAudit] = await Promise.all([
+          fetchAdminDashboard(),
+          fetchAdminPeriods('MONTHLY', 12),
+          fetchAdminAudit({ limit: 25 })
+        ]);
+
+        if (live) {
+          setDashboard(nextDashboard);
+          setDashboardError('');
+          setPeriods(nextPeriods.periods);
+          setPeriodMeta(nextPeriods.meta);
+          setPeriodError('');
+          setAuditEntries(nextAudit.entries);
+          setAuditError('');
+        }
+      } catch (err) {
+        if (live) {
+          setDashboardError(err instanceof Error ? err.message : 'Could not load management statistics.');
+        }
+      }
+    })();
+
+    return () => {
+      live = false;
+    };
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+
+    let live = true;
+
+    (async () => {
+      try {
+        const next = await fetchAdminTargets(targetPeriod);
+
+        if (live) {
+          setTargets(next.targets);
+          setTargetMeta(next.meta);
+          setTargetError('');
+        }
+      } catch (err) {
+        if (live) {
+          setTargetError(err instanceof Error ? err.message : 'Could not load monthly targets.');
+        }
+      }
+    })();
+
+    return () => {
+      live = false;
+    };
+  }, [isAdmin, targetPeriod]);
+
+  const refreshManagement = async () => {
+    try {
+      const [nextDashboard, nextTargets, nextPeriods, nextAudit] = await Promise.all([
+        fetchAdminDashboard(),
+        fetchAdminTargets(targetPeriod),
+        fetchAdminPeriods('MONTHLY', 12),
+        fetchAdminAudit({ limit: 25, action: auditAction.trim() || undefined })
+      ]);
+
+      setDashboard(nextDashboard);
+      setDashboardError('');
+      setTargets(nextTargets.targets);
+      setTargetMeta(nextTargets.meta);
+      setTargetError('');
+      setPeriods(nextPeriods.periods);
+      setPeriodMeta(nextPeriods.meta);
+      setPeriodError('');
+      setAuditEntries(nextAudit.entries);
+      setAuditError('');
+    } catch (err) {
+      setDashboardError(err instanceof Error ? err.message : 'Could not refresh management statistics.');
+    }
+  };
 
   /** One state-changing action, then a refresh of the visible page. */
   const runAction = async (
@@ -190,6 +377,222 @@ export default function AdminPage() {
 
   const dismissCode = () => setIssuedCode(null);
 
+  const applyFilters = (event: FormEvent) => {
+    event.preventDefault();
+
+    const next: AdminAgentFilters = {};
+
+    if (searchDraft.trim()) {
+      next.q = searchDraft.trim();
+    }
+    if (statusDraft) {
+      next.status = statusDraft as AdminAgentFilters['status'];
+    }
+    if (roleDraft) {
+      next.role = roleDraft as AdminAgentFilters['role'];
+    }
+    if (locationDraft) {
+      next.location = locationDraft;
+    }
+    if (selfRegisteredDraft) {
+      next.self_registered = selfRegisteredDraft === 'true';
+    }
+
+    setOffset(0);
+    setFilters(next);
+  };
+
+  const clearFilters = () => {
+    setSearchDraft('');
+    setStatusDraft('');
+    setRoleDraft('');
+    setLocationDraft('');
+    setSelfRegisteredDraft('');
+    setOffset(0);
+    setFilters({});
+  };
+
+  const openCreate = () => {
+    setCreateError('');
+    setCreateOpen(true);
+  };
+
+  const updateCreateField = (field: keyof CreateAdminAgentInput, value: string) => {
+    setCreateForm(current => ({
+      ...current,
+      [field]: value === '' ? undefined : value
+    }));
+  };
+
+  const submitCreate = async (event: FormEvent) => {
+    event.preventDefault();
+    setCreateError('');
+
+    if (!createForm.agent_code.trim() || !createForm.full_name.trim()) {
+      setCreateError('Agent code and full name are required.');
+      return;
+    }
+    if (!createForm.username.trim()) {
+      setCreateError('Username is required.');
+      return;
+    }
+
+    const passwordProblem = validatePassword(createForm.password ?? '');
+    if (passwordProblem) {
+      setCreateError(passwordProblem);
+      return;
+    }
+
+    setCreateBusy(true);
+
+    try {
+      const created = await createAdminAgent({
+        ...createForm,
+        agent_code: createForm.agent_code.trim(),
+        full_name: createForm.full_name.trim(),
+        username: createForm.username.trim(),
+        password: createForm.password ?? '',
+        monthly_target: Number(createForm.monthly_target ?? 0)
+      });
+
+      setNotice(`${created.agent_code} created.`);
+      setCreateOpen(false);
+      setCreateForm({
+        agent_code: '',
+        full_name: '',
+        username: '',
+        password: '',
+        role: 'AGENT',
+        status: 'ACTIVE'
+      });
+      setOffset(0);
+      await fetchDir(0);
+      await refreshManagement();
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'The account could not be created.');
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
+  const saveTarget = async (event: FormEvent) => {
+    event.preventDefault();
+    setTargetError('');
+
+    const value = Number(targetValue);
+
+    if (!Number.isInteger(value) || value < 0 || value > 1000000) {
+      setTargetError('Target must be a whole number between 0 and 1,000,000.');
+      return;
+    }
+
+    if (targetScope !== 'ORGANIZATION' && !targetKey) {
+      setTargetError(targetScope === 'AGENT' ? 'Choose an agent.' : 'Choose a location.');
+      return;
+    }
+
+    setTargetBusy(true);
+
+    try {
+      await saveAdminTarget({
+        scope_type: targetScope,
+        scope_key: targetScope === 'ORGANIZATION' ? undefined : targetKey,
+        agent_id: targetScope === 'AGENT' ? Number(targetKey) : undefined,
+        location: targetScope === 'LOCATION' ? targetKey : undefined,
+        period: targetPeriod,
+        target: value
+      });
+
+      setNotice(`Target saved for ${formatMonth(targetPeriod)}.`);
+      await refreshManagement();
+    } catch (err) {
+      setTargetError(err instanceof Error ? err.message : 'The target could not be saved.');
+    } finally {
+      setTargetBusy(false);
+    }
+  };
+
+  const removeTarget = async (target: AdminTarget) => {
+    if (!window.confirm(`Clear the ${target.scope_label} target for ${formatMonth(target.period_start_date)}?`)) {
+      return;
+    }
+
+    setTargetBusy(true);
+    setTargetError('');
+
+    try {
+      await clearAdminTarget({
+        scope_type: target.scope_type,
+        scope_key: target.scope_type === 'ORGANIZATION' ? undefined : target.scope_key,
+        agent_id: target.scope_type === 'AGENT' ? Number(target.scope_key) : undefined,
+        location: target.scope_type === 'LOCATION' ? target.scope_key : undefined,
+        period: target.period_start_date
+      });
+      setNotice(`Target cleared for ${formatMonth(target.period_start_date)}.`);
+      await refreshManagement();
+    } catch (err) {
+      setTargetError(err instanceof Error ? err.message : 'The target could not be cleared.');
+    } finally {
+      setTargetBusy(false);
+    }
+  };
+
+  const closePeriod = async (period: AdminPeriodRow) => {
+    if (!window.confirm(`Close ${formatMonth(period.period_start_date)} now? Closing freezes the standing and publishes rewards.`)) {
+      return;
+    }
+
+    setPeriodBusy(period.period_start_date);
+    setPeriodError('');
+
+    try {
+      const result = await closeAdminPeriod(period.period_start_date, period.period_type);
+
+      if (result.closed) {
+        setNotice(`${formatMonth(period.period_start_date)} closed and published.`);
+      } else {
+        setNotice(`${formatMonth(period.period_start_date)} was not closed: ${result.reason.replace(/_/g, ' ')}.`);
+      }
+
+      await refreshManagement();
+    } catch (err) {
+      setPeriodError(err instanceof Error ? err.message : 'The period could not be closed.');
+    } finally {
+      setPeriodBusy(null);
+    }
+  };
+
+  const applyAuditFilter = async (event: FormEvent) => {
+    event.preventDefault();
+    setAuditBusy(true);
+    setAuditError('');
+
+    try {
+      const next = await fetchAdminAudit({
+        limit: 25,
+        action: auditAction.trim() || undefined
+      });
+      setAuditEntries(next.entries);
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : 'Could not load the audit log.');
+    } finally {
+      setAuditBusy(false);
+    }
+  };
+
+  const viewDetails = async (agent: AdminAgent) => {
+    setDetailBusy(agent.id);
+    setDetailError('');
+
+    try {
+      setDetail(await fetchAdminAgentDetail(agent.id));
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : 'Could not load the account details.');
+    } finally {
+      setDetailBusy(null);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <section className="bg-white rounded-lg shadow p-6">
@@ -221,17 +624,30 @@ export default function AdminPage() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => void fetchDir(offset)}
-          disabled={loading}
-          className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-2 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-60"
-        >
-          {loading
-            ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-            : <RefreshCw size={14} aria-hidden="true" />}
-          Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={openCreate}
+            className="inline-flex items-center gap-1 text-sm font-medium text-white bg-blue-700 px-3 py-2 rounded hover:bg-blue-800"
+          >
+            <Plus size={14} aria-hidden="true" />
+            Create account
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void fetchDir(offset);
+              void refreshManagement();
+            }}
+            disabled={loading}
+            className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-2 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-60"
+          >
+            {loading
+              ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              : <RefreshCw size={14} aria-hidden="true" />}
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Both banners are live regions: an action on a row below the fold is not
@@ -253,6 +669,229 @@ export default function AdminPage() {
         Agent registrations appear here as pending. Approve an agent before they can sign in; use
         the review queue separately to approve or reject submitted records.
       </aside>
+
+      <AdminDashboardSection dashboard={dashboard} error={dashboardError} />
+
+      <form
+        onSubmit={applyFilters}
+        className="mb-4 bg-white rounded-lg shadow p-4"
+        aria-label="Filter accounts"
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <Search size={16} aria-hidden="true" className="text-blue-800" />
+          <h2 className="font-semibold text-gray-900">Find an account</h2>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <label className="text-sm text-gray-700">
+            Search
+            <input
+              type="search"
+              value={searchDraft}
+              onChange={event => setSearchDraft(event.target.value)}
+              placeholder="Code, name, email or NIN"
+              className="mt-1 w-full border border-gray-400 rounded-md p-2"
+            />
+          </label>
+          <label className="text-sm text-gray-700">
+            Status
+            <select
+              value={statusDraft}
+              onChange={event => setStatusDraft(event.target.value)}
+              className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+            >
+              {STATUS_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-gray-700">
+            Role
+            <select
+              value={roleDraft}
+              onChange={event => setRoleDraft(event.target.value)}
+              className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+            >
+              <option value="">Any role</option>
+              <option value="AGENT">Agent</option>
+              <option value="SUPERVISOR">Supervisor</option>
+              <option value="ADMIN">Administrator</option>
+            </select>
+          </label>
+          <label className="text-sm text-gray-700">
+            Location
+            <select
+              value={locationDraft}
+              onChange={event => setLocationDraft(event.target.value)}
+              className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+            >
+              <option value="">Any location</option>
+              {locationOptions.map(location => (
+                <option key={location} value={location}>{location}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-gray-700">
+            Registration
+            <select
+              value={selfRegisteredDraft}
+              onChange={event => setSelfRegisteredDraft(event.target.value)}
+              className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+            >
+              <option value="">Any source</option>
+              <option value="true">Self-registered</option>
+              <option value="false">Created by admin</option>
+            </select>
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="submit"
+            className="inline-flex items-center gap-1 text-sm font-medium bg-blue-700 text-white px-3 py-2 rounded-md hover:bg-blue-800"
+          >
+            <Search size={14} aria-hidden="true" />
+            Apply filters
+          </button>
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="text-sm text-gray-700 bg-white px-3 py-2 rounded border border-gray-300 hover:bg-gray-50"
+          >
+            Clear
+          </button>
+          {Object.keys(filters).length > 0 && (
+            <span className="text-sm text-gray-600">
+              {total} matching account{total === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
+      </form>
+
+      {createOpen && (
+        <form onSubmit={submitCreate} className="mb-4 bg-white rounded-lg shadow p-4" aria-label="Create an account">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h2 className="font-semibold text-gray-900">Create an account</h2>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(false)}
+              className="text-gray-500 hover:text-gray-800 p-1"
+              aria-label="Close create form"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+
+          {createError && (
+            <p role="alert" className="text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2 mb-3">
+              {createError}
+            </p>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <CreateField label="Agent code" value={createForm.agent_code} onChange={value => updateCreateField('agent_code', value)} required />
+            <CreateField label="Full name" value={createForm.full_name} onChange={value => updateCreateField('full_name', value)} required />
+            <CreateField label="Username" value={createForm.username} onChange={value => updateCreateField('username', value)} required />
+            <CreateField label="Password" type="password" value={createForm.password} onChange={value => updateCreateField('password', value)} required />
+            <label className="text-sm text-gray-700">
+              Role
+              <select
+                value={createForm.role ?? 'AGENT'}
+                onChange={event => updateCreateField('role', event.target.value)}
+                className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+              >
+                <option value="AGENT">Agent</option>
+                <option value="SUPERVISOR">Supervisor</option>
+                <option value="ADMIN">Administrator</option>
+              </select>
+            </label>
+            <label className="text-sm text-gray-700">
+              Status
+              <select
+                value={createForm.status ?? 'ACTIVE'}
+                onChange={event => updateCreateField('status', event.target.value)}
+                className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+              >
+                <option value="ACTIVE">Active</option>
+                <option value="PENDING">Pending approval</option>
+                <option value="SUSPENDED">Suspended</option>
+              </select>
+            </label>
+            <CreateField label="NIN (optional)" value={createForm.nin} onChange={value => updateCreateField('nin', value)} />
+            <CreateField label="Phone (optional)" value={createForm.phone} onChange={value => updateCreateField('phone', value)} />
+            <CreateField label="Email (optional)" type="email" value={createForm.email} onChange={value => updateCreateField('email', value)} />
+            <CreateField label="Location (optional)" value={createForm.location} onChange={value => updateCreateField('location', value)} />
+            <CreateField label="Monthly target" type="number" value={createForm.monthly_target === undefined ? '' : String(createForm.monthly_target)} onChange={value => updateCreateField('monthly_target', value)} />
+            <CreateField label="IMEI (optional)" value={createForm.imei} onChange={value => updateCreateField('imei', value)} />
+          </div>
+
+          <button
+            type="submit"
+            disabled={createBusy}
+            className="mt-3 inline-flex items-center gap-1 text-sm font-medium bg-blue-700 text-white px-4 py-2 rounded-md hover:bg-blue-800 disabled:opacity-60"
+          >
+            {createBusy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />}
+            Create account
+          </button>
+        </form>
+      )}
+
+      {detailError && (
+        <p role="alert" className="mb-4 text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2">
+          {detailError}
+        </p>
+      )}
+
+      {detail && (
+        <AgentDetailSection
+          detail={detail}
+          onClose={() => setDetail(null)}
+          onEditProfile={async (email, location, phone) => {
+            await runAction(detail, {
+              action: 'SET_PROFILE',
+              email: email.trim() || null,
+              location: location.trim() || null,
+              phone: phone.trim() || null
+            });
+            await viewDetails(detail);
+          }}
+        />
+      )}
+
+      <AdminTargetsSection
+        period={targetPeriod}
+        onPeriodChange={setTargetPeriod}
+        targets={targets}
+        meta={targetMeta}
+        scope={targetScope}
+        onScopeChange={value => {
+          setTargetScope(value);
+          setTargetKey('');
+        }}
+        scopeKey={targetKey}
+        onScopeKeyChange={setTargetKey}
+        value={targetValue}
+        onValueChange={setTargetValue}
+        busy={targetBusy}
+        error={targetError}
+        onSubmit={saveTarget}
+        onClear={target => void removeTarget(target)}
+      />
+
+      <AdminPeriodsSection
+        periods={periods}
+        meta={periodMeta}
+        error={periodError}
+        busy={periodBusy}
+        onClose={period => void closePeriod(period)}
+      />
+
+      <AdminAuditSection
+        entries={auditEntries}
+        action={auditAction}
+        onActionChange={setAuditAction}
+        error={auditError}
+        busy={auditBusy}
+        onSubmit={applyAuditFilter}
+      />
 
       {agents.length === 0 && !loading && (
         <p className="text-gray-700 bg-white rounded-lg shadow p-6 text-center">
@@ -278,31 +917,31 @@ export default function AdminPage() {
               }}
               onResetPassword={() => void resetPasswordFor(agent)}
               onRoleChange={(role) => void runAction(agent, { action: 'SET_ROLE', role })}
-              onSuspend={() =>
+              onSuspend={(reason) =>
                 void runAction(
                   agent,
-                  { action: 'SET_STATUS', status: 'SUSPENDED' },
+                  { action: 'SET_STATUS', status: 'SUSPENDED', reason },
                   `Suspend ${agent.agent_code}? Their devices are revoked and they can no longer sign in until reinstated.`
                 )}
-              onReinstate={() => void runAction(agent, { action: 'SET_STATUS', status: 'ACTIVE' })}
-              onApprove={() =>
+              onReinstate={(reason) => void runAction(agent, { action: 'SET_STATUS', status: 'ACTIVE', reason })}
+              onApprove={(reason) =>
                 void runAction(
                   agent,
-                  { action: 'SET_STATUS', status: 'ACTIVE' },
+                  { action: 'SET_STATUS', status: 'ACTIVE', reason },
                   `Approve ${agent.full_name}'s agent registration? They will be able to sign in with their IMEI.`
                 )}
-              onReject={() =>
+              onReject={(reason) =>
                 void runAction(
                   agent,
-                  { action: 'SET_STATUS', status: 'REJECTED' },
+                  { action: 'SET_STATUS', status: 'REJECTED', reason },
                   `Reject ${agent.full_name}'s registration? They will not be able to sign in.`
                 )}
               onReviewAgain={() =>
                 void runAction(agent, { action: 'SET_STATUS', status: 'PENDING' })}
-              onRetire={() =>
+              onRetire={(reason) =>
                 void runAction(
                   agent,
-                  { action: 'SET_STATUS', status: 'DELETED' },
+                  { action: 'SET_STATUS', status: 'DELETED', reason },
                   `Retire ${agent.agent_code} permanently? Their login and devices are revoked, and a retired account can never be restored.`
                 )}
               onRevoke={() =>
@@ -314,6 +953,8 @@ export default function AdminPage() {
               onIssueCode={() => void issueCode(agent)}
               onDismissCode={dismissCode}
               issuedCode={issuedCode?.id === agent.id ? issuedCode.result : null}
+              onViewDetails={() => void viewDetails(agent)}
+              detailsBusy={detailBusy === agent.id}
               onTargetChange={(target) =>
                 void runAction(agent, { action: 'SET_MONTHLY_TARGET', monthly_target: target })}
             />
@@ -379,6 +1020,8 @@ function AgentCard({
   onRevoke,
   onIssueCode,
   onDismissCode,
+  onViewDetails,
+  detailsBusy,
   onTargetChange
 }: {
   agent: AdminAgent;
@@ -393,15 +1036,17 @@ function AgentCard({
   onToggleReset: () => void;
   onResetPassword: () => void;
   onRoleChange: (role: AdminAgentRole) => void;
-  onSuspend: () => void;
-  onReinstate: () => void;
-  onApprove: () => void;
-  onReject: () => void;
+  onSuspend: (reason?: string) => void;
+  onReinstate: (reason?: string) => void;
+  onApprove: (reason?: string) => void;
+  onReject: (reason?: string) => void;
   onReviewAgain: () => void;
-  onRetire: () => void;
+  onRetire: (reason?: string) => void;
   onRevoke: () => void;
   onIssueCode: () => void;
   onDismissCode: () => void;
+  onViewDetails: () => void;
+  detailsBusy: boolean;
   onTargetChange: (target: number) => void;
 }) {
   const retired = agent.status === 'DELETED';
@@ -410,6 +1055,7 @@ function AgentCard({
   const [copied, setCopied] = useState(false);
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState(String(agent.monthly_target ?? 0));
+  const [statusReason, setStatusReason] = useState('');
 
   const copyCode = async (code: string) => {
     if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
@@ -463,6 +1109,9 @@ function AgentCard({
             {' · '}{agent.active_device_count} active device{agent.active_device_count === 1 ? '' : 's'}
             {isSelf && <span className="text-gray-600"> · this is you</span>}
           </p>
+          {agent.status_reason && (
+            <p className="text-sm text-amber-900 mt-1">Status reason: {agent.status_reason}</p>
+          )}
         </div>
         <span className={`text-xs font-medium px-2 py-1 rounded-full border ${STATUS_TONE[agent.status] ?? 'text-gray-800 border-gray-300'}`}>
           {STATUS_WORDS[agent.status] ?? agent.status}
@@ -489,7 +1138,7 @@ function AgentCard({
               <button
                 type="button"
                 disabled={busy}
-                onClick={onApprove}
+                onClick={() => onApprove(statusReason.trim() || undefined)}
                 className="inline-flex items-center gap-1 text-sm font-medium text-green-800 bg-white px-3 py-1.5 rounded border border-green-300 hover:bg-green-50 disabled:opacity-50"
               >
                 <CheckCircle2 size={14} aria-hidden="true" />
@@ -498,7 +1147,7 @@ function AgentCard({
               <button
                 type="button"
                 disabled={busy}
-                onClick={onReject}
+                onClick={() => onReject(statusReason.trim() || undefined)}
                 className="inline-flex items-center gap-1 text-sm font-medium text-red-800 bg-white px-3 py-1.5 rounded border border-red-300 hover:bg-red-50 disabled:opacity-50"
               >
                 <XCircle size={14} aria-hidden="true" />
@@ -521,7 +1170,7 @@ function AgentCard({
             <button
               type="button"
               disabled={busy || isSelf || lastAdmin}
-              onClick={onSuspend}
+              onClick={() => onSuspend(statusReason.trim() || undefined)}
               title={lastAdmin ? 'The last active administrator cannot be suspended.' : undefined}
               className="inline-flex items-center gap-1 text-sm font-medium text-amber-800 bg-white px-3 py-1.5 rounded border border-amber-300 hover:bg-amber-50 disabled:opacity-50"
             >
@@ -534,7 +1183,7 @@ function AgentCard({
             <button
               type="button"
               disabled={busy}
-              onClick={onReinstate}
+              onClick={() => onReinstate(statusReason.trim() || undefined)}
               className="inline-flex items-center gap-1 text-sm font-medium text-green-800 bg-white px-3 py-1.5 rounded border border-green-300 hover:bg-green-50 disabled:opacity-50"
             >
               <RotateCcw size={14} aria-hidden="true" />
@@ -546,7 +1195,7 @@ function AgentCard({
             <button
               type="button"
               disabled={busy || isSelf || lastAdmin}
-              onClick={onRetire}
+              onClick={() => onRetire(statusReason.trim() || undefined)}
               title={lastAdmin ? 'The last active administrator cannot be retired.' : undefined}
               className="inline-flex items-center gap-1 text-sm font-medium text-red-800 bg-white px-3 py-1.5 rounded border border-red-300 hover:bg-red-50 disabled:opacity-50"
             >
@@ -568,6 +1217,18 @@ function AgentCard({
               Set target
             </button>
           )}
+
+          <button
+            type="button"
+            disabled={detailsBusy}
+            onClick={onViewDetails}
+            className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {detailsBusy
+              ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              : <Eye size={14} aria-hidden="true" />}
+            View details
+          </button>
 
           <button
             type="button"
@@ -606,6 +1267,23 @@ function AgentCard({
           {busy && <Loader2 size={16} className="animate-spin text-blue-700" aria-hidden="true" />}
         </div>
       </div>
+
+      {!retired && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label htmlFor={`reason-${agent.id}`} className="text-xs font-semibold text-gray-700">
+            Reason for status change (optional)
+          </label>
+          <input
+            id={`reason-${agent.id}`}
+            type="text"
+            value={statusReason}
+            onChange={event => setStatusReason(event.target.value)}
+            maxLength={500}
+            placeholder="Shown to the agent and stored in the audit log"
+            className="flex-1 min-w-56 text-sm border border-gray-400 rounded-md p-2"
+          />
+        </div>
+      )}
 
       {editingTarget && !retired && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -733,6 +1411,517 @@ function validatePassword(password: string): string | null {
     return 'Password must contain at least one letter and one digit.';
   }
   return null;
+}
+
+function AdminDashboardSection({ dashboard, error }: { dashboard: AdminDashboard | null; error: string }) {
+  if (error) {
+    return (
+      <p role="alert" className="mb-4 text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2">
+        {error}
+      </p>
+    );
+  }
+
+  if (!dashboard) {
+    return (
+      <div className="mb-4 bg-white rounded-lg shadow p-4 text-sm text-gray-600">
+        Loading management statistics…
+      </div>
+    );
+  }
+
+  const cards = [
+    { label: 'Total agents', value: dashboard.agents.total, note: `${dashboard.agents.self_registered} self-registered` },
+    { label: 'Active agents', value: dashboard.agents.active, note: `${dashboard.agents.pending} pending approval` },
+    { label: 'Approved enrollments', value: dashboard.enrollments.approved, note: `${dashboard.enrollments.pending} pending, ${dashboard.enrollments.rejected} rejected` },
+    { label: 'Monthly target', value: dashboard.target.monthly_target, note: dashboard.target.configured ? `${dashboard.target.achievement_percent ?? 0}% achieved` : 'Not configured' },
+    { label: 'Devices', value: dashboard.devices.active, note: `${dashboard.devices.total} total, ${dashboard.devices.revoked} revoked` },
+    { label: 'Reporting agents', value: dashboard.enrollments.agents_reporting, note: `${dashboard.enrollments.submissions} submissions` }
+  ];
+
+  return (
+    <section className="mb-4" data-testid="admin-dashboard" aria-label="Management overview">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+        <h2 className="font-semibold text-gray-900">Management overview</h2>
+        <span className="text-sm text-gray-600">
+          {formatMonth(dashboard.period.period_start_date)} · {dashboard.period.due ? 'closing due' : 'open'}
+          {dashboard.period.frozen ? ' · closed' : ''}
+          {dashboard.period.published ? ' · published' : ''}
+        </span>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {cards.map(card => (
+          <div key={card.label} className="bg-white rounded-lg shadow p-4">
+            <p className="text-xs uppercase tracking-wide text-gray-600">{card.label}</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{card.value}</p>
+            <p className="text-xs text-gray-600 mt-1">{card.note}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2 mt-3">
+        <div className="bg-white rounded-lg shadow p-4">
+          <h3 className="font-semibold text-gray-900 mb-2">By location</h3>
+          {dashboard.locations.length === 0 ? (
+            <p className="text-sm text-gray-600">No active agents yet.</p>
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {dashboard.locations.map(location => (
+                <li key={location.location} className="flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-100 pb-1">
+                  <span className="font-medium text-gray-900">{location.location}</span>
+                  <span className="text-gray-700">
+                    {location.agent_count} agent{location.agent_count === 1 ? '' : 's'} · {location.approved} approved
+                    {' · '}{location.configured ? `${location.target} target` : 'no target'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-4">
+          <h3 className="font-semibold text-gray-900 mb-2">Top agents this month</h3>
+          {dashboard.top_agents.length === 0 ? (
+            <p className="text-sm text-gray-600">No agents to rank yet.</p>
+          ) : (
+            <ol className="space-y-2 text-sm list-decimal list-inside">
+              {dashboard.top_agents.map(agent => (
+                <li key={agent.agent_id} className="flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-100 pb-1">
+                  <span className="font-medium text-gray-900">{agent.full_name}</span>
+                  <span className="text-gray-700">
+                    {agent.agent_code} · {agent.approved} approved
+                    {agent.configured ? ` of ${agent.target}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CreateField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  required = false
+}: {
+  label: string;
+  value?: string | number;
+  onChange: (value: string) => void;
+  type?: string;
+  required?: boolean;
+}) {
+  return (
+    <label className="text-sm text-gray-700">
+      {label}
+      <input
+        type={type}
+        value={value ?? ''}
+        onChange={event => onChange(event.target.value)}
+        required={required}
+        min={type === 'number' ? 0 : undefined}
+        max={type === 'number' ? 1000000 : undefined}
+        className="mt-1 w-full border border-gray-400 rounded-md p-2"
+      />
+    </label>
+  );
+}
+
+function AgentDetailSection({
+  detail,
+  onClose,
+  onEditProfile
+}: {
+  detail: AdminAgentDetail;
+  onClose: () => void;
+  onEditProfile: (email: string, location: string, phone: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState(detail.email ?? '');
+  const [location, setLocation] = useState(detail.location ?? '');
+  const [phone, setPhone] = useState(detail.phone ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setEmail(detail.email ?? '');
+    setLocation(detail.location ?? '');
+    setPhone(detail.phone ?? '');
+    setError('');
+  }, [detail.id, detail.email, detail.location, detail.phone]);
+
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+
+    try {
+      await onEditProfile(email, location, phone);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The profile could not be updated.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mb-4 bg-white rounded-lg shadow p-4" data-testid="admin-agent-detail" aria-label="Agent details">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-gray-900">
+            {detail.agent_code} · {detail.full_name}
+          </h2>
+          <p className="text-sm text-gray-700">
+            {detail.status} · {detail.role} · monthly target {detail.target.target || 'not configured'}
+            {' · '}{detail.summary.approved} approved this month
+          </p>
+          {detail.status_reason && (
+            <p className="text-sm text-amber-900 mt-1">Status reason: {detail.status_reason}</p>
+          )}
+        </div>
+        <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-800 p-1" aria-label="Close agent details">
+          <X size={16} aria-hidden="true" />
+        </button>
+      </div>
+
+      {error && <p role="alert" className="mt-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2">{error}</p>}
+
+      <div className="grid gap-4 lg:grid-cols-2 mt-3">
+        <div>
+          <h3 className="font-semibold text-gray-900 mb-2">Devices</h3>
+          {detail.devices.length === 0 ? (
+            <p className="text-sm text-gray-600">No devices registered.</p>
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {detail.devices.map(device => (
+                <li key={device.id} className="border border-gray-200 rounded p-2">
+                  <p className="font-medium text-gray-900">{device.status}</p>
+                  <p className="text-gray-700 break-all">{device.device_uuid}</p>
+                  <p className="text-gray-600">
+                    {device.imei ? `IMEI ${device.imei} · ` : ''}
+                    last seen {device.last_seen_at ?? 'never'}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div>
+          <h3 className="font-semibold text-gray-900 mb-2">Target history</h3>
+          {detail.targets.length === 0 ? (
+            <p className="text-sm text-gray-600">No period-specific targets. The account default or a location target applies.</p>
+          ) : (
+            <ul className="space-y-1 text-sm">
+              {detail.targets.map(target => (
+                <li key={target.id} className="flex justify-between gap-2 border-b border-gray-100 pb-1">
+                  <span>{formatMonth(target.period_start_date)}</span>
+                  <span className="font-medium">{target.target}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <form onSubmit={saveProfile} className="mt-4 border-t border-gray-200 pt-3">
+        <h3 className="font-semibold text-gray-900 mb-2">Profile</h3>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <CreateField label="Email" type="email" value={email} onChange={setEmail} />
+          <CreateField label="Location" value={location} onChange={setLocation} />
+          <CreateField label="Phone" value={phone} onChange={setPhone} />
+        </div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="mt-2 inline-flex items-center gap-1 text-sm font-medium bg-blue-700 text-white px-3 py-2 rounded-md hover:bg-blue-800 disabled:opacity-60"
+        >
+          {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+          Save profile
+        </button>
+      </form>
+
+      <div className="mt-4 border-t border-gray-200 pt-3">
+        <h3 className="font-semibold text-gray-900 mb-2">Recent audit</h3>
+        <AuditList entries={detail.recent_audit} />
+      </div>
+    </section>
+  );
+}
+
+function AdminTargetsSection({
+  period,
+  onPeriodChange,
+  targets,
+  meta,
+  scope,
+  onScopeChange,
+  scopeKey,
+  onScopeKeyChange,
+  value,
+  onValueChange,
+  busy,
+  error,
+  onSubmit,
+  onClear
+}: {
+  period: string;
+  onPeriodChange: (value: string) => void;
+  targets: AdminTarget[];
+  meta: AdminTargetsResponse['meta'] | null;
+  scope: 'ORGANIZATION' | 'LOCATION' | 'AGENT';
+  onScopeChange: (value: 'ORGANIZATION' | 'LOCATION' | 'AGENT') => void;
+  scopeKey: string;
+  onScopeKeyChange: (value: string) => void;
+  value: string;
+  onValueChange: (value: string) => void;
+  busy: boolean;
+  error: string;
+  onSubmit: (event: FormEvent) => void;
+  onClear: (target: AdminTarget) => void;
+}) {
+  return (
+    <section className="mb-4 bg-white rounded-lg shadow p-4" data-testid="admin-targets" aria-label="Monthly targets">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <Target size={16} aria-hidden="true" className="text-blue-800" />
+          <h2 className="font-semibold text-gray-900">Monthly targets</h2>
+        </div>
+        <span className="text-sm text-gray-600">
+          Organization target: {meta?.organization_target ?? 0}
+        </span>
+      </div>
+
+      {error && <p role="alert" className="mb-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2">{error}</p>}
+
+      <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 items-end">
+        <label className="text-sm text-gray-700">
+          Period
+          <input
+            type="month"
+            value={period}
+            onChange={event => onPeriodChange(event.target.value)}
+            className="mt-1 w-full border border-gray-400 rounded-md p-2"
+          />
+        </label>
+        <label className="text-sm text-gray-700">
+          Scope
+          <select
+            value={scope}
+            onChange={event => onScopeChange(event.target.value as 'ORGANIZATION' | 'LOCATION' | 'AGENT')}
+            className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+          >
+            <option value="ORGANIZATION">Organization</option>
+            <option value="LOCATION">Location</option>
+            <option value="AGENT">Agent</option>
+          </select>
+        </label>
+        {scope === 'ORGANIZATION' ? (
+          <div className="text-sm text-gray-600 pb-2">Applies to the whole organization.</div>
+        ) : (
+          <label className="text-sm text-gray-700">
+            {scope === 'AGENT' ? 'Agent' : 'Location'}
+            <select
+              value={scopeKey}
+              onChange={event => onScopeKeyChange(event.target.value)}
+              className="mt-1 w-full border border-gray-400 rounded-md p-2 bg-white"
+            >
+              <option value="">Choose…</option>
+              {scope === 'AGENT'
+                ? (meta?.agents ?? []).map(agent => (
+                    <option key={agent.id} value={String(agent.id)}>
+                      {agent.agent_code} · {agent.full_name}
+                    </option>
+                  ))
+                : (meta?.locations ?? []).map(location => (
+                    <option key={location} value={location}>{location}</option>
+                  ))}
+            </select>
+          </label>
+        )}
+        <label className="text-sm text-gray-700">
+          Target
+          <input
+            type="number"
+            min="0"
+            max="1000000"
+            value={value}
+            onChange={event => onValueChange(event.target.value)}
+            className="mt-1 w-full border border-gray-400 rounded-md p-2"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={busy}
+          className="inline-flex items-center justify-center gap-1 text-sm font-medium bg-blue-700 text-white px-3 py-2 rounded-md hover:bg-blue-800 disabled:opacity-60"
+        >
+          {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+          Save target
+        </button>
+      </form>
+
+      <div className="mt-3">
+        {targets.length === 0 ? (
+          <p className="text-sm text-gray-600">No targets set for {formatMonth(period)}.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100 text-sm">
+            {targets.map(target => (
+              <li key={target.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span>
+                  <span className="font-medium text-gray-900">{target.scope_type}</span>
+                  {' · '}{target.scope_label} · {target.target}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onClear(target)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-red-800 bg-white px-2 py-1 rounded border border-red-300 hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Trash2 size={12} aria-hidden="true" />
+                  Clear
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AdminPeriodsSection({
+  periods,
+  meta,
+  error,
+  busy,
+  onClose
+}: {
+  periods: AdminPeriodRow[];
+  meta: AdminPeriodsResponse['meta'] | null;
+  error: string;
+  busy: string | null;
+  onClose: (period: AdminPeriodRow) => void;
+}) {
+  return (
+    <section className="mb-4 bg-white rounded-lg shadow p-4" data-testid="admin-periods" aria-label="Period history">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <CalendarDays size={16} aria-hidden="true" className="text-blue-800" />
+          <h2 className="font-semibold text-gray-900">Period history</h2>
+        </div>
+        <span className="text-sm text-gray-600">
+          Close grace: {meta?.grace_hours ?? 0} hours · {meta?.business_timezone ?? ''}
+        </span>
+      </div>
+
+      {error && <p role="alert" className="mb-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2">{error}</p>}
+
+      <ul className="divide-y divide-gray-100 text-sm">
+        {periods.map(period => (
+          <li key={`${period.period_type}-${period.period_start_date}`} className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <div>
+              <p className="font-medium text-gray-900">{formatMonth(period.period_start_date)}</p>
+              <p className="text-gray-600">
+                {period.totals.approved} approved · {period.totals.pending} pending · {period.rewards.total} rewards
+                {' · '}{period.frozen ? 'closed' : period.due ? 'due to close' : 'open'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onClose(period)}
+              disabled={busy === period.period_start_date || period.frozen || !period.due}
+              className="text-sm font-medium text-blue-800 bg-white px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            >
+              {busy === period.period_start_date
+                ? 'Closing…'
+                : period.frozen ? 'Closed' : period.due ? 'Close period' : 'Not due'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function AdminAuditSection({
+  entries,
+  action,
+  onActionChange,
+  error,
+  busy,
+  onSubmit
+}: {
+  entries: AdminAuditEntry[];
+  action: string;
+  onActionChange: (value: string) => void;
+  error: string;
+  busy: boolean;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <section className="mb-4 bg-white rounded-lg shadow p-4" data-testid="admin-audit" aria-label="Audit log">
+      <div className="flex items-center gap-2 mb-2">
+        <Activity size={16} aria-hidden="true" className="text-blue-800" />
+        <h2 className="font-semibold text-gray-900">Audit log</h2>
+      </div>
+
+      <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-2 mb-3">
+        <label className="text-sm text-gray-700">
+          Action
+          <input
+            type="text"
+            value={action}
+            onChange={event => onActionChange(event.target.value)}
+            placeholder="admin.target.set"
+            className="mt-1 block border border-gray-400 rounded-md p-2"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={busy}
+          className="text-sm font-medium bg-blue-700 text-white px-3 py-2 rounded-md hover:bg-blue-800 disabled:opacity-60"
+        >
+          {busy ? 'Loading…' : 'Filter audit'}
+        </button>
+      </form>
+
+      {error && <p role="alert" className="mb-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded px-3 py-2">{error}</p>}
+
+      <AuditList entries={entries} />
+    </section>
+  );
+}
+
+function AuditList({ entries }: { entries: AdminAuditEntry[] }) {
+  if (entries.length === 0) {
+    return <p className="text-sm text-gray-600">No audit entries.</p>;
+  }
+
+  return (
+    <ul className="space-y-2 text-sm">
+      {entries.map(entry => (
+        <li key={entry.id} className="border-b border-gray-100 pb-1">
+          <p className="text-gray-900">
+            <span className="font-medium">{entry.action}</span>
+            {' · '}{entry.created_at}
+            {entry.actor_agent_code ? ` · by ${entry.actor_agent_code}` : ''}
+          </p>
+          {(entry.entity_type || entry.entity_id) && (
+            <p className="text-gray-600">
+              {entry.entity_type ?? 'entity'}{entry.entity_id ? ` #${entry.entity_id}` : ''}
+            </p>
+          )}
+          {entry.metadata && Object.keys(entry.metadata).length > 0 && (
+            <p className="text-gray-600 break-words">{JSON.stringify(entry.metadata)}</p>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 const STATUS_WORDS: Record<string, string> = {

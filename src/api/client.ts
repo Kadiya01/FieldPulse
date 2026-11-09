@@ -637,17 +637,32 @@ export interface AdminAgent {
   self_registered: boolean;
   role: AdminAgentRole;
   status: AdminAgentStatus;
+  status_reason?: string | null;
+  status_changed_at?: string | null;
+  imei?: string | null;
+  device_type?: string | null;
   /** The login username, when the account has one. Null after credential revoke/retire. */
   username: string | null;
   has_credential: boolean;
   active_device_count: number;
   created_at: string;
+  updated_at?: string | null;
+}
+
+export interface AdminAgentFilters {
+  q?: string;
+  status?: AdminAgentStatus;
+  role?: AdminAgentRole;
+  location?: string;
+  self_registered?: boolean;
 }
 
 export interface AdminAgentList {
   agents: AdminAgent[];
   meta: {
     pagination: { total: number; limit: number; offset: number };
+    filters?: AdminAgentFilters;
+    locations?: string[];
     active_admins: number;
     requested_by: string;
   };
@@ -660,8 +675,21 @@ export interface AdminAgentList {
  * disable the self-guarded actions the server would refuse anyway â€” a nuance
  * worth surfacing as disabled controls rather than as 409s.
  */
-export async function fetchAdminAgents(limit = 50, offset = 0): Promise<AdminAgentList> {
+export async function fetchAdminAgents(
+  limit = 50,
+  offset = 0,
+  filters: AdminAgentFilters = {}
+): Promise<AdminAgentList> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+
+    params.set(key, typeof value === 'boolean' ? String(value) : String(value));
+  }
+
   const response = await authenticatedFetch(`/admin/agents.php?${params.toString()}`);
 
   if (!response.ok) {
@@ -679,8 +707,17 @@ export interface CreateAdminAgentInput {
   password: string;
   /** Optional; the server defaults a new account to AGENT. */
   role?: AdminAgentRole;
+  /** Optional; the server defaults a new account to ACTIVE. */
+  status?: Exclude<AdminAgentStatus, 'DELETED'>;
+  status_reason?: string;
+  nin?: string;
+  phone?: string;
+  email?: string;
+  location?: string;
+  monthly_target?: number;
   /** An IMEI to bind at create time; optional and administrative, never a credential. */
   imei?: string;
+  device_type?: string;
 }
 
 /**
@@ -710,10 +747,11 @@ export async function createAdminAgent(input: CreateAdminAgentInput): Promise<Ad
 /** The four state-changing actions the directory supports. */
 export type AdminAgentAction =
   | { action: 'SET_ROLE'; role: AdminAgentRole }
-  | { action: 'SET_STATUS'; status: AdminAgentStatus }
+  | { action: 'SET_STATUS'; status: AdminAgentStatus; reason?: string }
   | { action: 'SET_PASSWORD'; password: string }
   | { action: 'REVOKE_CREDENTIAL' }
-  | { action: 'SET_MONTHLY_TARGET'; monthly_target: number };
+  | { action: 'SET_MONTHLY_TARGET'; monthly_target: number }
+  | { action: 'SET_PROFILE'; email?: string | null; location?: string | null; phone?: string | null };
 
 /**
  * Apply one state-changing action to an account.
@@ -778,6 +816,358 @@ export async function issuePairingCode(id: number, label?: string): Promise<Issu
   }
 
   const envelope = (await response.json()) as { data: IssuePairingCodeResult };
+  return envelope.data;
+}
+
+/* ---------------------------------------------------------------------------
+ * Admin management (Phase 4)
+ *
+ * These reads are server-derived: the dashboard aggregates the same summary
+ * table the agent dashboard uses, period history reads the same frozen flags
+ * the reward service writes, and the audit list is the append-only ledger. The
+ * UI never computes a statistic of its own.
+ * ------------------------------------------------------------------------- */
+
+export interface AdminAuditEntry {
+  id: number;
+  actor_agent_id: number | null;
+  actor_agent_code: string | null;
+  actor_full_name: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: number | null;
+  metadata: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface AdminDashboard {
+  period: {
+    period_type: 'MONTHLY';
+    period_start_date: string;
+    period_end_date: string;
+    business_timezone: string;
+    due: boolean;
+    frozen: boolean;
+    published: boolean;
+  };
+  agents: {
+    total: number;
+    active: number;
+    inactive: number;
+    pending: number;
+    rejected: number;
+    suspended: number;
+    retired: number;
+    self_registered: number;
+  };
+  devices: {
+    total: number;
+    active: number;
+    pending: number;
+    revoked: number;
+    disabled: number;
+  };
+  enrollments: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+    agents_reporting: number;
+  };
+  target: {
+    monthly_target: number;
+    scope: 'ORGANIZATION';
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  };
+  locations: Array<{
+    location: string;
+    agent_count: number;
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+    target: number;
+    scope: string;
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  }>;
+  top_agents: Array<{
+    agent_id: number;
+    agent_code: string;
+    full_name: string;
+    location: string | null;
+    approved: number;
+    pending: number;
+    rejected: number;
+    target: number;
+    scope: string;
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  }>;
+  recent_activity: AdminAuditEntry[];
+}
+
+export async function fetchAdminDashboard(period?: string): Promise<AdminDashboard> {
+  const params = new URLSearchParams({ period_type: 'MONTHLY' });
+
+  if (period) {
+    params.set('period', period);
+  }
+
+  const response = await authenticatedFetch(`/admin/dashboard.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminDashboard };
+  return envelope.data;
+}
+
+export type AdminTargetScope = 'ORGANIZATION' | 'LOCATION' | 'AGENT';
+
+export interface AdminTarget {
+  id: number;
+  period_start_date: string;
+  scope_type: AdminTargetScope;
+  scope_key: string;
+  scope_label: string;
+  target: number;
+  configured: boolean;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminTargetsResponse {
+  targets: AdminTarget[];
+  meta: {
+    period: string;
+    period_start_date: string;
+    period_end_date: string;
+    organization_target: number;
+    locations: string[];
+    agents: Array<{
+      id: number;
+      agent_code: string;
+      full_name: string;
+      location: string | null;
+      monthly_target: number;
+    }>;
+    available_periods: string[];
+  };
+}
+
+export async function fetchAdminTargets(period?: string): Promise<AdminTargetsResponse> {
+  const params = new URLSearchParams();
+
+  if (period) {
+    params.set('period', period);
+  }
+
+  const query = params.toString();
+  const response = await authenticatedFetch(`/admin/targets.php${query ? `?${query}` : ''}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminTarget[]; meta: AdminTargetsResponse['meta'] };
+  return { targets: envelope.data, meta: envelope.meta };
+}
+
+export interface SaveAdminTargetInput {
+  scope_type: AdminTargetScope;
+  scope_key?: string;
+  agent_id?: number;
+  location?: string;
+  period: string;
+  target: number;
+  action?: 'SET' | 'CLEAR';
+}
+
+export async function saveAdminTarget(input: SaveAdminTargetInput): Promise<AdminTarget | null> {
+  const response = await authenticatedFetch('/admin/targets.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminTarget | null };
+  return envelope.data;
+}
+
+export async function clearAdminTarget(input: Omit<SaveAdminTargetInput, 'target' | 'action'>): Promise<void> {
+  const response = await authenticatedFetch('/admin/targets.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, target: 0, action: 'CLEAR' })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
+
+export interface AdminPeriodRow {
+  period_type: 'WEEKLY' | 'MONTHLY';
+  period_start_date: string;
+  period_end_date: string;
+  due: boolean;
+  frozen: boolean;
+  published: boolean;
+  totals: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+    agents_reporting: number;
+  };
+  rewards: {
+    pending: number;
+    approved: number;
+    paid: number;
+    void: number;
+    total: number;
+  };
+}
+
+export interface AdminPeriodsResponse {
+  periods: AdminPeriodRow[];
+  meta: {
+    period_type: 'WEEKLY' | 'MONTHLY';
+    current_period: string;
+    grace_hours: number;
+    business_timezone: string;
+    available_periods: string[];
+  };
+}
+
+export async function fetchAdminPeriods(
+  periodType: 'WEEKLY' | 'MONTHLY' = 'MONTHLY',
+  limit = 12
+): Promise<AdminPeriodsResponse> {
+  const params = new URLSearchParams({ period_type: periodType, limit: String(limit) });
+  const response = await authenticatedFetch(`/admin/periods.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminPeriodRow[]; meta: AdminPeriodsResponse['meta'] };
+  return { periods: envelope.data, meta: envelope.meta };
+}
+
+export interface CloseAdminPeriodResult {
+  closed: boolean;
+  reason: string;
+  period: string;
+  period_type: 'WEEKLY' | 'MONTHLY';
+  frozen: number;
+  published: number;
+  period_end_date: string;
+}
+
+export async function closeAdminPeriod(
+  period: string,
+  periodType: 'WEEKLY' | 'MONTHLY' = 'MONTHLY'
+): Promise<CloseAdminPeriodResult> {
+  const response = await authenticatedFetch('/admin/periods.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ period_type: periodType, period, action: 'CLOSE' })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: CloseAdminPeriodResult };
+  return envelope.data;
+}
+
+export interface AdminAuditFilters {
+  limit?: number;
+  offset?: number;
+  action?: string;
+  actor_agent_id?: number;
+  entity_type?: string;
+  entity_id?: number;
+}
+
+export interface AdminAuditResponse {
+  entries: AdminAuditEntry[];
+  meta: {
+    pagination: { total: number; limit: number; offset: number };
+    filters: AdminAuditFilters;
+  };
+}
+
+export async function fetchAdminAudit(filters: AdminAuditFilters = {}): Promise<AdminAuditResponse> {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+
+    params.set(key, String(value));
+  }
+
+  const query = params.toString();
+  const response = await authenticatedFetch(`/admin/audit.php${query ? `?${query}` : ''}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAuditEntry[]; meta: AdminAuditResponse['meta'] };
+  return { entries: envelope.data, meta: envelope.meta };
+}
+
+export interface AdminAgentDetail extends AdminAgent {
+  devices: Array<{
+    id: number;
+    device_uuid: string;
+    status: string;
+    registered_at: string | null;
+    last_seen_at: string | null;
+    imei: string | null;
+  }>;
+  recent_audit: AdminAuditEntry[];
+  targets: AdminTarget[];
+  target: {
+    target: number;
+    configured: boolean;
+    scope: string;
+    scope_key: string;
+    period_start_date: string;
+  };
+  summary: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+  };
+}
+
+export async function fetchAdminAgentDetail(id: number): Promise<AdminAgentDetail> {
+  const response = await authenticatedFetch(`/admin/agent.php?id=${encodeURIComponent(String(id))}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAgentDetail };
   return envelope.data;
 }
 
