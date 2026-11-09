@@ -13,7 +13,7 @@ export const API_BASE = '/api/v1';
  * An error carrying the server's own `error` envelope.
  *
  * The server distinguishes UNAUTHENTICATED, RATE_LIMITED, VALIDATION_FAILED
- * and so on, and several flows here branch on that distinction — a missing
+ * and so on, and several flows here branch on that distinction â€” a missing
  * pairing code is a 422 naming the field, not a 401. Flattening every response
  * to a boolean throws away the only information that tells the UI what to do
  * next, so the envelope is kept intact and `field` is surfaced separately
@@ -159,7 +159,7 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
       throw new Error('Authentication failed');
     }
 
-    // Another request — in this tab or a sibling — may have refreshed while
+    // Another request â€” in this tab or a sibling â€” may have refreshed while
     // this one was in flight. When the access token under us has already
     // changed, this 401 is already answered: retry on the new token rather than
     // start a second refresh, which would present the rotated cookie and get
@@ -337,6 +337,8 @@ export interface AgentRegistrationInput {
   phone: string;
   imei: string;
   device_type: string;
+  email?: string;
+  location?: string;
 }
 
 export async function registerAgent(input: AgentRegistrationInput): Promise<void> {
@@ -427,8 +429,8 @@ export type RestoreResult =
  * has to ask the server who it is. Four outcomes, and the distinction matters:
  * a live session is usable, no session means the login screen, a registered
  * server session with no local private key means the browser cleared it and the
- * device must be re-registered — which is a different screen, because the
- * user's credentials are still perfectly good — and a network failure means the
+ * device must be re-registered â€” which is a different screen, because the
+ * user's credentials are still perfectly good â€” and a network failure means the
  * question could not be asked at all.
  *
  * That last one used to be reported as "anonymous", which threw away the single
@@ -476,7 +478,7 @@ export async function restoreSession(): Promise<RestoreResult> {
  * The local record says what this handset still has to do; this says what the
  * server decided about the evidence it already holds. They are different
  * questions with different clocks, and collapsing them into one status is how a
- * client ends up reporting "received by server" as if it were "verified" — the
+ * client ends up reporting "received by server" as if it were "verified" â€” the
  * exact claim the agent must never be able to make on the server's behalf.
  */
 export interface ServerVerification {
@@ -485,6 +487,7 @@ export interface ServerVerification {
   count_claimed: number;
   received_at: string;
   captured_at: string | null;
+  reporting_month?: string | null;
   verified_at: string | null;
   counted: boolean;
   pending: boolean;
@@ -500,7 +503,7 @@ export interface ServerVerification {
  * Fetch the server's verdict for one submission.
  *
  * `bearer`-only and scoped to the calling agent's own submissions, so no device
- * signature is needed — which also means it can be called for a submission whose
+ * signature is needed â€” which also means it can be called for a submission whose
  * photo has long since been pruned from the handset. Returns null for a
  * submission the server has never heard of, which is the normal case for one
  * that is still queued locally.
@@ -526,7 +529,7 @@ export async function fetchServerVerification(submissionUuid: string): Promise<S
  * The operator review queue.
  *
  * Operator-only on the server (`SUPERVISOR`/`ADMIN`); an `AGENT` receives 403.
- * The path is `reviews/index.php` rather than `reviews.php` — the shim files
+ * The path is `reviews/index.php` rather than `reviews.php` â€” the shim files
  * under public_html are one per route, and there is no `reviews.php`.
  */
 export interface ReviewQueueItem {
@@ -585,7 +588,7 @@ export async function fetchReviewQueue(
 /**
  * Record an approve/reject decision against a queued submission.
  *
- * `note` is mandatory server-side (5–1000 characters) and deliberately so: a
+ * `note` is mandatory server-side (5â€“1000 characters) and deliberately so: a
  * decision that overrules the automated pass without recording why produces an
  * audit trail that cannot answer the only question anyone will later ask of it.
  */
@@ -612,11 +615,11 @@ export async function decideReview(
 }
 
 /**
- * The account directory (§16).
+ * The account directory (Â§16).
  *
  * ADMIN-only on the server (`Kernel`.requireAdmin)); anyone else receives 403.
  * The list is served from the `agents` table with the handful of summary
- * columns the directory needs, and every field here is presentation — the
+ * columns the directory needs, and every field here is presentation â€” the
  * privilege checks all happen against the database row on each call.
  */
 export type AdminAgentRole = 'AGENT' | 'SUPERVISOR' | 'ADMIN';
@@ -628,6 +631,9 @@ export interface AdminAgent {
   full_name: string;
   nin: string | null;
   phone: string | null;
+  email?: string | null;
+  location?: string | null;
+  monthly_target?: number;
   self_registered: boolean;
   role: AdminAgentRole;
   status: AdminAgentStatus;
@@ -651,7 +657,7 @@ export interface AdminAgentList {
  * Fetch the account directory.
  *
  * The caller identifies itself in `meta.requested_by`, which the GUI uses to
- * disable the self-guarded actions the server would refuse anyway — a nuance
+ * disable the self-guarded actions the server would refuse anyway â€” a nuance
  * worth surfacing as disabled controls rather than as 409s.
  */
 export async function fetchAdminAgents(limit = 50, offset = 0): Promise<AdminAgentList> {
@@ -681,7 +687,7 @@ export interface CreateAdminAgentInput {
  * Create an account.
  *
  * A created account always lands ACTIVE with a credential, so the person can
- * sign in on the first try — a created account is a promise to a person, not a
+ * sign in on the first try â€” a created account is a promise to a person, not a
  * draft. Duplicate code or username answers 409 IDEMPOTENCY_CONFLICT; the UI
  * shows the server's message rather than pre-checking, because the two rows can
  * collide with a concurrent create.
@@ -706,7 +712,8 @@ export type AdminAgentAction =
   | { action: 'SET_ROLE'; role: AdminAgentRole }
   | { action: 'SET_STATUS'; status: AdminAgentStatus }
   | { action: 'SET_PASSWORD'; password: string }
-  | { action: 'REVOKE_CREDENTIAL' };
+  | { action: 'REVOKE_CREDENTIAL' }
+  | { action: 'SET_MONTHLY_TARGET'; monthly_target: number };
 
 /**
  * Apply one state-changing action to an account.
@@ -737,7 +744,7 @@ export async function actOnAdminAgent(id: number, patch: AdminAgentAction): Prom
  *
  * `pairing_code` is the one and only time the plaintext is served. The server
  * stores only its SHA-256 and the UI must not persist it, write it to storage,
- * or echo it back — it is copied to the clipboard and read aloud.
+ * or echo it back â€” it is copied to the clipboard and read aloud.
  */
 export interface IssuePairingCodeResult extends AdminAgent {
   /** The ten-digit, single-use registration code. Show once, never store. */
@@ -775,11 +782,11 @@ export async function issuePairingCode(id: number, label?: string): Promise<Issu
 }
 
 /**
- * Rewards (§14).
+ * Rewards (Â§14).
  *
  * A published entitlement, not a live figure. Every number here was copied onto
  * the row when the period closed and is served from the frozen ranking, so it
- * does not move when later submissions are verified — see `docs/REWARDS.md`.
+ * does not move when later submissions are verified â€” see `docs/REWARDS.md`.
  *
  * `status` and `is_paid` are deliberately separate fields. `PENDING` and
  * `APPROVED` are published entitlements; only `PAID` means the organisation has
@@ -787,10 +794,13 @@ export async function issuePairingCode(id: number, label?: string): Promise<Issu
  * been paid when they had not, so the UI branches on `is_paid`, never on the
  * absence of `PENDING`.
  */
+export type PeriodType = 'WEEKLY' | 'MONTHLY';
+
 export type RewardStatus = 'PENDING' | 'APPROVED' | 'PAID' | 'VOID';
 
 export interface Reward {
   id: number;
+  period_type?: PeriodType;
   period_start_date: string;
   rank: number;
   total_verified_count: number;
@@ -821,8 +831,11 @@ export interface MyRewards {
   meta: { agent_code: string; grace_hours: number; payment_note: string };
 }
 
-export async function fetchMyRewards(limit = 24): Promise<MyRewards> {
+export async function fetchMyRewards(limit = 24, periodType?: PeriodType): Promise<MyRewards> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (periodType) {
+    params.set('period_type', periodType);
+  }
   const response = await authenticatedFetch(`/rewards/self.php?${params.toString()}`);
 
   if (!response.ok) {
@@ -841,6 +854,7 @@ export interface RewardPeriod {
   rewards: OperatorReward[];
   meta: {
     period: string;
+    period_type?: PeriodType;
     closed: boolean;
     available_periods: string[];
     tiers: { id: number; min_rank: number; max_rank: number; tier_label: string }[];
@@ -848,10 +862,13 @@ export interface RewardPeriod {
   };
 }
 
-export async function fetchPeriodRewards(period?: string, limit = 100): Promise<RewardPeriod> {
+export async function fetchPeriodRewards(period?: string, limit = 100, periodType?: PeriodType): Promise<RewardPeriod> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (period) {
     params.set('period', period);
+  }
+  if (periodType) {
+    params.set('period_type', periodType);
   }
 
   const response = await authenticatedFetch(`/rewards/index.php?${params.toString()}`);
@@ -888,7 +905,7 @@ export async function decideReward(
 }
 
 /**
- * The weekly standing (§13).
+ * The weekly standing (Â§13).
  *
  * Served entirely from the summary table, never by aggregating submissions, so
  * the shape is a ranked list plus the caller's own row even when that row is off
@@ -916,6 +933,7 @@ export interface LeaderboardSelf {
 }
 
 export interface Leaderboard {
+  period_type?: PeriodType;
   period_start_date: string;
   scope: 'GLOBAL' | 'SITE';
   site_id: number | null;
@@ -925,8 +943,15 @@ export interface Leaderboard {
   available_periods: string[];
 }
 
-export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
-  const qs = period ? `?period=${encodeURIComponent(period)}` : '';
+export async function fetchLeaderboard(period?: string, periodType?: PeriodType): Promise<Leaderboard> {
+  const params = new URLSearchParams();
+  if (period) {
+    params.set('period', period);
+  }
+  if (periodType) {
+    params.set('period_type', periodType);
+  }
+  const qs = params.toString() ? `?${params.toString()}` : '';
   const response = await authenticatedFetch(`/leaderboard.php${qs}`);
 
   if (!response.ok) {
@@ -935,6 +960,7 @@ export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
 
   const envelope = (await response.json()) as {
     data: {
+      period_type?: PeriodType;
       period_start_date: string;
       scope: 'GLOBAL' | 'SITE';
       site_id: number | null;
@@ -942,11 +968,169 @@ export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
       pagination: { total: number; limit: number; offset: number };
       you: LeaderboardSelf | null;
     };
-    meta: { available_periods: string[] };
+    meta: { available_periods: string[]; period_type?: PeriodType };
   };
 
   return {
     ...envelope.data,
+    period_type: envelope.data.period_type ?? envelope.meta.period_type,
     available_periods: envelope.meta.available_periods
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 3: ABH Monthly Enrollment Dashboard, Profile & Notifications
+// ---------------------------------------------------------------------------
+
+export interface DashboardData {
+  agent: {
+    id: number;
+    agent_code: string;
+    full_name: string;
+    email: string | null;
+    location: string | null;
+    monthly_target: number;
+  };
+  period: {
+    period_type: PeriodType;
+    period_start_date: string;
+    business_timezone: string;
+  };
+  totals: {
+    approved_enrollments: number;
+    total_submissions: number;
+    pending: number;
+    rejected: number;
+  };
+  target: {
+    monthly_target: number;
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  };
+  leaderboard: {
+    rank: number | null;
+    total_agents: number;
+  };
+  recent_submissions: {
+    submission_id: number;
+    submission_uuid: string;
+    count_claimed: number;
+    reporting_month: string | null;
+    status: string;
+    received_at: string;
+    verified_at: string | null;
+  }[];
+  notifications: {
+    unread_count: number;
+    items: {
+      id: number;
+      type: string;
+      title: string;
+      message: string;
+      read_at: string | null;
+      created_at: string;
+    }[];
+  };
+}
+
+export async function fetchDashboard(): Promise<DashboardData> {
+  const response = await authenticatedFetch('/dashboard.php');
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: DashboardData };
+  return envelope.data;
+}
+
+export interface ProfileData {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  nin: string | null;
+  phone: string | null;
+  email: string | null;
+  location: string | null;
+  imei: string | null;
+  device_type: string | null;
+  role: string;
+  status: string;
+  monthly_target: number;
+  created_at: string;
+}
+
+export interface ProfileUpdateInput {
+  email?: string;
+  location?: string;
+  phone: string;
+}
+
+export async function fetchProfile(): Promise<ProfileData> {
+  const response = await authenticatedFetch('/profile.php');
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: ProfileData };
+  return envelope.data;
+}
+
+export async function updateProfile(input: ProfileUpdateInput): Promise<ProfileData> {
+  const body = JSON.stringify(input);
+  const response = await authenticatedFetch('/profile.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: ProfileData };
+  return envelope.data;
+}
+
+export interface NotificationItem {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  entity_type: string | null;
+  entity_id: number | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationList {
+  items: NotificationItem[];
+  meta: {
+    unread_count: number;
+    pagination: {
+      limit: number;
+      offset: number;
+    };
+  };
+}
+
+export async function fetchNotifications(limit = 50, offset = 0): Promise<NotificationList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await authenticatedFetch('/notifications.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: NotificationItem[]; meta: NotificationList['meta'] };
+  return { items: envelope.data, meta: envelope.meta };
+}
+
+export async function markNotificationRead(id?: number): Promise<{ unread_count: number }> {
+  const body = id !== undefined ? JSON.stringify({ id }) : JSON.stringify({ mark_all: true });
+  const response = await authenticatedFetch('/notifications/read.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: { unread_count: number } };
+  return envelope.data;
 }

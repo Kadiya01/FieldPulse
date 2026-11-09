@@ -66,6 +66,7 @@ final class SubmissionStatusController implements ActionInterface
             'submission_uuid' => (string) $row['submission_uuid'],
             'status'          => $status,
             'count_claimed'   => (int) $row['count_claimed'],
+            'reporting_month' => $row['reporting_month'] ?? null,
             'received_at'     => (string) $row['server_received_at'],
             'captured_at'     => $row['client_captured_at'] ?? null,
             'verified_at'     => $row['verified_at'] ?? null,

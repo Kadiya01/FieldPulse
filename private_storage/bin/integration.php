@@ -46,6 +46,7 @@ use FieldPulse\Database\Connection;
 use FieldPulse\Database\DeviceRepository;
 use FieldPulse\Database\JobRepository;
 use FieldPulse\Database\LeaderboardRepository;
+use FieldPulse\Database\NotificationRepository;
 use FieldPulse\Database\ReviewRepository;
 use FieldPulse\Database\SubmissionRepository;
 use FieldPulse\Domain\PeriodResolver;
@@ -936,8 +937,9 @@ $t->test('the summary counts the period it was verified in', function (TestRunne
     $period     = PeriodResolver::periodFor((string) $submission['server_received_at']);
 
     $row = Connection::fetchOne(
-        'SELECT * FROM agent_performance_summary WHERE agent_id = :a AND period_start_date = :p',
-        ['a' => $agentId, 'p' => $period['date']]
+        'SELECT * FROM agent_performance_summary
+          WHERE agent_id = :a AND period_start_date = :p AND period_type = :t',
+        ['a' => $agentId, 'p' => $period['date'], 't' => PeriodResolver::TYPE_WEEKLY]
     );
 
     $t->assertNotNull($row, 'a summary row exists for the derived period');
@@ -951,7 +953,7 @@ $t->test('the summary counts the period it was verified in', function (TestRunne
     $t->assertMatches('/^\d{4}-\d{2}-\d{2}$/', (string) $row['period_start_date']);
     $t->assertSame('1', (string) date('N', strtotime((string) $row['period_start_date'])), 'the period starts on a Monday');
 
-    $board = $leaderboard->board($period['date'], 50, 0, null, $agentId);
+    $board = $leaderboard->board($period['date'], 50, 0, null, $agentId, PeriodResolver::TYPE_WEEKLY);
     $t->assertTrue($board['total'] >= 1, 'the agent is on the board');
     $t->assertNotNull($board['self'], 'the caller is included in their standing');
     $t->assertSame($board['self']['rank'], $board['self_rank'], 'the self rank matches the returned standing');
@@ -1006,6 +1008,98 @@ $t->test('a job is enqueued, claimed once and completed', function (TestRunner $
         (string) Connection::fetchValue('SELECT status FROM processing_jobs WHERE id = :id', ['id' => (int) $mine[0]['id']]),
         'the job is completed'
     );
+});
+
+/* ---------------------------------------------------------------------------
+ * Phase 3: profile, monthly target, reporting month and notifications
+ * ------------------------------------------------------------------------- */
+
+$t->group('phase3');
+
+$t->test('profile and monthly target round-trip through the agent repository', function (TestRunner $t) use (
+    $agents,
+    $makeAgent,
+    $runTag
+): void {
+    $agentId = $makeAgent('AGENT', false, 6.5244, 3.3792);
+
+    $agents->updateProfile($agentId, $runTag . '@example.test', 'Lagos', '08012345678');
+
+    $row = $agents->findById($agentId);
+
+    $t->assertNotNull($row, 'the agent is readable');
+    $t->assertSame($runTag . '@example.test', (string) $row['email']);
+    $t->assertSame('Lagos', (string) $row['location']);
+    $t->assertTrue($agents->emailExists($runTag . '@example.test'), 'email lookup finds the row');
+    $t->assertNotNull($agents->findByEmail($runTag . '@example.test'), 'findByEmail returns the row');
+
+    $agents->setMonthlyTarget($agentId, 42);
+    $t->assertSame(42, (int) $agents->findById($agentId)['monthly_target']);
+});
+
+$t->test('notifications are scoped to their owner and can be marked read', function (TestRunner $t) use (
+    $makeAgent
+): void {
+    $notifications = new NotificationRepository();
+    $owner = $makeAgent('AGENT', false, 6.5244, 3.3792);
+    $other = $makeAgent('AGENT', false, 6.5244, 3.3792);
+
+    $id = $notifications->create($owner, 'TEST', 'Title', 'Message', 'agent', $owner);
+
+    $t->assertSame(1, $notifications->unreadCount($owner));
+    $t->assertSame(0, $notifications->unreadCount($other), 'another agent sees nothing');
+    $t->assertFalse($notifications->markRead($other, $id), 'another agent cannot mark it read');
+    $t->assertSame(1, $notifications->unreadCount($owner), 'the failed mark-read changed nothing');
+    $t->assertTrue($notifications->markRead($owner, $id), 'the owner marks it read');
+    $t->assertSame(0, $notifications->unreadCount($owner));
+
+    $notifications->create($owner, 'TEST', 'Second', 'Message', 'agent', $owner);
+    $t->assertSame(1, $notifications->markAllRead($owner));
+    $t->assertSame(0, $notifications->unreadCount($owner));
+
+    $listed = $notifications->listForAgent($owner, 10);
+    $t->assertSame(2, count($listed), 'the history keeps both notifications');
+});
+
+$t->test('a monthly total is keyed by reporting_month, with a received-at fallback for old rows', function (TestRunner $t) use (
+    $makeAgent,
+    $makeDevice,
+    $makeImage,
+    $makeSubmission,
+    $submissions
+): void {
+    $agentId  = $makeAgent('AGENT', true, 6.5244, 3.3792);
+    $deviceId = $makeDevice($agentId);
+    $image    = $makeImage(91);
+
+    $submissionId = $makeSubmission($agentId, $deviceId, $image, 3, 6.5244, 3.3792);
+
+    Connection::execute(
+        "UPDATE submissions SET status = 'VERIFIED', reporting_month = '2026-05-01' WHERE id = :id",
+        ['id' => $submissionId]
+    );
+
+    $may = PeriodResolver::utcRangeForMonthlyPeriod('2026-05-01');
+    $june = PeriodResolver::utcRangeForMonthlyPeriod('2026-06-01');
+
+    $mayTotals = $submissions->summarisePeriod($agentId, $may['start_utc'], $may['end_utc'], '2026-05-01');
+    $juneTotals = $submissions->summarisePeriod($agentId, $june['start_utc'], $june['end_utc'], '2026-06-01');
+
+    $t->assertSame(3, (int) $mayTotals['total_verified_count'], 'the claimed month counts the enrollment');
+    $t->assertSame(0, (int) $juneTotals['total_verified_count'], 'a different month does not');
+
+    Connection::execute('UPDATE submissions SET reporting_month = NULL WHERE id = :id', ['id' => $submissionId]);
+
+    $current = PeriodResolver::monthlyPeriodFor(Clock::sql());
+    $currentRange = PeriodResolver::utcRangeForMonthlyPeriod($current['date']);
+    $fallback = $submissions->summarisePeriod(
+        $agentId,
+        $currentRange['start_utc'],
+        $currentRange['end_utc'],
+        $current['date']
+    );
+
+    $t->assertSame(3, (int) $fallback['total_verified_count'], 'a null reporting_month falls back to received_at');
 });
 
 /* ---------------------------------------------------------------------------

@@ -147,6 +147,113 @@ final class Validator
         );
     }
 
+    /**
+     * Optional profile email. Absent and empty both mean "not provided".
+     */
+    public static function email(mixed $value, string $field = 'email'): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw ApiException::validation('Field "' . $field . '" must be an email address.', ['field' => $field]);
+        }
+
+        $email = strtolower(trim($value));
+
+        if ($email === '') {
+            return null;
+        }
+
+        if (mb_strlen($email) > 191 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            throw ApiException::validation(
+                'Enter a valid email address.',
+                ['field' => $field]
+            );
+        }
+
+        return $email;
+    }
+
+    /**
+     * Optional free-text location shown on the agent dashboard.
+     */
+    public static function location(mixed $value, string $field = 'location'): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw ApiException::validation('Field "' . $field . '" must be text.', ['field' => $field]);
+        }
+
+        $location = trim($value);
+
+        if ($location === '') {
+            return null;
+        }
+
+        $length = mb_strlen($location);
+
+        if ($length < 2 || $length > 191 || preg_match('/[\x00-\x1F\x7F]/', $location) === 1) {
+            throw ApiException::validation(
+                'Location must be between 2 and 191 characters.',
+                ['field' => $field]
+            );
+        }
+
+        return $location;
+    }
+
+    /**
+     * Normalise a reporting month to the first day of that business month.
+     *
+     * Accepts both `YYYY-MM` (what an <input type="month"> sends) and the
+     * canonical `YYYY-MM-01`. A future month is rejected: a submission cannot
+     * report work that has not happened yet, and accepting one would let an
+     * agent park a count outside every closed period.
+     */
+    public static function reportingMonth(mixed $value, string $field = 'reporting_month'): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is required.',
+                ['field' => $field]
+            );
+        }
+
+        $raw = trim($value);
+
+        if (preg_match('/^(\d{4})-(\d{2})$/', $raw, $m) === 1) {
+            $date = $m[1] . '-' . $m[2] . '-01';
+        } elseif (preg_match('/^(\d{4})-(\d{2})-01$/', $raw, $m) === 1) {
+            $date = $raw;
+        } else {
+            throw ApiException::validation(
+                'Field "' . $field . '" must be a month in YYYY-MM form.',
+                ['field' => $field]
+            );
+        }
+
+        if (!self::isIsoDate($date) || (int) $m[2] < 1 || (int) $m[2] > 12) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is not a valid calendar month.',
+                ['field' => $field]
+            );
+        }
+
+        if ($date > PeriodResolver::monthlyPeriodStartDate()) {
+            throw ApiException::validation(
+                'Reporting month cannot be in the future.',
+                ['field' => $field]
+            );
+        }
+
+        return $date;
+    }
+
     public static function deviceType(mixed $value): string
     {
         $types = [

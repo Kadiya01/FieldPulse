@@ -8,6 +8,7 @@ use FieldPulse\Database\AgentRepository;
 use FieldPulse\Database\AuditRepository;
 use FieldPulse\Database\Connection;
 use FieldPulse\Database\DeviceRepository;
+use FieldPulse\Database\NotificationRepository;
 use FieldPulse\Http\ApiException;
 use FieldPulse\Http\ErrorCode;
 use FieldPulse\Http\Request;
@@ -59,12 +60,14 @@ final class AdminAgentController implements ActionInterface
         'SET_PASSWORD',
         'REVOKE_CREDENTIAL',
         'ISSUE_PAIRING_CODE',
+        'SET_MONTHLY_TARGET',
     ];
 
     public function __construct(
         private readonly AgentRepository $agents = new AgentRepository(),
         private readonly DeviceRepository $devices = new DeviceRepository(),
-        private readonly AuditRepository $audit = new AuditRepository()
+        private readonly AuditRepository $audit = new AuditRepository(),
+        private readonly NotificationRepository $notifications = new NotificationRepository()
     ) {
     }
 
@@ -229,6 +232,7 @@ final class AdminAgentController implements ActionInterface
             'SET_PASSWORD'       => ['id', 'action', 'password'],
             'REVOKE_CREDENTIAL'  => ['id', 'action'],
             'ISSUE_PAIRING_CODE' => ['id', 'action', 'label'],
+            'SET_MONTHLY_TARGET' => ['id', 'action', 'monthly_target'],
         ];
 
         Validator::assertNoUnknownKeys($body, $allowed[$action], 'admin.agent.' . strtolower($action));
@@ -240,6 +244,7 @@ final class AdminAgentController implements ActionInterface
         if (
             $action !== 'SET_PASSWORD'
             && $action !== 'ISSUE_PAIRING_CODE'
+            && $action !== 'SET_MONTHLY_TARGET'
             && (int) $target['id'] === $context->agentId()
         ) {
             $this->denySelf();
@@ -251,6 +256,7 @@ final class AdminAgentController implements ActionInterface
             'SET_PASSWORD'       => $this->setPassword($request, $context, $target, $body),
             'REVOKE_CREDENTIAL'  => $this->revokeCredential($request, $context, $target),
             'ISSUE_PAIRING_CODE' => $this->issuePairingCode($request, $context, $target, $body),
+            'SET_MONTHLY_TARGET' => $this->setMonthlyTarget($request, $context, $target, $body),
         };
 
         $data = $this->present($this->requireAgent($id));
@@ -347,6 +353,85 @@ final class AdminAgentController implements ActionInterface
             'agent_id' => (int) $target['id'],
             'admin'    => $context->agentCode(),
             'status'   => $status,
+        ]);
+
+        $this->notifyStatusChange($target, $status);
+
+        return null;
+    }
+
+    /**
+     * Give the agent a durable, in-app record of an account decision.
+     *
+     * Approval and rejection are the two moments where the agent has no way to
+     * observe the outcome from their own screen, so those are the ones that
+     * must survive a page reload. Suspension/reinstatement are recorded for the
+     * same reason: an agent whose device stops working needs to be able to read
+     * why once they can sign in again.
+     *
+     * @param array<string,mixed> $target
+     */
+    private function notifyStatusChange(array $target, string $status): void
+    {
+        $previous = (string) $target['status'];
+
+        [$type, $title, $message] = match ($status) {
+            'ACTIVE' => $previous === AgentRepository::PENDING
+                ? ['REGISTRATION_APPROVED', 'Registration approved', 'Your agent registration was approved. You can now sign in and submit records.']
+                : ['ACCOUNT_REINSTATED', 'Account reinstated', 'Your account is active again. You can sign in and submit records.'],
+            'REJECTED' => ['REGISTRATION_REJECTED', 'Registration rejected', 'Your agent registration was not approved. Contact an administrator if you believe this is wrong.'],
+            'SUSPENDED' => ['ACCOUNT_SUSPENDED', 'Account suspended', 'Your account has been suspended. Contact an administrator for assistance.'],
+            'PENDING' => ['REGISTRATION_REOPENED', 'Registration reopened', 'Your registration is awaiting review again.'],
+            'DELETED' => ['ACCOUNT_RETIRED', 'Account retired', 'Your account has been retired and can no longer be used.'],
+            default => ['ACCOUNT_UPDATED', 'Account updated', 'Your account status changed to ' . $status . '.'],
+        };
+
+        try {
+            $this->notifications->create(
+                (int) $target['id'],
+                $type,
+                $title,
+                $message,
+                'agent',
+                (int) $target['id']
+            );
+        } catch (\Throwable $e) {
+            // The status change is already committed; a failed notification
+            // must not make the admin retry and get a confusing conflict.
+            Logger::error('admin.notification_failed', [
+                'agent_id' => (int) $target['id'],
+                'type'     => $type,
+                'error'    => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function setMonthlyTarget(Request $request, AuthContext $context, array $target, array $body): ?array
+    {
+        $targetValue = Validator::intRange($body['monthly_target'] ?? null, 0, 1000000, 'monthly_target');
+
+        if ($targetValue === (int) ($target['monthly_target'] ?? 0)) {
+            return null;
+        }
+
+        $this->agents->setMonthlyTarget((int) $target['id'], $targetValue);
+
+        $this->audit->recordSafe([
+            'actor_agent_id' => $context->agentId(),
+            'action'         => 'admin.agent.monthly_target_changed',
+            'entity_type'    => 'agent',
+            'entity_id'      => (int) $target['id'],
+            'ip_address'     => $request->clientIp(),
+            'metadata'       => [
+                'agent_code'    => (string) $target['agent_code'],
+                'monthly_target' => $targetValue,
+            ],
+        ]);
+
+        Logger::info('admin.agent_monthly_target_changed', [
+            'agent_id'      => (int) $target['id'],
+            'admin'         => $context->agentCode(),
+            'monthly_target' => $targetValue,
         ]);
 
         return null;
@@ -598,6 +683,9 @@ final class AdminAgentController implements ActionInterface
             'full_name'           => (string) $row['full_name'],
             'nin'                 => isset($row['nin']) ? (string) $row['nin'] : null,
             'phone'               => isset($row['phone']) ? (string) $row['phone'] : null,
+            'email'               => $row['email'] ?? null,
+            'location'            => $row['location'] ?? null,
+            'monthly_target'      => (int) ($row['monthly_target'] ?? 0),
             'self_registered'     => (bool) ($row['self_registered'] ?? false),
             'role'                => (string) $row['role'],
             'status'              => (string) $row['status'],

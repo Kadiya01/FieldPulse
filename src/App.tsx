@@ -9,6 +9,8 @@ import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
 import AdminPage from './pages/AdminPage';
+import DashboardPage from './pages/DashboardPage';
+import ProfilePage from './pages/ProfilePage';
 import Layout from './components/Layout';
 import BrandHeader from './components/BrandHeader';
 import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
@@ -154,6 +156,8 @@ export default function App() {
         */}
         <Route element={requireReady(<Layout />)}>
           <Route path="/" element={<CapturePage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
           <Route path="/queue" element={<QueuePage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           {/*

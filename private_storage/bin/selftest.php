@@ -28,7 +28,7 @@ use FieldPulse\Testing\TestRunner;
  * Boot against a throwaway environment file rather than the real .env.
  *
  * The suite must run on a laptop that has no deployment, and Config::boot()
- * fails closed on a missing .env or a short JWT_SECRET — correct for production,
+ * fails closed on a missing .env or a short JWT_SECRET Ã¢â‚¬â€ correct for production,
  * fatal for a unit test. Rather than weaken that check, this writes a synthetic
  * env to the system temp directory and boots against it explicitly. The real
  * .env is never read, so running the suite can never be affected by, or leak,
@@ -185,7 +185,7 @@ $t->test('identical pixels produce identical hashes', function (TestRunner $t): 
 });
 
 $t->test('flat images of any brightness share one AC pattern', function (TestRunner $t): void {
-    // The flat-image failure was not that the hash was "wrong" — it was that it
+    // The flat-image failure was not that the hash was "wrong" Ã¢â‚¬â€ it was that it
     // was not stable. The AC coefficients of a constant block are zero in exact
     // arithmetic, so any non-zero value is round-off, and comparing round-off
     // against a median of round-off sets roughly half the bits at random. Every
@@ -260,7 +260,7 @@ $t->test('the hash encodes spatial position, not coefficient magnitude order', f
     //
     // A horizontal mirror is the probe. Reflecting the input changes the sign of
     // every odd-numbered row of the 2-D DCT and leaves the even rows, including
-    // DC, untouched — and it leaves the SET of coefficient magnitudes completely
+    // DC, untouched Ã¢â‚¬â€ and it leaves the SET of coefficient magnitudes completely
     // unchanged. So a hash that is truly position-sensitive must react to the
     // mirror, and one that had sorted its coefficients away must not.
     $make = static function (bool $flip): \GdImage {
@@ -289,7 +289,7 @@ $t->test('the hash encodes spatial position, not coefficient magnitude order', f
 
     $t->assertTrue(
         $distance > 4,
-        'a mirror must move the hash — distance was ' . $distance . '. '
+        'a mirror must move the hash Ã¢â‚¬â€ distance was ' . $distance . '. '
         . 'Identical hashes here mean coefficient ordering was discarded before '
         . 'the bits were assigned, so the hash sees only a magnitude distribution '
         . 'and unrelated images will collide as duplicates.'
@@ -413,7 +413,7 @@ $t->test('hamming distance is correct on known values', function (TestRunner $t)
 $t->test('hamming distance agrees with an independent reference on random hashes', function (TestRunner $t): void {
     // Reference method: walk the hex strings and count the set bits of each
     // differing nibble. Completely different code path from decbin() on the
-    // packed integer, so agreement is meaningful — and it is the only way to
+    // packed integer, so agreement is meaningful Ã¢â‚¬â€ and it is the only way to
     // catch a 64-bit boundary error, because hand-written "expected 2" values
     // have already been wrong twice in this file.
     $nibbleBits = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4];
@@ -563,7 +563,7 @@ $t->test('Sunday late belongs to the week that began six days earlier', function
     // 2026-10-04 is a Sunday. The instant is given in UTC, so the Sunday-evening
     // moment has to be expressed in UTC too: Africa/Lagos is UTC+1, which means
     // 22:30 UTC is 23:30 local Sunday. 23:30 UTC would already be 00:30 Monday
-    // in Lagos and belongs to the *new* week — the next test pins that down.
+    // in Lagos and belongs to the *new* week Ã¢â‚¬â€ the next test pins that down.
     $period = \FieldPulse\Domain\PeriodResolver::periodFor('2026-10-04 22:30:00');
 
     $t->assertSame('2026-09-28', $period['date'], 'ISO week rolls back to the Monday');
@@ -600,7 +600,7 @@ $t->test('the UTC window is seven days and half-open', function (TestRunner $t):
 });
 
 $t->test('a submission at 00:30 local Monday lands in the new week', function (TestRunner $t): void {
-    // Africa/Lagos is UTC+1, so 2026-09-28 00:30 local is 2026-09-27 23:30 UTC —
+    // Africa/Lagos is UTC+1, so 2026-09-28 00:30 local is 2026-09-27 23:30 UTC Ã¢â‚¬â€
     // still Sunday in UTC, which is the boundary this test exists to pin down.
     $period = \FieldPulse\Domain\PeriodResolver::periodFor('2026-09-27 23:30:00');
 
@@ -670,7 +670,101 @@ $t->test('periodRange returns the requested number of distinct Mondays', functio
     }
 });
 
+
+$t->test('monthlyPeriodStartDate returns first day of current month in business timezone', function (TestRunner $t): void {
+    $date = \FieldPulse\Domain\PeriodResolver::monthlyPeriodStartDate();
+
+    $t->assertTrue(\FieldPulse\Domain\Validator::isIsoDate($date), 'is ISO date');
+    $t->assertSame('01', substr($date, -2), 'starts on first day of month');
+});
+
+$t->test('monthlyPeriodFor maps all dates in month to the first day of that month', function (TestRunner $t): void {
+    // 2026-09-01 is first day of September
+    $t->assertSame('2026-09-01', \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor('2026-09-01 00:00:00')['date']);
+    $t->assertSame('2026-09-01', \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor('2026-09-15 12:00:00')['date']);
+    $t->assertSame('2026-09-01', \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor('2026-09-30 20:00:00')['date']);
+
+    // Africa/Lagos is UTC+1. 22:30 UTC on 2026-09-30 is 23:30 local Sept 30 -> belongs to Sept
+    $t->assertSame('2026-09-01', \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor('2026-09-30 22:30:00')['date']);
+
+    // 23:30 UTC on 2026-09-30 is 00:30 local Oct 1 -> belongs to Oct
+    $t->assertSame('2026-10-01', \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor('2026-09-30 23:30:00')['date']);
+});
+
+$t->test('monthly UTC window calculates leap and non-leap month lengths correctly', function (TestRunner $t): void {
+    // Non leap year Feb 2026 has 28 days
+    $feb2026 = \FieldPulse\Domain\PeriodResolver::utcRangeForMonthlyPeriod('2026-02-01');
+    $start26 = new DateTimeImmutable($feb2026['start_utc']);
+    $end26   = new DateTimeImmutable($feb2026['end_utc']);
+    $t->assertSame(28 * 86400, $end26->getTimestamp() - $start26->getTimestamp(), 'Feb 2026 is 28 days');
+
+    // Leap year Feb 2028 has 29 days
+    $feb2028 = \FieldPulse\Domain\PeriodResolver::utcRangeForMonthlyPeriod('2028-02-01');
+    $start28 = new DateTimeImmutable($feb2028['start_utc']);
+    $end28   = new DateTimeImmutable($feb2028['end_utc']);
+    $t->assertSame(29 * 86400, $end28->getTimestamp() - $start28->getTimestamp(), 'Feb 2028 is 29 days');
+});
+
+$t->test('utcRangeForMonthlyPeriod agrees with monthlyPeriodFor', function (TestRunner $t): void {
+    $fromPeriod = \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor('2026-09-15 12:00:00');
+    $fromDate   = \FieldPulse\Domain\PeriodResolver::utcRangeForMonthlyPeriod('2026-09-01');
+
+    $t->assertSame($fromPeriod['start_utc'], $fromDate['start_utc'], 'monthly start_utc must match');
+    $t->assertSame($fromPeriod['end_utc'], $fromDate['end_utc'], 'monthly end_utc must match');
+});
+
+$t->test('monthlyPeriodRange returns distinct 1st-of-month dates in descending order', function (TestRunner $t): void {
+    $range = \FieldPulse\Domain\PeriodResolver::monthlyPeriodRange(6);
+
+    $t->assertSame(6, count($range));
+    $t->assertSame(count($range), count(array_unique($range)), 'no duplicates');
+
+    foreach ($range as $date) {
+        $t->assertTrue(\FieldPulse\Domain\Validator::isIsoDate($date), 'valid ISO date');
+        $t->assertSame('01', substr($date, -2), 'first of month');
+    }
+});
+
+$t->test('periodForType and utcRangeForPeriodType discriminate WEEKLY and MONTHLY', function (TestRunner $t): void {
+    $ts = '2026-09-15 12:00:00';
+    $weekly  = \FieldPulse\Domain\PeriodResolver::periodForType($ts, \FieldPulse\Domain\PeriodResolver::TYPE_WEEKLY);
+    $monthly = \FieldPulse\Domain\PeriodResolver::periodForType($ts, \FieldPulse\Domain\PeriodResolver::TYPE_MONTHLY);
+
+    $t->assertSame('2026-09-14', $weekly['date'], 'Monday for weekly');
+    $t->assertSame('2026-09-01', $monthly['date'], 'First of month for monthly');
+
+    $t->assertSame(
+        '2026-09-14',
+        \FieldPulse\Domain\PeriodResolver::periodStartDateForType(\FieldPulse\Domain\PeriodResolver::TYPE_WEEKLY, $ts),
+        'type-first weekly lookup'
+    );
+    $t->assertSame(
+        '2026-09-01',
+        \FieldPulse\Domain\PeriodResolver::periodStartDateForType(\FieldPulse\Domain\PeriodResolver::TYPE_MONTHLY, $ts),
+        'type-first monthly lookup'
+    );
+
+    $weeklyRange  = \FieldPulse\Domain\PeriodResolver::utcRangeForPeriodType('2026-09-14', \FieldPulse\Domain\PeriodResolver::TYPE_WEEKLY);
+    $monthlyRange = \FieldPulse\Domain\PeriodResolver::utcRangeForPeriodType('2026-09-01', \FieldPulse\Domain\PeriodResolver::TYPE_MONTHLY);
+
+    $t->assertSame($weekly['start_utc'], $weeklyRange['start_utc']);
+    $t->assertSame($monthly['start_utc'], $monthlyRange['start_utc']);
+});
+
+$t->test('weekly and monthly periods and unique keys do not collide', function (TestRunner $t): void {
+    // On a month starting on Monday (e.g. 2026-06-01), both weekly and monthly have period_start_date 2026-06-01.
+    // The discriminator period_type separates them in all unique keys.
+    $agentId = 42;
+    $periodDate = '2026-06-01';
+
+    $weeklyKey  = sprintf('%s:%d:%s', $periodDate, $agentId, \FieldPulse\Domain\PeriodResolver::TYPE_WEEKLY);
+    $monthlyKey = sprintf('%s:%d:%s', $periodDate, $agentId, \FieldPulse\Domain\PeriodResolver::TYPE_MONTHLY);
+
+    $t->assertNotSame($weeklyKey, $monthlyKey, 'composite keys with period_type do not collide');
+});
+
 // --- Validation -------------------------------------------------------------
+
 $t->group('validation');
 
 $t->test('IMEI length and Luhn are enforced', function (TestRunner $t): void {
@@ -875,7 +969,7 @@ $makeKey = static function (): array {
     if ($key === false) {
         // Report what OpenSSL actually said. "openssl is unavailable" is the
         // wrong diagnosis whenever the extension is loaded but the library
-        // cannot start — a missing openssl.cnf looks identical from the outside
+        // cannot start Ã¢â‚¬â€ a missing openssl.cnf looks identical from the outside
         // and used to send people looking for a disabled extension.
         $errors = [];
 
@@ -953,7 +1047,7 @@ $t->test('a JWK as WebCrypto exports it is accepted', function (TestRunner $t) u
      * This test exists because of a defect it would have caught: the allowlist
      * omitted the optional RFC 7517 members `ext` and `key_ops`, which
      * `crypto.subtle.exportKey('jwk', publicKey)` includes on every engine, so
-     * device registration failed in a real browser while every suite passed —
+     * device registration failed in a real browser while every suite passed Ã¢â‚¬â€
      * they all built their JWKs by hand and left those two members out.
      *
      * The regression is in both directions: the browser's shape must be accepted,
@@ -1126,7 +1220,7 @@ $t->test('a decision maps to a value both ENUMs accept', function (TestRunner $t
     // different on purpose. Writing the decision straight into
     // submission_verifications.final_disposition is rejected under strict mode
     // and truncates to '' otherwise, so the mapping has to happen in PHP. This
-    // asserts both target ENUMs actually accept what we map to — checked against
+    // asserts both target ENUMs actually accept what we map to Ã¢â‚¬â€ checked against
     // the literals in migrations 004 and 005, which is the whole point, since a
     // schema change there must break this test loudly.
     $submissionStatuses = ['RECEIVED', 'QUEUED', 'PROCESSING', 'VERIFIED', 'REQUIRES_REVIEW', 'REJECTED'];
@@ -1220,7 +1314,7 @@ $t->test('the cutoff rule is stated verbatim in docs/REWARDS.md', function (Test
     $doc = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/REWARDS.md');
 
     $t->assertContains(
-        'At period close, only the frozen verified weekly ranking determines reward eligibility '
+        'At period close, only the frozen verified ranking determines reward eligibility '
             . 'and rank; later changes to live performance summaries do not change an already '
             . 'published reward entitlement.',
         $doc,
@@ -1269,5 +1363,131 @@ $t->test('publication does not depend on the rewards screen being opened', funct
     $t->assertContains('rewards.close_on_read', $service, 'the fallback is configurable too');
 });
 
+
+// --- Phase 3 profile and reporting-month validation -------------------------
+$t->group('phase3');
+
+$t->test('email is optional, trimmed and lowercased', function (TestRunner $t): void {
+    $t->assertNull(\FieldPulse\Domain\Validator::email(null));
+    $t->assertNull(\FieldPulse\Domain\Validator::email(''));
+    $t->assertSame('agent@example.test', \FieldPulse\Domain\Validator::email('  Agent@Example.TEST  '));
+});
+
+$t->test('email rejects malformed addresses with the field named', function (TestRunner $t): void {
+    try {
+        \FieldPulse\Domain\Validator::email('not-an-email');
+        $t->assertTrue(false, 'an invalid email must throw');
+    } catch (\FieldPulse\Http\ApiException $e) {
+        $t->assertSame(422, $e->status());
+        $t->assertSame('email', $e->context()['field'] ?? null);
+    }
+});
+
+$t->test('location is optional, trimmed and rejects control characters', function (TestRunner $t): void {
+    $t->assertNull(\FieldPulse\Domain\Validator::location('   '));
+    $t->assertSame('Lagos', \FieldPulse\Domain\Validator::location('  Lagos  '));
+
+    try {
+        \FieldPulse\Domain\Validator::location("Lagos\x01");
+        $t->assertTrue(false, 'a control character must throw');
+    } catch (\FieldPulse\Http\ApiException $e) {
+        $t->assertSame('location', $e->context()['field'] ?? null);
+    }
+});
+
+$t->test('reporting month normalises YYYY-MM and rejects future months', function (TestRunner $t): void {
+    $t->assertSame('2026-05-01', \FieldPulse\Domain\Validator::reportingMonth('2026-05'));
+    $t->assertSame('2026-05-01', \FieldPulse\Domain\Validator::reportingMonth('2026-05-01'));
+
+    foreach (['2026-13', '2026-5', '2999-01'] as $bad) {
+        try {
+            \FieldPulse\Domain\Validator::reportingMonth($bad);
+            $t->assertTrue(false, 'invalid or future month must throw: ' . $bad);
+        } catch (\FieldPulse\Http\ApiException $e) {
+            $t->assertSame('reporting_month', $e->context()['field'] ?? null);
+        }
+    }
+});
+
+$t->test('migration 027 adds profile, reporting month and notifications', function (TestRunner $t): void {
+    $path = dirname(__DIR__) . '/migrations/027_abh_monthly_enrollment.sql';
+    $t->assertTrue(is_file($path), 'migration 027 file must exist');
+
+    $sql = (string) file_get_contents($path);
+
+    $t->assertContains('monthly_target', $sql);
+    $t->assertContains('reporting_month', $sql);
+    $t->assertContains('CREATE TABLE IF NOT EXISTS notifications', $sql);
+    $t->assertContains('uniq_agents_email', $sql);
+});
+
+// --- Migration 026 & Period Discriminator -----------------------------------
+$t->group('migration_026');
+
+$t->test('migration 026 exists and restores period_type discriminator', function (TestRunner $t): void {
+    $path = dirname(__DIR__) . '/migrations/026_restore_monthly_periods.sql';
+    $t->assertTrue(is_file($path), 'migration 026 file must exist');
+
+    $sql = (string) file_get_contents($path);
+
+    $t->assertContains('period_type', $sql, 'declares period_type column');
+    $t->assertContains("ENUM('WEEKLY', 'MONTHLY')", $sql, 'declares WEEKLY and MONTHLY enum values');
+    $t->assertContains("DEFAULT 'WEEKLY'", $sql, 'defaults to WEEKLY for backward compatibility');
+
+    // Table alterations
+    $t->assertContains('agent_performance_summary', $sql, 'alters agent_performance_summary');
+    $t->assertContains('reward_rankings', $sql, 'alters reward_rankings');
+    $t->assertContains('agent_rewards', $sql, 'alters agent_rewards');
+
+    // Key and constraint updates
+    $t->assertContains('PRIMARY KEY (agent_id, period_start_date, period_type)', $sql, 'composite primary key on summary');
+    $t->assertContains('fk_reward_ranking', $sql, 'preserves fk_reward_ranking foreign key');
+    $t->assertContains('REFERENCES reward_rankings (period_start_date, agent_id, period_type)', $sql, 'fk references period_type');
+});
+
+$t->test('migration 026 preserves historical weekly data with backfill', function (TestRunner $t): void {
+    $sql = (string) file_get_contents(dirname(__DIR__) . '/migrations/026_restore_monthly_periods.sql');
+
+    $t->assertTrue(
+        str_contains($sql, 'UPDATE agent_performance_summary') && str_contains($sql, "period_type = 'WEEKLY'"),
+        'backfills performance summary'
+    );
+    $t->assertTrue(
+        str_contains($sql, 'UPDATE reward_rankings') && str_contains($sql, "period_type = 'WEEKLY'"),
+        'backfills reward rankings'
+    );
+    $t->assertTrue(
+        str_contains($sql, 'UPDATE agent_rewards') && str_contains($sql, "period_type = 'WEEKLY'"),
+        'backfills agent rewards'
+    );
+});
+
+$t->test('migrator drains all result sets from multi-result migration statements', function (TestRunner $t): void {
+    $migratorCode = (string) file_get_contents(dirname(__DIR__) . '/app/Database/Migrator.php');
+
+    $t->assertContains('nextRowset', $migratorCode, 'Migrator calls nextRowset to drain statements');
+    $t->assertContains('closeCursor', $migratorCode, 'Migrator closes cursor after draining');
+});
+
+$t->test('migration filenames are strictly sequential with no gaps', function (TestRunner $t): void {
+    $files = glob(dirname(__DIR__) . '/migrations/*.sql') ?: [];
+    sort($files);
+
+    $versions = [];
+    foreach ($files as $f) {
+        $basename = basename($f);
+        if (preg_match('/^([0-9]{3})_/', $basename, $m)) {
+            $versions[] = (int) $m[1];
+        }
+    }
+
+    $count = count($versions);
+    $t->assertTrue($count >= 26, 'at least 26 migrations present');
+    for ($i = 1; $i <= $count; $i++) {
+        $t->assertSame($i, $versions[$i - 1], "migration version $i is present in sequence");
+    }
+});
+
 // --- Exit -------------------------------------------------------------------
+
 exit($t->run($verbose));

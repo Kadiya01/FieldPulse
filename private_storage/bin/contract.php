@@ -942,7 +942,7 @@ $t->test('the reward routes are documented, shimmed, and gated as claimed', func
     $t->assertTrue(is_file($rewardsDoc), 'docs/REWARDS.md exists');
 
     $t->assertContains(
-        'At period close, only the frozen verified weekly ranking determines reward eligibility and rank; '
+        'At period close, only the frozen verified ranking determines reward eligibility and rank; '
             . 'later changes to live performance summaries do not change an already published reward entitlement.',
         (string) file_get_contents($rewardsDoc),
         'docs/REWARDS.md states the cutoff rule verbatim'

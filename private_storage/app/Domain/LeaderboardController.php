@@ -14,10 +14,12 @@ use FieldPulse\Http\Response;
  * GET /api/v1/leaderboard
  *
  * Query parameters:
- *   period   'YYYY-MM-DD' Monday of the week, defaulting to the current period
- *   site_id  optional; narrows the board to agents assigned to that site
- *   limit    1..100, default 25
- *   offset   >= 0
+ *   period_type 'WEEKLY' | 'MONTHLY', default WEEKLY
+ *   period      'YYYY-MM-DD' period start (Monday for weekly, 1st for monthly),
+ *               defaulting to the current period
+ *   site_id     optional; narrows the board to agents assigned to that site
+ *   limit       1..100, default 25
+ *   offset      >= 0
  *
  * Read-only and bearer-authenticated, not device-signed: signing a GET adds no
  * security, since there is no state to protect and the response is not a
@@ -42,15 +44,17 @@ final class LeaderboardController implements ActionInterface
             throw new ApiException(405, ErrorCode::METHOD_NOT_ALLOWED, 'Method not allowed.');
         }
 
-        $period = $this->resolvePeriod($request);
-        $siteId = $this->resolveSiteId($request, $context->agentId());
-        $limit  = $this->clampInt($request->queryInt('limit'), 25, 1, 100);
-        $offset = $this->clampInt($request->queryInt('offset'), 0, 0, 10000);
+        $periodType = $this->resolvePeriodType($request);
+        $period     = $this->resolvePeriod($request, $periodType);
+        $siteId     = $this->resolveSiteId($request, $context->agentId());
+        $limit      = $this->clampInt($request->queryInt('limit'), 25, 1, 100);
+        $offset     = $this->clampInt($request->queryInt('offset'), 0, 0, 10000);
 
-        $board = $this->leaderboard->board($period, $limit, $offset, $siteId, $context->agentId());
+        $board = $this->leaderboard->board($period, $limit, $offset, $siteId, $context->agentId(), $periodType);
 
         return Response::json([
             'data' => [
+                'period_type'       => $periodType,
                 'period_start_date' => $period,
                 'scope'             => $siteId === null ? 'GLOBAL' : 'SITE',
                 'site_id'           => $siteId,
@@ -63,24 +67,46 @@ final class LeaderboardController implements ActionInterface
                 'you'               => $board['self'],
             ],
             'meta' => [
-                'available_periods' => $this->leaderboard->availablePeriods(),
+                'period_type'       => $periodType,
+                'available_periods' => $this->leaderboard->availablePeriods(12, $periodType),
                 'available_sites'   => $this->leaderboard->sitesForAgent($context->agentId()),
             ],
         ]);
     }
 
+    private function resolvePeriodType(Request $request): string
+    {
+        $type = $request->query('period_type');
+
+        if ($type === null || $type === '') {
+            return PeriodResolver::TYPE_WEEKLY;
+        }
+
+        $type = strtoupper((string) $type);
+
+        if (!in_array($type, PeriodResolver::PERIOD_TYPES, true)) {
+            throw new ApiException(
+                422,
+                ErrorCode::VALIDATION_FAILED,
+                'period_type must be WEEKLY or MONTHLY.',
+                ['field' => 'period_type', 'allowed' => PeriodResolver::PERIOD_TYPES]
+            );
+        }
+
+        return $type;
+    }
+
     /**
-     * An explicit period must be a real Monday. Accepting any date and silently
-     * snapping it would make a client's "week 42" cache key disagree with the
-     * board it gets back, which is exactly the kind of ambiguity that turns
-     * into a support ticket.
+     * An explicit period must be a real period start date (Monday for weekly, 1st of month for monthly).
      */
-    private function resolvePeriod(Request $request): string
+    private function resolvePeriod(Request $request, string $periodType): string
     {
         $requested = $request->query('period');
 
         if ($requested === null || $requested === '') {
-            return PeriodResolver::periodStartDate();
+            return $periodType === PeriodResolver::TYPE_MONTHLY
+                ? PeriodResolver::monthlyPeriodStartDate()
+                : PeriodResolver::periodStartDate();
         }
 
         if (!Validator::isIsoDate($requested)) {
@@ -92,16 +118,23 @@ final class LeaderboardController implements ActionInterface
             );
         }
 
-        $monday = (new \DateTimeImmutable($requested . ' 00:00:00', \FieldPulse\Config\Config::instance()->businessTimezone()))
-            ->modify('monday this week')
-            ->format('Y-m-d');
+        $tz       = \FieldPulse\Config\Config::instance()->businessTimezone();
+        $local    = new \DateTimeImmutable($requested . ' 00:00:00', $tz);
+        $expected = PeriodResolver::periodStartDateForType(
+            $periodType,
+            \FieldPulse\Support\Clock::sql($local)
+        );
 
-        if ($monday !== $requested) {
+        if ($expected !== $requested) {
+            $message = $periodType === PeriodResolver::TYPE_MONTHLY
+                ? 'period must be the first day of the month (YYYY-MM-01).'
+                : 'period must be the first day of the week.';
+
             throw new ApiException(
                 422,
                 ErrorCode::VALIDATION_FAILED,
-                'period must be the Monday of the week.',
-                ['field' => 'period', 'expected' => $monday]
+                $message,
+                ['field' => 'period', 'expected' => $expected]
             );
         }
 

@@ -1437,6 +1437,7 @@ $t->test('every key the controller accepts is either persisted or explicitly opt
         'longitude'       => 'submissions.client_longitude',
         'accuracy_m'      => 'submissions.client_accuracy_m',
         'file_sha256'     => 'submissions.file_sha256',
+        'reporting_month' => 'submissions.reporting_month',
         'notes'           => 'submissions.client_notes',
     ];
 

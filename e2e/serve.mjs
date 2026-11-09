@@ -21,6 +21,7 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VITE = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 const SERVER = path.join(ROOT, 'private_storage', 'bin', 'e2e_server.php');
 const OUT = path.join(ROOT, 'dist', 'index.html');
+const ENV_FILE = process.env.FIELDPULSE_E2E_ENV ?? path.join(ROOT, 'private_storage', '.env.mariadb');
 
 const WATCHED = ['src', 'index.html', 'vite.config.ts', 'tsconfig.json'];
 
@@ -74,7 +75,7 @@ if (fresh) {
 }
 
 const php = process.env.FIELDPULSE_PHP ?? 'php';
-const child = spawn(php, [SERVER, '--port=8791'], { cwd: ROOT, stdio: 'inherit' });
+const child = spawn(php, [SERVER, '--port=8791', `--env=${ENV_FILE}`], { cwd: ROOT, stdio: 'inherit' });
 
 const forward = (sig) => () => {
   child.kill(sig);

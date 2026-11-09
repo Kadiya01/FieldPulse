@@ -40,21 +40,34 @@ $agents      = new AgentRepository();
 try {
     $periodArg = Cli::option($argv, 'period');
     $agentArg  = Cli::option($argv, 'agent');
+    $typeArg   = Cli::option($argv, 'type');
     $all       = Cli::hasFlag($argv, 'all');
 
+    if ($typeArg !== null) {
+        $typeArg = strtoupper($typeArg);
+        if (!in_array($typeArg, PeriodResolver::PERIOD_TYPES, true)) {
+            Cli::fail('--type must be WEEKLY or MONTHLY');
+            exit(1);
+        }
+    }
+
     if ($periodArg === null && !$all) {
-        Cli::fail('Pass --period=YYYY-MM-DD (a Monday) or --all');
+        Cli::fail('Pass --period=YYYY-MM-DD or --all');
         exit(1);
     }
 
-    // --- Resolve the set of (agent, period) pairs to rebuild ----------------
+    // --- Resolve the set of (agent, period, periodType) tuples to rebuild ---
     $pairs = [];
 
     if ($all) {
         Cli::heading('Discovering work');
 
+        $whereClause = $typeArg !== null ? ' WHERE period_type = :t' : '';
+        $params      = $typeArg !== null ? ['t' => $typeArg] : [];
+
         $periods = Connection::fetchAll(
-            'SELECT DISTINCT period_start_date FROM agent_performance_summary ORDER BY period_start_date'
+            'SELECT DISTINCT period_start_date, period_type FROM agent_performance_summary' . $whereClause . ' ORDER BY period_start_date, period_type',
+            $params
         );
 
         if ($periods === []) {
@@ -63,15 +76,16 @@ try {
         }
 
         foreach ($periods as $row) {
-            $period = (string) $row['period_start_date'];
+            $period     = (string) $row['period_start_date'];
+            $periodType = (string) ($row['period_type'] ?? PeriodResolver::TYPE_WEEKLY);
 
             $agentIds = Connection::fetchAll(
-                'SELECT agent_id FROM agent_performance_summary WHERE period_start_date = :p',
-                ['p' => $period]
+                'SELECT agent_id FROM agent_performance_summary WHERE period_start_date = :p AND period_type = :t',
+                ['p' => $period, 't' => $periodType]
             );
 
             foreach ($agentIds as $a) {
-                $pairs[] = [(int) $a['agent_id'], $period];
+                $pairs[] = [(int) $a['agent_id'], $period, $periodType];
             }
         }
 
@@ -82,18 +96,43 @@ try {
             exit(1);
         }
 
-        $monday = (new DateTimeImmutable($periodArg . ' 00:00:00'))
-            ->modify('monday this week')
-            ->format('Y-m-d');
+        $periodType = $typeArg;
+        if ($periodType === null) {
+            $isMonday = (new DateTimeImmutable($periodArg . ' 00:00:00'))
+                ->modify('monday this week')
+                ->format('Y-m-d') === $periodArg;
+            $isFirstOfMonth = (new DateTimeImmutable($periodArg . ' 00:00:00'))->format('Y-m-01') === $periodArg;
 
-        if ($monday !== $periodArg) {
-            Cli::fail($periodArg . ' is not a Monday; the period starts on ' . $monday);
-            exit(1);
+            if ($isMonday) {
+                $periodType = PeriodResolver::TYPE_WEEKLY;
+            } elseif ($isFirstOfMonth) {
+                $periodType = PeriodResolver::TYPE_MONTHLY;
+            } else {
+                Cli::fail($periodArg . ' is neither a Monday nor the first day of the month');
+                exit(1);
+            }
         }
 
+        if ($periodType === PeriodResolver::TYPE_MONTHLY) {
+            $firstDay = (new DateTimeImmutable($periodArg . ' 00:00:00'))->format('Y-m-01');
+            if ($firstDay !== $periodArg) {
+                Cli::fail($periodArg . ' is not the first day of the month; the period starts on ' . $firstDay);
+                exit(1);
+            }
+        } else {
+            $monday = (new DateTimeImmutable($periodArg . ' 00:00:00'))
+                ->modify('monday this week')
+                ->format('Y-m-d');
+
+            if ($monday !== $periodArg) {
+                Cli::fail($periodArg . ' is not a Monday; the period starts on ' . $monday);
+                exit(1);
+            }
+        }
+
+        $range  = PeriodResolver::utcRangeForPeriodType($periodArg, $periodType);
         $sql    = 'SELECT DISTINCT agent_id FROM submissions WHERE server_received_at >= :s AND server_received_at < :e';
-        $params = ['s' => PeriodResolver::utcRangeForPeriod($periodArg)['start_utc'],
-                   'e' => PeriodResolver::utcRangeForPeriod($periodArg)['end_utc']];
+        $params = ['s' => $range['start_utc'], 'e' => $range['end_utc']];
 
         if ($agentArg !== null) {
             $agent = $agents->findByCode($agentArg);
@@ -108,10 +147,10 @@ try {
         }
 
         foreach (Connection::fetchAll($sql, $params) as $row) {
-            $pairs[] = [(int) $row['agent_id'], $periodArg];
+            $pairs[] = [(int) $row['agent_id'], $periodArg, $periodType];
         }
 
-        Cli::out('  ' . count($pairs) . ' agent/period pairs for ' . $periodArg);
+        Cli::out('  ' . count($pairs) . ' agent/period pairs for ' . $periodArg . ' (' . $periodType . ')');
     }
 
     if ($pairs === []) {
@@ -125,17 +164,18 @@ try {
     $rebuilt = 0;
     $failed  = 0;
 
-    foreach ($pairs as [$agentId, $period]) {
+    foreach ($pairs as [$agentId, $period, $pType]) {
         try {
-            $leaderboard->refresh($agentId, $period);
+            $leaderboard->refresh($agentId, $period, $pType);
             $rebuilt++;
         } catch (Throwable $e) {
             $failed++;
-            Cli::warn('  agent ' . $agentId . ' ' . $period . ': ' . $e->getMessage());
+            Cli::warn('  agent ' . $agentId . ' ' . $period . ' (' . $pType . '): ' . $e->getMessage());
             Logger::warning('reaggregate.failed', [
-                'agent_id' => $agentId,
-                'period'   => $period,
-                'error'    => $e->getMessage(),
+                'agent_id'    => $agentId,
+                'period'      => $period,
+                'period_type' => $pType,
+                'error'       => $e->getMessage(),
             ]);
         }
     }

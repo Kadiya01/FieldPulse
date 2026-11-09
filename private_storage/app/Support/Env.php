@@ -23,6 +23,8 @@ final class Env
 
     private static bool $loaded = false;
 
+    private static ?string $file = null;
+
     private function __construct()
     {
     }
@@ -31,6 +33,7 @@ final class Env
     {
         self::$vars   = [];
         self::$loaded = true;
+        self::$file   = $file;
 
         if (!is_file($file) || !is_readable($file)) {
             throw new \RuntimeException(
@@ -77,6 +80,11 @@ final class Env
     public static function isLoaded(): bool
     {
         return self::$loaded;
+    }
+
+    public static function loadedFile(): ?string
+    {
+        return self::$file;
     }
 
     public static function has(string $key): bool

@@ -30,10 +30,16 @@ final class AgentRegistrationController implements ActionInterface
         }
 
         $body = $request->json();
-        Validator::assertNoUnknownKeys($body, ['full_name', 'nin', 'phone', 'imei', 'device_type'], 'agent registration');
+        Validator::assertNoUnknownKeys(
+            $body,
+            ['full_name', 'nin', 'phone', 'email', 'location', 'imei', 'device_type'],
+            'agent registration'
+        );
         $fullName = trim(Validator::string($body['full_name'] ?? null, 2, 191, 'full_name'));
         $nin = Validator::nin($body['nin'] ?? null);
         $phone = Validator::nigerianPhone($body['phone'] ?? null);
+        $email = Validator::email($body['email'] ?? null);
+        $location = Validator::location($body['location'] ?? null);
         $imei = Validator::imei($body['imei'] ?? null);
         $deviceType = Validator::deviceType($body['device_type'] ?? null);
 
@@ -54,6 +60,15 @@ final class AgentRegistrationController implements ActionInterface
             );
         }
 
+        if ($email !== null && $this->agents->emailExists($email)) {
+            RateLimiter::record(self::ENDPOINT, $nin, $ip, false, 'REGISTRATION_EXISTS');
+            throw new ApiException(
+                409,
+                ErrorCode::STATE_CONFLICT,
+                'A registration already exists for this email address.'
+            );
+        }
+
         $agentCode = 'FP-' . strtoupper(bin2hex(random_bytes(6)));
 
         try {
@@ -63,7 +78,9 @@ final class AgentRegistrationController implements ActionInterface
                 $nin,
                 $phone,
                 $imei,
-                $deviceType
+                $deviceType,
+                $email,
+                $location
             );
         } catch (\PDOException $e) {
             if ((string) $e->getCode() === '23000') {
@@ -71,7 +88,7 @@ final class AgentRegistrationController implements ActionInterface
                 throw new ApiException(
                     409,
                     ErrorCode::STATE_CONFLICT,
-                    'A registration already exists for this NIN or IMEI.',
+                    'A registration already exists for this NIN, IMEI, or email address.',
                     [],
                     $e
                 );
@@ -101,6 +118,8 @@ final class AgentRegistrationController implements ActionInterface
                 'id' => $agentId,
                 'agent_code' => $agentCode,
                 'full_name' => $fullName,
+                'email' => $email,
+                'location' => $location,
                 'role' => 'AGENT',
             ],
         ], 201);

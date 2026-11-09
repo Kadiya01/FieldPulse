@@ -1,11 +1,13 @@
 import { NavLink } from 'react-router-dom';
 import {
+  LayoutDashboard,
   Camera,
   Database,
   Trophy,
   Award,
   ClipboardCheck,
-  UserCog
+  UserCog,
+  User
 } from 'lucide-react';
 
 /**
@@ -22,13 +24,15 @@ import {
  */
 export default function SiteNav({ isOperator, isAdmin }: { isOperator: boolean; isAdmin: boolean }) {
   const items = [
+    { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: false },
     { to: '/', label: 'Capture', icon: Camera, end: true },
     { to: '/queue', label: 'Queue', icon: Database, end: false },
     { to: '/leaderboard', label: 'Leaderboard', icon: Trophy, end: false },
     // Rewards is offered to everyone, not only operators: an agent sees their
     // own published entitlements, and the decide controls are gated inside the
     // page and again on the server.
-    { to: '/rewards', label: 'Rewards', icon: Award, end: false }
+    { to: '/rewards', label: 'Rewards', icon: Award, end: false },
+    { to: '/profile', label: 'Profile', icon: User, end: false }
   ];
 
   if (isOperator) {

@@ -75,6 +75,7 @@ final class SubmitController implements ActionInterface
     private const ALLOWED_PAYLOAD_KEYS = [
         'submission_uuid',
         'count_claimed',
+        'reporting_month',
         'captured_at',
         'latitude',
         'longitude',
@@ -122,6 +123,11 @@ final class SubmitController implements ActionInterface
         );
 
         $capturedAt = Validator::capturedAt($payload['captured_at'] ?? null);
+
+        $reportingMonth = isset($payload['reporting_month']) && $payload['reporting_month'] !== ''
+            ? Validator::reportingMonth($payload['reporting_month'])
+            : PeriodResolver::monthlyPeriodFor($capturedAt)['date'];
+
         $notes      = isset($payload['notes']) && $payload['notes'] !== ''
             ? Validator::string($payload['notes'], 0, 500, 'notes')
             : null;
@@ -204,6 +210,7 @@ final class SubmitController implements ActionInterface
                 $countClaimed,
                 $coordinates,
                 $capturedAt,
+                $reportingMonth,
                 $accuracyM,
                 $storedPath,
                 $actualHash,
@@ -225,7 +232,8 @@ final class SubmitController implements ActionInterface
                     $inspection['mime'],
                     $inspection['size'],
                     $inspection['width'],
-                    $inspection['height']
+                    $inspection['height'],
+                    $reportingMonth
                 );
 
                 $jobId = $this->jobs->enqueue($id, JobRepository::VERIFICATION);
@@ -270,6 +278,7 @@ final class SubmitController implements ActionInterface
             'metadata'       => [
                 'submission_uuid' => $submissionUuid,
                 'count_claimed'   => $countClaimed,
+                'reporting_month' => $reportingMonth,
                 'mime'            => $inspection['mime'],
                 'size'            => $inspection['size'],
                 'job_id'          => $jobId,
@@ -297,6 +306,7 @@ final class SubmitController implements ActionInterface
                 // photo the agent just took.
                 'self'            => $this->selfLink($submissionUuid),
                 'count_claimed'   => $countClaimed,
+                'reporting_month' => $reportingMonth,
                 'received_at'     => Clock::sql(),
                 // The worker runs on a one-minute cron, so this is an honest
                 // lower bound rather than a promise.
@@ -484,6 +494,7 @@ final class SubmitController implements ActionInterface
                 'idempotent_replay' => true,
                 'submission_status' => (string) $existing['status'],
                 'count_claimed'    => (int) $existing['count_claimed'],
+                'reporting_month'  => $existing['reporting_month'] ?? null,
                 'received_at'      => (string) $existing['server_received_at'],
                 'verified_at'      => $existing['verified_at'],
                 'self'             => $this->selfLink((string) $existing['submission_uuid']),

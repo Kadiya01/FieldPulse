@@ -1,0 +1,4 @@
+# Migration checksums are byte-sensitive (see docs/RELEASE.md).
+# Keep every migration LF in the repository and in a fresh checkout so a
+# Windows CRLF checkout cannot disagree with the deployed copy.
+private_storage/migrations/*.sql text eol=lf

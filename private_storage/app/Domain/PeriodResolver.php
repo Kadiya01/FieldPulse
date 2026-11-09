@@ -29,8 +29,126 @@ use FieldPulse\Support\Clock;
  */
 final class PeriodResolver
 {
+    public const TYPE_WEEKLY  = 'WEEKLY';
+    public const TYPE_MONTHLY = 'MONTHLY';
+    public const PERIOD_TYPES = [self::TYPE_WEEKLY, self::TYPE_MONTHLY];
+
     private function __construct()
     {
+    }
+
+    /**
+     * The first day of the business month containing $utcDatetime, as 'Y-m-d' (e.g. '2026-10-01').
+     */
+    public static function monthlyPeriodStartDate(?string $utcDatetime = null): string
+    {
+        return self::monthlyPeriodFor($utcDatetime)['date'];
+    }
+
+    /**
+     * @return array{date:string,start_utc:string,end_utc:string,business_tz:string}
+     */
+    public static function monthlyPeriodFor(?string $utcDatetime = null): array
+    {
+        $c        = Config::instance();
+        $business = $c->businessTimezone();
+
+        $utc = $utcDatetime === null
+            ? Clock::now()
+            : (Clock::parseSql($utcDatetime) ?? Clock::now());
+
+        $local = $utc->setTimezone($business);
+
+        $monthLocal = $local->modify('first day of this month')->setTime(0, 0, 0);
+        $nextLocal  = $monthLocal->modify('+1 month');
+
+        return [
+            'date'        => $monthLocal->format('Y-m-d'),
+            'start_utc'   => Clock::sql($monthLocal->setTimezone(new \DateTimeZone('UTC'))),
+            'end_utc'     => Clock::sql($nextLocal->setTimezone(new \DateTimeZone('UTC'))),
+            'business_tz' => $business->getName(),
+        ];
+    }
+
+    /**
+     * UTC window for a known monthly period_start_date (YYYY-MM-01).
+     *
+     * @return array{start_utc:string,end_utc:string}
+     */
+    public static function utcRangeForMonthlyPeriod(string $periodDate): array
+    {
+        $business = Config::instance()->businessTimezone();
+
+        $startLocal = new \DateTimeImmutable($periodDate . ' 00:00:00', $business);
+        $endLocal   = $startLocal->modify('+1 month');
+
+        return [
+            'start_utc' => Clock::sql($startLocal),
+            'end_utc'   => Clock::sql($endLocal),
+        ];
+    }
+
+    /**
+     * Unified period start date for either WEEKLY or MONTHLY period type.
+     * Accepts either (type, utcDatetime) or (utcDatetime, type).
+     */
+    public static function periodStartDateForType(?string $utcDatetimeOrType = null, ?string $typeOrDatetime = null): string
+    {
+        return self::periodForType($utcDatetimeOrType, $typeOrDatetime)['date'];
+    }
+
+    /**
+     * Unified period details for either WEEKLY or MONTHLY period type.
+     * Accepts either (type, utcDatetime) or (utcDatetime, type).
+     *
+     * @return array{date:string,start_utc:string,end_utc:string,business_tz:string}
+     */
+    public static function periodForType(?string $utcDatetimeOrType = null, ?string $typeOrDatetime = null): array
+    {
+        if ($utcDatetimeOrType !== null && in_array(strtoupper($utcDatetimeOrType), self::PERIOD_TYPES, true)) {
+            $type        = strtoupper($utcDatetimeOrType);
+            $utcDatetime = $typeOrDatetime;
+        } else {
+            $utcDatetime = $utcDatetimeOrType;
+            $type        = $typeOrDatetime !== null ? strtoupper($typeOrDatetime) : self::TYPE_WEEKLY;
+        }
+
+        return $type === self::TYPE_MONTHLY
+            ? self::monthlyPeriodFor($utcDatetime)
+            : self::periodFor($utcDatetime);
+    }
+
+    /**
+     * Unified UTC window for either WEEKLY or MONTHLY period type.
+     *
+     * @return array{start_utc:string,end_utc:string}
+     */
+    public static function utcRangeForPeriodType(string $periodDate, string $type = self::TYPE_WEEKLY): array
+    {
+        return $type === self::TYPE_MONTHLY
+            ? self::utcRangeForMonthlyPeriod($periodDate)
+            : self::utcRangeForPeriod($periodDate);
+    }
+
+    /**
+     * Enumerate monthly period dates (1st of month), newest first.
+     *
+     * @return list<string>
+     */
+    public static function monthlyPeriodRange(int $months): array
+    {
+        $months = max(1, min($months, 48));
+        $dates  = [];
+        $date   = self::monthlyPeriodStartDate();
+
+        for ($i = 0; $i < $months; $i++) {
+            $dates[] = $date;
+            $date    = (new \DateTimeImmutable($date . ' 00:00:00', Config::instance()->businessTimezone()))
+                ->modify('-1 month')
+                ->format('Y-m-d');
+        }
+
+        return $dates;
     }
 
     /**

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace FieldPulse\Database;
 
+use FieldPulse\Domain\PeriodResolver;
+
 /**
  * Leaderboard reads (§13).
  *
@@ -58,9 +60,10 @@ final class LeaderboardRepository extends Repository
         int $limit,
         int $offset,
         ?int $siteId = null,
-        ?int $selfAgentId = null
+        ?int $selfAgentId = null,
+        string $periodType = PeriodResolver::TYPE_WEEKLY
     ): array {
-        [$where, $params] = $this->filters($periodStartDate, $siteId);
+        [$where, $params] = $this->filters($periodStartDate, $siteId, $periodType);
 
         $rows = $this->all(
             'SELECT a.id AS agent_id, a.agent_code, a.full_name,
@@ -105,7 +108,7 @@ final class LeaderboardRepository extends Repository
              * logged-in agent died on a TypeError. The clause is rebuilt from
              * scratch below anyway, so the argument was never used.
              */
-            $self = $this->selfRow($periodStartDate, $selfAgentId, $siteId, $params);
+            $self = $this->selfRow($periodStartDate, $selfAgentId, $siteId, $params, $periodType);
 
             if ($self !== null) {
                 $selfRank = (int) $this->value(
@@ -152,18 +155,20 @@ final class LeaderboardRepository extends Repository
      * @param  array<string,mixed> $params
      * @return array<string,mixed>|null
      */
-    private function selfRow(string $period, int $agentId, ?int $siteId, array $params): ?array
+    private function selfRow(string $period, int $agentId, ?int $siteId, array $params, string $periodType = PeriodResolver::TYPE_WEEKLY): ?array
     {
         $sql = 'SELECT a.id AS agent_id, a.agent_code, a.full_name,
                        s.total_verified_count, s.total_pending
                   FROM agent_performance_summary s
                   JOIN agents a ON a.id = s.agent_id
                  WHERE s.period_start_date = :period
+                   AND s.period_type = :period_type
                    AND s.agent_id = :agent_id';
 
         $own = $params;
-        $own['period']   = $period;
-        $own['agent_id'] = $agentId;
+        $own['period']      = $period;
+        $own['period_type'] = $periodType;
+        $own['agent_id']    = $agentId;
 
         // A site filter must not hide the caller's own row; if they are not
         // assigned to that site there is nothing to show.
@@ -181,11 +186,14 @@ final class LeaderboardRepository extends Repository
     /**
      * @return array{0:string,1:array<string,mixed>}
      */
-    private function filters(string $periodStartDate, ?int $siteId): array
+    private function filters(string $periodStartDate, ?int $siteId, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
-        $where  = ['s.period_start_date = :period', "a.status = 'ACTIVE'"];
+        $where  = ['s.period_start_date = :period', 's.period_type = :period_type', "a.status = 'ACTIVE'"];
 
-        $params = ['period' => $periodStartDate];
+        $params = [
+            'period'      => $periodStartDate,
+            'period_type' => $periodType,
+        ];
 
         if ($siteId !== null) {
             $where[] = 'EXISTS (SELECT 1 FROM agent_sites s2
@@ -195,12 +203,7 @@ final class LeaderboardRepository extends Repository
             $params['site_id'] = $siteId;
         }
 
-        // The WHERE keyword belongs to this clause, not to each caller. It used
-        // to be returned bare, and the three statements that splice it in after
-        // a JOIN (the page query, the COUNT, and the self-rank count) all
-        // produced "... JOIN agents a ON a.id = s.agent_id s.period_start_date
-        // = ? AND a.status = 'ACTIVE' ORDER BY ..." which is a parse error. The
-        // leaderboard endpoint was a 500 on every request.
+        // The WHERE keyword belongs to this clause, not to each caller.
         return ['WHERE ' . implode(' AND ', $where), $params];
     }
 
@@ -229,13 +232,23 @@ final class LeaderboardRepository extends Repository
      *
      * @return list<string>
      */
-    public function availablePeriods(int $limit = 12): array
+    public function availablePeriods(int $limit = 12, ?string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
-        $rows = $this->all(
-            'SELECT DISTINCT period_start_date
-               FROM agent_performance_summary
-              ORDER BY period_start_date DESC' . self::limitClause($limit, 52, 0)
-        );
+        if ($periodType !== null) {
+            $rows = $this->all(
+                'SELECT DISTINCT period_start_date
+                   FROM agent_performance_summary
+                  WHERE period_type = :period_type
+                  ORDER BY period_start_date DESC' . self::limitClause($limit, 52, 0),
+                ['period_type' => $periodType]
+            );
+        } else {
+            $rows = $this->all(
+                'SELECT DISTINCT period_start_date
+                   FROM agent_performance_summary
+                  ORDER BY period_start_date DESC' . self::limitClause($limit, 52, 0)
+            );
+        }
 
         return array_map(static fn (array $r): string => (string) $r['period_start_date'], $rows);
     }
@@ -271,9 +284,9 @@ final class LeaderboardRepository extends Repository
      *
      * @return list<array<string,mixed>>
      */
-    public function standingForPeriod(string $periodStartDate): array
+    public function standingForPeriod(string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
-        [$where, $params] = $this->filters($periodStartDate, null);
+        [$where, $params] = $this->filters($periodStartDate, null, $periodType);
 
         return $this->all(
             'SELECT s.agent_id, s.total_verified_count, s.total_pending, s.total_rejected,
@@ -287,30 +300,54 @@ final class LeaderboardRepository extends Repository
     }
 
     /**
-     * Recompute and persist one agent's summary for one period.
+     * The persisted summary for one agent/period, or null when it does not
+     * exist yet.
      *
-     * Exposed here rather than only inside the verification service so that
-     * bin/reaggregate.php can rebuild a period after a policy change.
+     * Backfill uses this to compare a recomputed total with the historical row
+     * before writing. Without that comparison an "update" is indistinguishable
+     * from a silent overwrite of data somebody may have reviewed.
+     *
+     * @return array<string,mixed>|null
      */
-    public function refresh(int $agentId, string $periodStartDate): void
+    public function summaryFor(int $agentId, string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): ?array
     {
-        // utcRangeForPeriod() returns ['start_utc' => ..., 'end_utc' => ...].
-        // It was destructured positionally, which on an associative array yields
-        // an "Undefined array key 0" warning and leaves both bounds null, so the
-        // summary was recomputed over an empty window and every leaderboard read
-        // came back as zero.
-        $window    = \FieldPulse\Domain\PeriodResolver::utcRangeForPeriod($periodStartDate);
-        $startUtc  = $window['start_utc'];
-        $endUtc    = $window['end_utc'];
+        return $this->one(
+            'SELECT agent_id, period_start_date, period_type,
+                    total_verified_count, total_submissions, total_rejected, total_pending,
+                    updated_at
+               FROM agent_performance_summary
+              WHERE agent_id = :agent_id
+                AND period_start_date = :period_date
+                AND period_type = :period_type',
+            [
+                'agent_id'    => $agentId,
+                'period_date' => $periodStartDate,
+                'period_type' => $periodType,
+            ]
+        );
+    }
 
-        $totals = (new SubmissionRepository())->summarisePeriod($agentId, $startUtc, $endUtc);
-
+    /**
+     * Persist already-computed totals.
+     *
+     * Separate from refresh() so a caller that has just compared the totals
+     * against the existing row writes exactly the numbers it inspected, rather
+     * than recomputing and risking a different answer between the two reads.
+     *
+     * @param array{total_verified_count:int,total_submissions:int,total_rejected:int,total_pending:int} $totals
+     */
+    public function saveSummary(
+        int $agentId,
+        string $periodStartDate,
+        string $periodType,
+        array $totals
+    ): void {
         $this->exec(
             'INSERT INTO agent_performance_summary (
-                agent_id, period_start_date,
+                agent_id, period_start_date, period_type,
                 total_verified_count, total_submissions, total_rejected, total_pending, updated_at
              ) VALUES (
-                :agent_id, :period_date,
+                :agent_id, :period_date, :period_type,
                 :verified, :submissions, :rejected, :pending, UTC_TIMESTAMP()
              )
              ON DUPLICATE KEY UPDATE
@@ -322,11 +359,34 @@ final class LeaderboardRepository extends Repository
             [
                 'agent_id'    => $agentId,
                 'period_date' => $periodStartDate,
+                'period_type' => $periodType,
                 'verified'    => $totals['total_verified_count'],
                 'submissions' => $totals['total_submissions'],
                 'rejected'    => $totals['total_rejected'],
                 'pending'     => $totals['total_pending'],
             ]
         );
+    }
+
+    /**
+     * Recompute and persist one agent's summary for one period.
+     *
+     * Exposed here rather than only inside the verification service so that
+     * bin/reaggregate.php can rebuild a period after a policy change.
+     */
+    public function refresh(int $agentId, string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): void
+    {
+        $window   = PeriodResolver::utcRangeForPeriodType($periodStartDate, $periodType);
+        $startUtc = $window['start_utc'];
+        $endUtc   = $window['end_utc'];
+
+        $totals = (new SubmissionRepository())->summarisePeriod(
+            $agentId,
+            $startUtc,
+            $endUtc,
+            $periodType === PeriodResolver::TYPE_MONTHLY ? $periodStartDate : null
+        );
+
+        $this->saveSummary($agentId, $periodStartDate, $periodType, $totals);
     }
 }

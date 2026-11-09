@@ -28,6 +28,17 @@ export const REPO_ROOT = process.env.FIELDPULSE_REPO_ROOT
 
 const PHP = process.env.FIELDPULSE_PHP ?? 'php';
 
+/**
+ * The browser suite must never fall back to the deployment's .env.
+ *
+ * Every PHP process it spawns reads this file explicitly: the server, the
+ * fixture provisioning, the queue worker and the reward seeder. Keeping one
+ * constant here means the E2E run cannot provision an agent in one database and
+ * serve the app from another.
+ */
+export const E2E_ENV_FILE = process.env.FIELDPULSE_E2E_ENV
+  ?? path.join(REPO_ROOT, 'private_storage', '.env.mariadb');
+
 const CREDS_PATH = path.join(REPO_ROOT, '.e2e_creds.json');
 const FAULTS_PATH = path.join(REPO_ROOT, '.e2e_faults.json');
 
@@ -102,7 +113,7 @@ function runId(): string {
  */
 function php(args: string[], input?: string): string {
   try {
-    return execFileSync(PHP, args, {
+    return execFileSync(PHP, [...args, `--env=${E2E_ENV_FILE}`], {
       cwd: path.join(REPO_ROOT, 'private_storage'),
       encoding: 'utf8',
       input,
@@ -243,9 +254,12 @@ export type SeededReward = {
   total_verified_count: number;
 };
 
+export type RewardPeriodType = 'WEEKLY' | 'MONTHLY';
+
 export type SeedResult = {
   action: 'seed';
   period: string;
+  period_type: RewardPeriodType;
   agent: string;
   agent_id: number;
   closed: boolean;
@@ -265,15 +279,24 @@ export type SeedResult = {
  */
 export function seedReward(agentCode: string, options: {
   weeksAgo?: number;
+  monthsAgo?: number;
+  periodType?: RewardPeriodType;
   period?: string;
   verified?: number;
   amount?: number | string;
   currency?: string;
 } = {}): SeedResult {
   const args = ['bin/e2e_state.php', 'seed', `--agent=${agentCode}`];
+  const periodType = options.periodType ?? 'WEEKLY';
+
+  if (periodType === 'MONTHLY') {
+    args.push('--type=MONTHLY');
+  }
 
   if (options.period) {
     args.push(`--period=${options.period}`);
+  } else if (periodType === 'MONTHLY') {
+    args.push(`--months-ago=${options.monthsAgo ?? 2}`);
   } else {
     args.push(`--weeks-ago=${options.weeksAgo ?? 2}`);
   }
@@ -302,8 +325,30 @@ export function seedReward(agentCode: string, options: {
  * bin/reaggregate.php, rewriting a historical week. The published entitlement
  * must not move when this runs.
  */
-export function bumpLiveSummary(agentCode: string, period: string, verified: number): void {
-  php(['bin/e2e_state.php', 'bump', `--agent=${agentCode}`, `--period=${period}`, `--verified=${verified}`]);
+export function bumpLiveSummary(
+  agentCode: string,
+  period: string,
+  verified: number,
+  periodType: RewardPeriodType = 'WEEKLY'
+): void {
+  const args = ['bin/e2e_state.php', 'bump', `--agent=${agentCode}`, `--period=${period}`, `--verified=${verified}`];
+
+  if (periodType === 'MONTHLY') {
+    args.push('--type=MONTHLY');
+  }
+
+  php(args);
+}
+
+/**
+ * Run the real cron worker once, through its production entry point.
+ *
+ * The E2E server serves HTTP only; verification is the cron worker's job. A test
+ * that wants a real verdict has to run the same binary cPanel runs, rather than
+ * writing a status into the database.
+ */
+export function processQueue(maxJobs = 20): void {
+  php(['workers/process_queue.php', `--max-jobs=${maxJobs}`]);
 }
 
 /**

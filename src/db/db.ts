@@ -23,6 +23,15 @@ export interface Submission {
   accuracy_m: number | null;
   /** ISO-8601 UTC, the same shape the server's `capturedAt()` validator accepts. */
   captured_at: string;
+  /**
+   * The month this work is reported against, as `YYYY-MM`.
+   *
+   * Nullable because records queued before the monthly-enrollment release have
+   * no value; the server then falls back to the month of `captured_at`. New
+   * captures always set it from the selector so a late upload still lands in the
+   * month the agent chose.
+   */
+  reporting_month?: string | null;
   created_at: number;
   updated_at: number;
   status: 'PENDING' | 'SYNCING' | 'RETRY_WAIT' | 'SENT' | 'FAILED_AUTH' | 'FAILED_PERMANENT';
@@ -122,6 +131,10 @@ export function buildSubmitPayload(sub: Submission): Record<string, unknown> {
 
   if (sub.accuracy_m !== null) {
     payload.accuracy_m = sub.accuracy_m;
+  }
+
+  if (sub.reporting_month) {
+    payload.reporting_month = sub.reporting_month;
   }
 
   return payload;

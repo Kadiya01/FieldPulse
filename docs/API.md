@@ -120,6 +120,11 @@ uses a bearer header, which a browser will not attach cross-origin.
 | POST | `/api/v1/device/register.php` | bootstrap token; new self-registered agents do not need a pairing code |
 | POST | `/api/v1/submit.php` | **signed** |
 | GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
+| GET | `/api/v1/dashboard.php` | bearer, own standing only |
+| GET | `/api/v1/profile.php` | signed, own profile only |
+| POST | `/api/v1/profile.php` | signed, own profile only |
+| GET | `/api/v1/notifications.php` | bearer, own notifications only |
+| POST | `/api/v1/notifications/read.php` | bearer, own notifications only |
 | GET | `/api/v1/leaderboard.php` | bearer |
 | GET | `/api/v1/reviews/index.php` | operator |
 | POST | `/api/v1/reviews/decide.php` | operator |
@@ -198,7 +203,9 @@ administrator approves it in the account directory.
   "nin": "12345678901",
   "phone": "08012345678",
   "imei": "490154203237518",
-  "device_type": "SAMSUNG"
+  "device_type": "SAMSUNG",
+  "email": "ada@example.test",
+  "location": "Lagos"
 }
 ```
 
@@ -206,9 +213,10 @@ administrator approves it in the account directory.
 or `2348012345678`; the server stores it in E.164 form. The NIN and phone are
 stored and exposed only through the ADMIN-only account directory.
 `device_type` must be one of `EACRUGGED`, `EASTAEON`, `HENA`, `MANTRA`,
-`OUKITEL`, `SAMSUNG` or `WHEATEK`. Duplicate NIN or IMEI values receive a
-generic `409 STATE_CONFLICT` response. Registration attempts are rate-limited
-by NIN and source IP.
+`OUKITEL`, `SAMSUNG` or `WHEATEK`. `email` and `location` are optional profile
+fields; `email` is stored lowercased and must be unique. Duplicate NIN, IMEI or
+email values receive a generic `409 STATE_CONFLICT` response. Registration
+attempts are rate-limited by NIN and source IP.
 
 The successful response includes the registration status and an agent summary,
 but never returns the NIN, phone or IMEI. A pending registration cannot use
@@ -333,10 +341,17 @@ client MIME is rejected on content, not on its name.
   "latitude": 6.5244,
   "longitude": 3.3792,
   "accuracy_m": 12.5,
-  "file_sha256": "e3b0c442…",
-  "notes": "optional, ≤500 chars"
+  "file_sha256": "e3b0c442�?�",
+  "reporting_month": "2026-11",
+  "notes": "optional, �%500 chars"
 }
 ```
+
+`reporting_month` is optional and accepts `YYYY-MM` or `YYYY-MM-01`. It is the
+month the enrollment counts toward, independent of when the queued photo finally
+reaches the server. A future month is rejected. When omitted, the server uses
+the month of `captured_at`, which keeps records queued by older clients counting
+in the month they were taken.
 
 `submission_uuid` is generated on the device and is the idempotency key.
 `file_sha256` is **required**: it is what ties the device signature to the file
@@ -473,10 +488,65 @@ be able to tell that apart from one already actioned.
 
 ---
 
+### GET /api/v1/dashboard.php
+
+Bearer-authenticated. Returns the caller's current monthly standing, read from
+the persisted summary rather than by re-aggregating the local queue.
+
+```json
+{
+  "data": {
+    "agent": { "id": 12, "agent_code": "AG-001", "full_name": "Ada", "email": null, "location": "Lagos", "monthly_target": 40 },
+    "period": { "period_type": "MONTHLY", "period_start_date": "2026-11-01", "business_timezone": "Africa/Lagos" },
+    "totals": { "approved_enrollments": 31, "total_submissions": 36, "pending": 3, "rejected": 2 },
+    "target": { "monthly_target": 40, "configured": true, "achievement_percent": 77.5, "remaining": 9 },
+    "leaderboard": { "rank": 4, "total_agents": 27 },
+    "recent_submissions": [],
+    "notifications": { "unread_count": 2, "items": [] }
+  }
+}
+```
+
+`approved_enrollments` is the sum of `count_claimed` for `VERIFIED` rows only.
+Pending and rejected records are reported separately and never enter the
+numerator. `achievement_percent` is `(approved / target) * 100`; when no target
+is configured it is `null`, not `0`, and `configured` is `false`. A target of
+zero means "not configured" and is rendered as such.
+
+### GET|POST /api/v1/profile.php
+
+Signed, scoped to the caller. `GET` returns the profile; `POST` accepts only
+`email`, `location` and `phone`. NIN, IMEI, role, status and monthly target are
+read-only here; a profile form cannot promote an account or change the number it
+is measured against. An email already used by another account is
+`409 STATE_CONFLICT`.
+
+```json
+{ "email": "ada@example.test", "location": "Lagos", "phone": "08012345678" }
+```
+
+### GET /api/v1/notifications.php
+
+Bearer-authenticated, scoped to the caller. Query: `limit` (1–100, default 50),
+`offset`. Returns `{ "data": [ ... ], "meta": { "unread_count": 2, "pagination": { ... } } }`.
+Notifications are written when a registration or account status is decided and
+when a submission is approved or rejected, so the agent has a durable record of
+a decision that has no other screen.
+
+### POST /api/v1/notifications/read.php
+
+Marks one notification read with `{ "id": 7 }`, or all of them with
+`{ "mark_all": true }`. An id belonging to another agent is a no-op, not a
+`403`, so the endpoint cannot be used to probe whether an id exists. Returns
+`{ "data": { "unread_count": 0 } }`.
+
+---
+
 ### GET /leaderboard
 
-Query: `period` (`YYYY-MM-DD`, any day in the week — normalised to its Monday),
-`site` (site name or id, optional), `limit` (1–100, default 25), `offset`.
+Query: `period` (`YYYY-MM-DD`, Monday for weekly or 1st of month for monthly),
+`period_type` (`WEEKLY` | `MONTHLY`, default `WEEKLY`),
+`site_id` (assigned site id, optional), `limit` (1–100, default 25), `offset`.
 
 ```json
 { "data": { "period_start": "2026-09-28", "site": null, "entries": [ … ], "self": { "rank": 12, "total_verified_count": 31 } } }
@@ -515,7 +585,7 @@ supervisor who made it.
 
 Bearer, and only ever the caller's own entitlements: the controller queries on
 the caller's `agent_id` and there is no parameter that can widen it. Query:
-`limit` (1–120, default 24).
+`limit` (1–120, default 24), `period_type` (`WEEKLY` | `MONTHLY`, optional).
 
 ```json
 {
@@ -558,7 +628,7 @@ Operator-only (`SUPERVISOR` or `ADMIN`). An `AGENT` role receives `403`.
 
 `GET /api/v1/rewards/index.php` lists one period's published entitlements in
 frozen-rank order. Query: `period` (`YYYY-MM-DD`, default the newest closed
-period), `limit` (1–100, default 25), `offset`. `meta.tiers` carries the current
+period), `period_type` (`WEEKLY` | `MONTHLY`, default `WEEKLY`), `limit` (1–100, default 25), `offset`. `meta.tiers` carries the current
 schedule and `meta.closed` says whether that period has been frozen yet;
 `meta.available_periods` drives a period selector without hardcoding dates.
 
@@ -651,6 +721,7 @@ that action's own field list is a `422`.
 { "id": 12, "action": "SET_PASSWORD",        "password": "…" }
 { "id": 12, "action": "REVOKE_CREDENTIAL" }
 { "id": 12, "action": "ISSUE_PAIRING_CODE" }
+{ "id": 12, "action": "SET_MONTHLY_TARGET", "monthly_target": 40 }
 ```
 
 `SET_STATUS` accepts `PENDING`, `ACTIVE`, `REJECTED`, `SUSPENDED` or `DELETED`.
@@ -671,6 +742,13 @@ issuer as `created_by` — and the response adds `pairing_code`, `expires_at`
 (e.g. an agent's name) is stored with the code for an operator to recognise.
 Issuing a code is a way in for somebody, never a way out, so — like a password
 reset — it is also allowed on the caller's **own** account.
+
+`SET_MONTHLY_TARGET` sets the integer `monthly_target` used by the dashboard
+achievement calculation, in the range `0..1000000`. `0` means "not configured"
+and is rendered as such, not as `0%`. It is a measurement setting rather than an
+access control, so an administrator may set it on their own account; a no-op
+change writes no audit row. Every real change appends
+`admin.agent.monthly_target_changed`.
 
 Each call returns the updated account as `{ "data": <agent> }`, in the same shape
 as the directory.

@@ -44,6 +44,7 @@ use FieldPulse\Testing\HttpServer;
 Cli::init(__FILE__);
 
 $argv    = Cli::argv();
+$envFile = Cli::option($argv, 'env');
 $repo    = dirname(__DIR__, 2);
 $docRoot = $repo . '/.e2e_docroot';
 $dist    = $repo . '/dist';
@@ -93,7 +94,8 @@ Cli::out('  staged  ' . $docRoot);
 // suite exercises the same protection of .htaccess/.user.ini/api that a
 // production publish relies on.
 $deploy = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($repo . '/private_storage/bin/deploy.php')
-    . ' --skip-frontend --docroot=' . escapeshellarg($docRoot);
+    . ' --skip-frontend --docroot=' . escapeshellarg($docRoot)
+    . ($envFile !== null ? ' --env=' . escapeshellarg($envFile) : '');
 
 exec($deploy . ' 2>&1', $deployOut, $deployCode);
 

@@ -18,6 +18,8 @@ export default function RegisterPage() {
   const [fullName, setFullName] = useState('');
   const [nin, setNin] = useState('');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [location, setLocation] = useState('');
   const [imei, setImei] = useState('');
   const [deviceType, setDeviceType] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -34,6 +36,8 @@ export default function RegisterPage() {
         full_name: fullName.trim(),
         nin: nin.trim(),
         phone: phone.trim(),
+        email: email.trim() ? email.trim() : undefined,
+        location: location.trim() ? location.trim() : undefined,
         imei: normalizedImei,
         device_type: deviceType,
       });
@@ -157,6 +161,34 @@ export default function RegisterPage() {
               required
               value={imei}
               onChange={event => setImei(event.target.value.replace(/[^\d\s-]/g, ''))}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
+            />
+          </div>
+          <div>
+            <label htmlFor="email" className="block text-sm font-semibold text-slate-800">
+              Email address (optional)
+            </label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={event => setEmail(event.target.value)}
+              placeholder="agent@example.com"
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
+            />
+          </div>
+          <div>
+            <label htmlFor="location" className="block text-sm font-semibold text-slate-800">
+              Operating location / LGA (optional)
+            </label>
+            <input
+              id="location"
+              type="text"
+              maxLength={191}
+              value={location}
+              onChange={event => setLocation(event.target.value)}
+              placeholder="e.g. Kano, Fagge LGA"
               className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
             />
           </div>

@@ -98,9 +98,9 @@ final class RewardService
     /**
      * Has this period's window plus grace passed?
      */
-    public function isDue(string $periodStartDate): bool
+    public function isDue(string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): bool
     {
-        $window = PeriodResolver::utcRangeForPeriod($periodStartDate);
+        $window = PeriodResolver::utcRangeForPeriodType($periodStartDate, $periodType);
         $ends   = Clock::parseSql($window['end_utc']);
 
         if ($ends === null) {
@@ -113,29 +113,26 @@ final class RewardService
     /**
      * Close every period that is due and has not been frozen yet.
      *
-     * The cutoff is derived rather than queried: a period is due exactly when
-     * period_start_date <= (now - grace - 7 days) expressed as a period start,
-     * which reduces the candidate set to one indexed range scan before any
-     * period is opened at all. PeriodResolver does the business-timezone
-     * arithmetic so this class never has to know what a Monday is.
-     *
      * @return list<string> the periods this call closed
      */
-    public function closeDuePeriods(): array
+    public function closeDuePeriods(?string $periodType = null): array
     {
-        $cutoffInstant = Clock::now()
-            ->modify('-' . $this->graceHours() . ' hours')
-            ->modify('-7 days');
-
-        $cutoffPeriod = PeriodResolver::periodStartDate(Clock::sql($cutoffInstant));
-
+        $types = $periodType !== null ? [$periodType] : [PeriodResolver::TYPE_WEEKLY, PeriodResolver::TYPE_MONTHLY];
         $closed = [];
 
-        foreach ($this->rewards->unfrozenPeriodsOnOrBefore($cutoffPeriod) as $period) {
-            $result = $this->closePeriod($period);
+        foreach ($types as $type) {
+            $cutoffInstant = $type === PeriodResolver::TYPE_MONTHLY
+                ? Clock::now()->modify('-' . $this->graceHours() . ' hours')->modify('-1 month')
+                : Clock::now()->modify('-' . $this->graceHours() . ' hours')->modify('-7 days');
 
-            if ($result['closed']) {
-                $closed[] = $period;
+            $cutoffPeriod = PeriodResolver::periodStartDateForType($type, Clock::sql($cutoffInstant));
+
+            foreach ($this->rewards->unfrozenPeriodsOnOrBefore($cutoffPeriod, $type) as $period) {
+                $result = $this->closePeriod($period, $type);
+
+                if ($result['closed']) {
+                    $closed[] = $period;
+                }
             }
         }
 
@@ -150,34 +147,34 @@ final class RewardService
      * on agent_rewards each independently make a repeat call a no-op, so the
      * cron worker, the CLI, and a read-path fallback can all race safely.
      *
-     * @return array{closed:bool,reason:string,period:string,frozen:int,published:int}
+     * @return array{closed:bool,reason:string,period:string,frozen:int,published:int,period_type:string}
      */
-    public function closePeriod(string $periodStartDate): array
+    public function closePeriod(string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
-        if ($this->rewards->periodIsFrozen($periodStartDate)) {
-            return $this->notClosed($periodStartDate, 'already_closed');
+        if ($this->rewards->periodIsFrozen($periodStartDate, $periodType)) {
+            return $this->notClosed($periodStartDate, 'already_closed', $periodType);
         }
 
-        if (!$this->isDue($periodStartDate)) {
-            return $this->notClosed($periodStartDate, 'not_due');
+        if (!$this->isDue($periodStartDate, $periodType)) {
+            return $this->notClosed($periodStartDate, 'not_due', $periodType);
         }
 
-        return Connection::transaction(function () use ($periodStartDate): array {
+        return Connection::transaction(function () use ($periodStartDate, $periodType): array {
             // Re-checked inside the transaction: two ticks can both pass the
             // check above, and only the one that still sees an unfrozen period
             // should do the work.
-            if ($this->rewards->periodIsFrozen($periodStartDate)) {
-                return $this->notClosed($periodStartDate, 'already_closed');
+            if ($this->rewards->periodIsFrozen($periodStartDate, $periodType)) {
+                return $this->notClosed($periodStartDate, 'already_closed', $periodType);
             }
 
-            $standing = $this->board->standingForPeriod($periodStartDate);
+            $standing = $this->board->standingForPeriod($periodStartDate, $periodType);
 
             if ($standing === []) {
-                // Every agent that week is inactive, or the summary row was
+                // Every agent that period is inactive, or the summary row was
                 // removed after the cutoff scan. Nothing to rank, and no marker
                 // row could represent an empty freeze, so the period stays
                 // unclosed and is simply looked at again next tick.
-                return $this->notClosed($periodStartDate, 'no_standing');
+                return $this->notClosed($periodStartDate, 'no_standing', $periodType);
             }
 
             $tiers = $this->rewards->activeTiers();
@@ -216,8 +213,8 @@ final class RewardService
                 ];
             }
 
-            $frozen    = $this->rewards->insertRankings($periodStartDate, $rankings);
-            $published = $this->rewards->insertRewards($periodStartDate, $entitlements);
+            $frozen    = $this->rewards->insertRankings($periodStartDate, $rankings, $periodType);
+            $published = $this->rewards->insertRewards($periodStartDate, $entitlements, $periodType);
 
             // actor_agent_id is null on purpose: no operator closed this period,
             // the schedule did. Recording an operator here would credit someone
@@ -228,6 +225,7 @@ final class RewardService
                 'entity_type'    => 'reward_period',
                 'metadata'       => [
                     'period_start_date' => $periodStartDate,
+                    'period_type'       => $periodType,
                     'frozen'            => $frozen,
                     'published'         => $published,
                     'grace_hours'       => $this->graceHours(),
@@ -236,16 +234,18 @@ final class RewardService
 
             Logger::info('reward.period_closed', [
                 'period_start_date' => $periodStartDate,
+                'period_type'       => $periodType,
                 'frozen'            => $frozen,
                 'published'         => $published,
             ]);
 
             return [
-                'closed'   => true,
-                'reason'   => 'closed',
-                'period'   => $periodStartDate,
-                'frozen'   => $frozen,
-                'published' => $published,
+                'closed'      => true,
+                'reason'      => 'closed',
+                'period'      => $periodStartDate,
+                'period_type' => $periodType,
+                'frozen'      => $frozen,
+                'published'   => $published,
             ];
         });
     }
@@ -261,13 +261,13 @@ final class RewardService
      *
      * @return list<string>
      */
-    public function closeIfDue(): array
+    public function closeIfDue(?string $periodType = null): array
     {
         if (!Config::instance()->bool('rewards.close_on_read', true)) {
             return [];
         }
 
-        return $this->closeDuePeriods();
+        return $this->closeDuePeriods($periodType);
     }
 
     /**
@@ -288,16 +288,17 @@ final class RewardService
     }
 
     /**
-     * @return array{closed:bool,reason:string,period:string,frozen:int,published:int}
+     * @return array{closed:bool,reason:string,period:string,frozen:int,published:int,period_type:string}
      */
-    private function notClosed(string $period, string $reason): array
+    private function notClosed(string $period, string $reason, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
         return [
-            'closed'   => false,
-            'reason'   => $reason,
-            'period'   => $period,
-            'frozen'   => 0,
-            'published' => 0,
+            'closed'      => false,
+            'reason'      => $reason,
+            'period'      => $period,
+            'period_type' => $periodType,
+            'frozen'      => 0,
+            'published'   => 0,
         ];
     }
 
@@ -310,11 +311,11 @@ final class RewardService
      *
      * @return list<array<string,mixed>>
      */
-    public function forAgent(int $agentId, int $limit = 24): array
+    public function forAgent(int $agentId, int $limit = 24, ?string $periodType = null): array
     {
-        $this->closeIfDue();
+        $this->closeIfDue($periodType);
 
-        return $this->rewards->forAgent($agentId, $limit);
+        return $this->rewards->forAgent($agentId, $limit, $periodType);
     }
 
     /**
@@ -322,25 +323,25 @@ final class RewardService
      *
      * @return array{items:list<array<string,mixed>>,total:int,closed:bool}
      */
-    public function forPeriod(string $periodStartDate, int $limit, int $offset): array
+    public function forPeriod(string $periodStartDate, int $limit, int $offset, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
-        $this->closeIfDue();
+        $this->closeIfDue($periodType);
 
         return [
-            'items'  => $this->rewards->forPeriod($periodStartDate, $limit, $offset),
-            'total'  => $this->rewards->countForPeriod($periodStartDate),
-            'closed' => $this->rewards->periodIsFrozen($periodStartDate),
+            'items'  => $this->rewards->forPeriod($periodStartDate, $limit, $offset, $periodType),
+            'total'  => $this->rewards->countForPeriod($periodStartDate, $periodType),
+            'closed' => $this->rewards->periodIsFrozen($periodStartDate, $periodType),
         ];
     }
 
     /**
      * @return list<string>
      */
-    public function closedPeriods(int $limit = 24): array
+    public function closedPeriods(int $limit = 24, ?string $periodType = null): array
     {
-        $this->closeIfDue();
+        $this->closeIfDue($periodType);
 
-        return $this->rewards->closedPeriods($limit);
+        return $this->rewards->closedPeriods($limit, $periodType);
     }
 
     /**
@@ -414,6 +415,7 @@ final class RewardService
             'entity_id'      => $rewardId,
             'metadata'       => [
                 'period_start_date' => $row['period_start_date'],
+                'period_type'       => $row['period_type'] ?? PeriodResolver::TYPE_WEEKLY,
                 'agent_code'        => $row['agent_code'],
                 'from'              => $current,
                 'to'                => match ($action) {

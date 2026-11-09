@@ -5,6 +5,14 @@ import {
   registerDevice,
   issuePairingCode,
   restoreSession,
+  fetchLeaderboard,
+  fetchMyRewards,
+  fetchPeriodRewards,
+  fetchDashboard,
+  fetchProfile,
+  updateProfile,
+  fetchNotifications,
+  markNotificationRead,
   ApiError
 } from './client';
 import { getAccessToken, setAccessToken } from '../auth/session';
@@ -404,5 +412,239 @@ describe('Refresh coordination', () => {
     // would send an unauthenticated write to the server.
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sessionState.handleAuthFailure).toHaveBeenCalledWith('UNREGISTERED');
+  });
+});
+
+describe('Period type handling in API client', () => {
+  beforeEach(() => {
+    setAccessToken('test-token');
+    vi.clearAllMocks();
+    vi.mocked(getDeviceIdentity).mockResolvedValue({
+      id: 'current',
+      device_uuid: 'd0e0e0e0-0000-4000-8000-000000000001',
+      private_key: {} as CryptoKey,
+      public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+      registered_at: 1
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetchLeaderboard passes period and period_type query parameters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: {
+          period_type: 'MONTHLY',
+          period_start_date: '2026-10-01',
+          scope: 'GLOBAL',
+          site_id: null,
+          entries: [],
+          pagination: { total: 0, limit: 25, offset: 0 },
+          you: null
+        },
+        meta: { available_periods: ['2026-10-01', '2026-09-01'] }
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchLeaderboard('2026-10-01', 'MONTHLY');
+
+    expect(fetchMock).toHaveBeenCalled();
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('period=2026-10-01');
+    expect(calledUrl).toContain('period_type=MONTHLY');
+    expect(result.period_type).toBe('MONTHLY');
+    expect(result.period_start_date).toBe('2026-10-01');
+  });
+
+  it('fetchMyRewards passes period_type parameter', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: [
+          {
+            id: 1,
+            period_type: 'MONTHLY',
+            period_start_date: '2026-10-01',
+            rank: 1,
+            total_verified_count: 50,
+            tier: { id: 1, label: 'Gold' },
+            amount: 500,
+            currency: 'NGN',
+            status: 'APPROVED',
+            is_paid: false,
+            published_at: '2026-11-01 00:00:00',
+            approved_at: '2026-11-02 00:00:00',
+            paid_at: null,
+            voided_at: null,
+            void_reason: null,
+            notes: null
+          }
+        ],
+        meta: { agent_code: 'AG-001', grace_hours: 24, payment_note: 'Note' }
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchMyRewards(24, 'MONTHLY');
+
+    expect(fetchMock).toHaveBeenCalled();
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('period_type=MONTHLY');
+    expect(result.rewards[0].period_type).toBe('MONTHLY');
+  });
+
+  it('fetchPeriodRewards passes period and period_type parameter', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: [],
+        meta: {
+          period: '2026-10-01',
+          period_type: 'MONTHLY',
+          closed: true,
+          available_periods: ['2026-10-01'],
+          tiers: [],
+          pagination: { total: 0, limit: 100, offset: 0 }
+        }
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchPeriodRewards('2026-10-01', 100, 'MONTHLY');
+
+    expect(fetchMock).toHaveBeenCalled();
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('period=2026-10-01');
+    expect(calledUrl).toContain('period_type=MONTHLY');
+    expect(result.meta.period_type).toBe('MONTHLY');
+  });
+});
+
+describe('Phase 3: Dashboard, Profile & Notifications API', () => {
+  beforeEach(() => {
+    setAccessToken('mock-access-token');
+    vi.clearAllMocks();
+    vi.mocked(getDeviceIdentity).mockResolvedValue({
+      id: 'current',
+      device_uuid: 'd0e0e0e0-0000-4000-8000-000000000001',
+      private_key: {} as CryptoKey,
+      public_key_jwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+      registered_at: 1
+    });
+  });
+
+  it('fetchDashboard calls /dashboard.php and returns parsed dashboard metrics', async () => {
+    const mockDashboard = {
+      agent: {
+        id: 10,
+        agent_code: 'FP-TEST01',
+        full_name: 'Test Agent',
+        email: 'test@example.com',
+        location: 'Kano',
+        monthly_target: 100
+      },
+      period: {
+        period_type: 'MONTHLY',
+        period_start_date: '2026-11-01',
+        business_timezone: 'Africa/Lagos'
+      },
+      totals: {
+        approved_enrollments: 45,
+        total_submissions: 50,
+        pending: 3,
+        rejected: 2
+      },
+      target: {
+        monthly_target: 100,
+        configured: true,
+        achievement_percent: 45,
+        remaining: 55
+      },
+      leaderboard: {
+        rank: 3,
+        total_agents: 20
+      },
+      recent_submissions: [],
+      notifications: {
+        unread_count: 1,
+        items: []
+      }
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: mockDashboard }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchDashboard();
+
+    expect(fetchMock).toHaveBeenCalled();
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('/dashboard.php');
+    expect(result.agent.agent_code).toBe('FP-TEST01');
+    expect(result.totals.approved_enrollments).toBe(45);
+    expect(result.target.achievement_percent).toBe(45);
+  });
+
+  it('fetchProfile and updateProfile call /profile.php with signed device headers', async () => {
+    const mockProfile = {
+      id: 10,
+      agent_code: 'FP-TEST01',
+      full_name: 'Test Agent',
+      nin: '12345678901',
+      phone: '08012345678',
+      email: 'test@example.com',
+      location: 'Kano',
+      imei: '123456789012345',
+      device_type: 'SAMSUNG',
+      role: 'AGENT',
+      status: 'ACTIVE',
+      monthly_target: 100,
+      created_at: '2026-11-01 00:00:00'
+    };
+
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, { data: mockProfile })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const profile = await fetchProfile();
+    expect(profile.full_name).toBe('Test Agent');
+    expect(profile.phone).toBe('08012345678');
+
+    const updated = await updateProfile({ phone: '08099999999', email: 'updated@example.com' });
+    expect(updated.agent_code).toBe('FP-TEST01');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('fetchNotifications and markNotificationRead communicate with notifications endpoints', async () => {
+    const mockList = {
+      data: [
+        {
+          id: 1,
+          type: 'REGISTRATION_APPROVED',
+          title: 'Registration approved',
+          message: 'Your registration was approved.',
+          entity_type: null,
+          entity_id: null,
+          read_at: null,
+          created_at: '2026-11-01 12:00:00'
+        }
+      ],
+      meta: {
+        unread_count: 1,
+        pagination: { limit: 50, offset: 0 }
+      }
+    };
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, mockList))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { unread_count: 0 } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const list = await fetchNotifications(50, 0);
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0].title).toBe('Registration approved');
+    expect(list.meta.unread_count).toBe(1);
+
+    const readResult = await markNotificationRead(1);
+    expect(readResult.unread_count).toBe(0);
   });
 });

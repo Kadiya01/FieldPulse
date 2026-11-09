@@ -129,18 +129,22 @@ final class AgentRepository extends Repository
         string $nin,
         string $phone,
         string $imei,
-        string $deviceType
+        string $deviceType,
+        ?string $email = null,
+        ?string $location = null
     ): int {
         $this->exec(
             'INSERT INTO agents
-                (agent_code, full_name, nin, phone, role, status, imei, device_type, self_registered, created_at, updated_at)
+                (agent_code, full_name, nin, phone, email, location, role, status, imei, device_type, self_registered, created_at, updated_at)
              VALUES
-                (:code, :name, :nin, :phone, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+                (:code, :name, :nin, :phone, :email, :location, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
             [
                 'code'        => $code,
                 'name'        => $fullName,
                 'nin'         => $nin,
                 'phone'       => $phone,
+                'email'       => $email,
+                'location'    => $location,
                 'role'        => 'AGENT',
                 'status'      => self::PENDING,
                 'imei'        => $imei,
@@ -149,6 +153,49 @@ final class AgentRepository extends Repository
         );
 
         return (int) Connection::lastInsertId();
+    }
+
+    /** @return array<string,mixed>|null */
+    public function findByEmail(string $email): ?array
+    {
+        return $this->one(
+            'SELECT * FROM agents WHERE email = :email LIMIT 1',
+            ['email' => $email]
+        );
+    }
+
+    public function emailExists(string $email): bool
+    {
+        return $this->findByEmail($email) !== null;
+    }
+
+    /**
+     * Update the fields an agent may maintain themselves.
+     *
+     * NIN, IMEI, role and status are deliberately absent: those are identity and
+     * administrative facts, not profile preferences, and letting the profile
+     * endpoint write them would turn a self-service form into a privilege change.
+     */
+    public function updateProfile(int $agentId, ?string $email, ?string $location, string $phone): void
+    {
+        $this->exec(
+            'UPDATE agents
+                SET email = :email, location = :location, phone = :phone, updated_at = UTC_TIMESTAMP()
+              WHERE id = :id',
+            ['email' => $email, 'location' => $location, 'phone' => $phone, 'id' => $agentId]
+        );
+    }
+
+    public function setMonthlyTarget(int $agentId, int $target): void
+    {
+        if ($target < 0 || $target > 1000000) {
+            throw new \InvalidArgumentException('Monthly target is out of range.');
+        }
+
+        $this->exec(
+            'UPDATE agents SET monthly_target = :target, updated_at = UTC_TIMESTAMP() WHERE id = :id',
+            ['target' => $target, 'id' => $agentId]
+        );
     }
 
     public function create(string $code, string $fullName, ?string $imei = null): int
@@ -232,6 +279,7 @@ final class AgentRepository extends Repository
     public function listForAdmin(int $limit, int $offset): array
     {
         $sql = "SELECT a.id, a.agent_code, a.full_name, a.nin, a.phone,
+                       a.email, a.location, a.monthly_target,
                        a.self_registered, a.role, a.status,
                        a.username, a.created_at,
                        (SELECT COUNT(*) FROM devices d

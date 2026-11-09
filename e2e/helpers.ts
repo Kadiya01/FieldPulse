@@ -2,7 +2,69 @@ import { expect, type BrowserContext, type Page, type TestInfo } from '@playwrig
 import { chromium, devices } from '@playwright/test';
 import { readCredentials, readOperatorCredentials, REPO_ROOT, type Credentials } from './fixtures';
 import path from 'node:path';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+
+/**
+ * Give each browser context its own fake camera image.
+ *
+ * Chromium's default fake device produces the same frame every run. Duplicate
+ * detection is intentionally global, so a capture from this run can be a
+ * perceptual match for a capture left behind by an earlier run — the submission
+ * is then rejected before a reviewer ever sees it. The suite is about the
+ * review/counting path, not about whether the fixture happened to reuse an old
+ * frame, so every context gets a deterministic-but-unique Y4M pattern instead.
+ *
+ * The file is repeated for a few frames because Chrome's fake capture device
+ * reads a stream, and the path is unique per launch so a previous browser that
+ * still has the old file open cannot make the next run fall back to its default
+ * test pattern.
+ */
+let fakeCameraSequence = 0;
+
+function writeFakeCameraVideo(testInfo: TestInfo, profileName: string): string {
+  fakeCameraSequence += 1;
+  const file = testInfo.outputPath(
+    `fake-camera-${profileName}-${Date.now()}-${fakeCameraSequence}.y4m`
+  );
+  mkdirSync(path.dirname(file), { recursive: true });
+
+  const width = 320;
+  const height = 240;
+  const blockWidth = 16;
+  const blockHeight = 16;
+  const blocksX = width / blockWidth;
+  const blocksY = height / blockHeight;
+
+  let state = (Math.random() * 0xffffffff) >>> 0;
+  const next = (): number => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  };
+
+  /*
+   * Random grayscale blocks at 16px keep the variation in the low-frequency
+   * band pHash retains. Coarser binary blocks sit at the DCT edge and collapse
+   * to the same hash, which is what made cross-run duplicates inevitable.
+   */
+  const blockValues = Array.from({ length: blocksX * blocksY }, () => next() % 256);
+  const y = Buffer.alloc(width * height);
+
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      y[row * width + col] = blockValues[Math.floor(row / blockHeight) * blocksX + Math.floor(col / blockWidth)];
+    }
+  }
+
+  const u = Buffer.alloc((width / 2) * (height / 2), 128);
+  const v = Buffer.alloc((width / 2) * (height / 2), 128);
+
+  const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F30:1 Ip A1:1 C420jpeg\n`, 'ascii');
+  const frame = Buffer.concat([Buffer.from('FRAME\n', 'ascii'), y, u, v]);
+
+  writeFileSync(file, Buffer.concat([header, ...Array.from({ length: 10 }, () => frame)]));
+
+  return path.win32.normalize(file);
+}
 
 /**
  * Launch a real browser with a persistent profile.
@@ -45,6 +107,7 @@ export async function launchApp(
    * difference, and it means the fake-device flags below apply identically.
    */
   const channel = testInfo.project.name === 'edge' ? 'msedge' : undefined;
+  const fakeCamera = writeFakeCameraVideo(testInfo, profileName);
 
   const context = await chromium.launchPersistentContext(profile, {
     ...devices['Desktop Chrome'],
@@ -62,7 +125,7 @@ export async function launchApp(
       channel,
       args: [
         '--use-fake-ui-for-media-stream',
-        '--use-fake-device-for-media-stream',
+        `--use-file-for-fake-video-capture=${fakeCamera}`,
         '--autoplay-policy=no-user-gesture-required'
       ]
     }
@@ -161,6 +224,18 @@ export async function signInOperator(page: Page, creds: Credentials = readOperat
 export async function openRewards(page: Page): Promise<void> {
   await page.getByRole('link', { name: 'Rewards' }).click();
   await expect(page.getByRole('heading', { name: 'Rewards', exact: true })).toBeVisible();
+}
+
+/** Open the Leaderboard from the primary navigation. */
+export async function openLeaderboard(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Leaderboard' }).click();
+  await expect(page.getByRole('heading', { name: /standing$/ })).toBeVisible();
+}
+
+/** Open the operator review queue from the primary navigation. */
+export async function openReviews(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Reviews' }).click();
+  await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible();
 }
 
 /**

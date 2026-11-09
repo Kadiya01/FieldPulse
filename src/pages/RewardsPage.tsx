@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   fetchMyRewards,
   fetchPeriodRewards,
@@ -38,9 +38,12 @@ export default function RewardsPage() {
   const [mineError, setMineError] = useState('');
 
   const [board, setBoard] = useState<RewardPeriod | null>(null);
+  const [operatorPeriodType, setOperatorPeriodType] = useState<'WEEKLY' | 'MONTHLY'>('WEEKLY');
   const [loadingBoard, setLoadingBoard] = useState(false);
   const [boardError, setBoardError] = useState('');
   const [notice, setNotice] = useState('');
+  const boardRequestId = useRef(0);
+  const visibleBoard = board && (board.meta.period_type ?? 'WEEKLY') === operatorPeriodType ? board : null;
 
   // The self view is fetched once. It is not periodic data, so nothing here
   // depends on the operator's period selector.
@@ -88,24 +91,25 @@ export default function RewardsPage() {
     }
 
     let live = true;
+    const request = ++boardRequestId.current;
 
     (async () => {
       try {
         const fresh = await fetchPeriodRewards();
 
-        if (live) {
+        if (live && request === boardRequestId.current) {
           setBoard(fresh);
           setBoardError('');
         }
       } catch (err) {
-        if (live) {
+        if (live && request === boardRequestId.current) {
           setBoard(null);
           setBoardError(
             err instanceof Error ? err.message : 'Could not load this period.'
           );
         }
       } finally {
-        if (live) {
+        if (live && request === boardRequestId.current) {
           setLoadingBoard(false);
         }
       }
@@ -116,42 +120,64 @@ export default function RewardsPage() {
     };
   }, [isOperator]);
 
-  /** Switching week from the selector. A press, so state up front is fine. */
-  const loadPeriod = async (nextPeriod: string) => {
+  /** Switching week or period type from the selector. */
+  const loadPeriod = async (nextPeriod?: string, nextType: 'WEEKLY' | 'MONTHLY' = operatorPeriodType) => {
+    const request = ++boardRequestId.current;
     setLoadingBoard(true);
     setBoardError('');
     setNotice('');
 
     try {
-      setBoard(await fetchPeriodRewards(nextPeriod));
+      const fresh = await fetchPeriodRewards(nextPeriod, 100, nextType);
+
+      if (request === boardRequestId.current) {
+        setBoard(fresh);
+      }
     } catch (err) {
-      setBoardError(err instanceof Error ? err.message : 'Could not load that period.');
+      if (request === boardRequestId.current) {
+        setBoard(null);
+        setBoardError(err instanceof Error ? err.message : 'Could not load that period.');
+      }
     } finally {
-      setLoadingBoard(false);
+      if (request === boardRequestId.current) {
+        setLoadingBoard(false);
+      }
     }
+  };
+
+  const switchOperatorType = (nextType: 'WEEKLY' | 'MONTHLY') => {
+    if (nextType === operatorPeriodType) return;
+    setOperatorPeriodType(nextType);
+    setBoard(null);
+    void loadPeriod(undefined, nextType);
   };
 
   /** Shared by the Refresh button and after a decision; a press, so state up front is fine. */
   const reload = async () => {
+    const request = ++boardRequestId.current;
     setLoadingMine(true);
     setLoadingBoard(true);
 
     try {
       const [self, fresh] = await Promise.all([
         fetchMyRewards(),
-        isOperator ? fetchPeriodRewards(board?.meta.period) : Promise.resolve(null)
+        isOperator ? fetchPeriodRewards(visibleBoard?.meta.period, 100, operatorPeriodType) : Promise.resolve(null)
       ]);
       setMine(self.rewards);
       setPaymentNote(self.meta.payment_note);
       setMineError('');
-      if (fresh) {
+      if (fresh && request === boardRequestId.current) {
         setBoard(fresh);
       }
     } catch (err) {
-      setMineError(err instanceof Error ? err.message : 'Could not load rewards.');
+      if (request === boardRequestId.current) {
+        setMineError(err instanceof Error ? err.message : 'Could not load rewards.');
+      }
     } finally {
-      setLoadingMine(false);
-      setLoadingBoard(false);
+      if (request === boardRequestId.current) {
+        setLoadingMine(false);
+        setLoadingBoard(false);
+      }
     }
   };
 
@@ -216,16 +242,40 @@ export default function RewardsPage() {
         <>
           <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
             <h2 className="text-lg font-semibold text-gray-900">Period entitlements</h2>
-            {board && board.meta.available_periods.length > 0 && (
+            <div className="inline-flex rounded-md shadow-sm" role="group">
+              <button
+                type="button"
+                onClick={() => switchOperatorType('WEEKLY')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-l-lg border ${
+                  operatorPeriodType === 'WEEKLY'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                Weekly
+              </button>
+              <button
+                type="button"
+                onClick={() => switchOperatorType('MONTHLY')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-r-lg border ${
+                  operatorPeriodType === 'MONTHLY'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                Monthly
+              </button>
+            </div>
+            {visibleBoard && visibleBoard.meta.available_periods.length > 0 && (
               <div>
                 <label htmlFor="period" className="sr-only">Period</label>
                 <select
                   id="period"
-                  value={board.meta.period}
+                  value={visibleBoard.meta.period}
                   onChange={e => void loadPeriod(e.target.value)}
                   className="text-sm border border-gray-400 rounded-md p-2 bg-white"
                 >
-                  {board.meta.available_periods.map(p => (
+                  {visibleBoard.meta.available_periods.map(p => (
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>
@@ -248,11 +298,11 @@ export default function RewardsPage() {
 
           {label && <p className="text-xs text-gray-600 mb-3">Signed in as {label}</p>}
 
-          {loadingBoard && !board ? (
+          {loadingBoard && !visibleBoard ? (
             <p role="status" className="text-center text-gray-700 py-6">Loading period…</p>
-          ) : board && board.rewards.length > 0 ? (
+          ) : visibleBoard && visibleBoard.rewards.length > 0 ? (
             <ul className="space-y-3">
-              {board.rewards.map(reward => (
+              {visibleBoard.rewards.map(reward => (
                 <li key={reward.id}>
                   <OperatorRewardCard
                     reward={reward}
@@ -307,7 +357,7 @@ function RewardCard({ reward }: { reward: Reward }) {
             {reward.tier.label ?? 'Reward'}
           </h3>
           <p className="text-sm text-gray-700">
-            Week of {reward.period_start_date} · rank {reward.rank} ·{' '}
+            {reward.period_type === 'MONTHLY' ? 'Month' : 'Week'} of {reward.period_start_date} · rank {reward.rank} ·{' '}
             {reward.total_verified_count} verified
           </p>
         </div>
@@ -392,7 +442,7 @@ function OperatorRewardCard({
             {reward.agent.agent_code} · {reward.agent.full_name || 'Unnamed agent'}
           </h3>
           <p className="text-sm text-gray-700">
-            {reward.tier.label ?? 'Reward'} · week of {reward.period_start_date} · rank{' '}
+            {reward.tier.label ?? 'Reward'} · {reward.period_type === 'MONTHLY' ? 'month' : 'week'} of {reward.period_start_date} · rank{' '}
             {reward.rank} · {reward.total_verified_count} verified
           </p>
         </div>

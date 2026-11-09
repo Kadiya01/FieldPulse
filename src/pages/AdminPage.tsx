@@ -314,6 +314,8 @@ export default function AdminPage() {
               onIssueCode={() => void issueCode(agent)}
               onDismissCode={dismissCode}
               issuedCode={issuedCode?.id === agent.id ? issuedCode.result : null}
+              onTargetChange={(target) =>
+                void runAction(agent, { action: 'SET_MONTHLY_TARGET', monthly_target: target })}
             />
           </li>
         ))}
@@ -376,7 +378,8 @@ function AgentCard({
   onRetire,
   onRevoke,
   onIssueCode,
-  onDismissCode
+  onDismissCode,
+  onTargetChange
 }: {
   agent: AdminAgent;
   isSelf: boolean;
@@ -399,11 +402,14 @@ function AgentCard({
   onRevoke: () => void;
   onIssueCode: () => void;
   onDismissCode: () => void;
+  onTargetChange: (target: number) => void;
 }) {
   const retired = agent.status === 'DELETED';
   const pendingRegistration = agent.self_registered && agent.status === 'PENDING';
   const rejectedRegistration = agent.self_registered && agent.status === 'REJECTED';
   const [copied, setCopied] = useState(false);
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [targetInput, setTargetInput] = useState(String(agent.monthly_target ?? 0));
 
   const copyCode = async (code: string) => {
     if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
@@ -451,6 +457,9 @@ function AgentCard({
             {agent.username ? `username ${agent.username}` : 'no username'}
             {agent.nin && <> · NIN {agent.nin}</>}
             {agent.phone && <> · phone {agent.phone}</>}
+            {agent.email && <> · email {agent.email}</>}
+            {agent.location && <> · location {agent.location}</>}
+            <> · monthly target {agent.monthly_target ?? 0}</>
             {' · '}{agent.active_device_count} active device{agent.active_device_count === 1 ? '' : 's'}
             {isSelf && <span className="text-gray-600"> · this is you</span>}
           </p>
@@ -546,6 +555,20 @@ function AgentCard({
             </button>
           )}
 
+          {!retired && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setTargetInput(String(agent.monthly_target ?? 0));
+                setEditingTarget(!editingTarget);
+              }}
+              className="inline-flex items-center gap-1 text-sm font-medium text-blue-800 bg-white px-3 py-1.5 rounded border border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            >
+              Set target
+            </button>
+          )}
+
           <button
             type="button"
             disabled={busy}
@@ -583,6 +606,41 @@ function AgentCard({
           {busy && <Loader2 size={16} className="animate-spin text-blue-700" aria-hidden="true" />}
         </div>
       </div>
+
+      {editingTarget && !retired && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label htmlFor={`target-${agent.id}`} className="text-xs font-semibold text-gray-700">
+            Monthly Target Quota:
+          </label>
+          <input
+            id={`target-${agent.id}`}
+            type="number"
+            min="0"
+            max="1000000"
+            value={targetInput}
+            onChange={e => setTargetInput(e.target.value)}
+            className="w-28 text-sm border border-gray-400 rounded-md p-1.5"
+          />
+          <button
+            type="button"
+            disabled={busy || isNaN(parseInt(targetInput, 10)) || parseInt(targetInput, 10) < 0}
+            onClick={() => {
+              onTargetChange(parseInt(targetInput, 10));
+              setEditingTarget(false);
+            }}
+            className="inline-flex items-center gap-1 text-sm font-medium bg-blue-700 text-white px-3 py-1.5 rounded-md hover:bg-blue-800 disabled:opacity-60"
+          >
+            Save target
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditingTarget(false)}
+            className="text-xs text-gray-600 hover:underline px-2"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {resetting && !retired && (
         <div className="mt-3 flex flex-wrap items-center gap-2">

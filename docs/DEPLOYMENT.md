@@ -150,7 +150,8 @@ because the spec's requirements are only satisfiable with extra columns:
 | 014 `agent_role` | §13 review decisions need a supervisor role |
 | 015 review provenance | Who reviewed what, when, and why |
 | 017 `add_username_password` | §6 username/password credentials; `refresh_tokens.device_id` becomes nullable |
-| 018 `retire_auth_challenges` | Drops the challenge table; §6 is now credentials, not PoP-on-login
+| 018 `retire_auth_challenges` | Drops the challenge table; §6 is now credentials, not PoP-on-login |
+| 026 `restore_monthly_periods` | Adds `period_type` to summaries, rankings and entitlements so weekly and monthly periods cannot collide |
 
 ---
 
@@ -331,6 +332,50 @@ IMEI is an identifier, not a secret.
 Do not test registration using a person's NIN or IMEI unless that person is
 intentionally being registered.
 
+### Updating an existing installation for monthly periods
+
+Migration 026 is additive. It keeps every existing summary, ranking and
+entitlement as `WEEKLY`, then adds the `period_type` discriminator and rebuilds
+the affected keys.
+
+1. Back up the production database and the existing `private_storage/app/` tree.
+2. Upload `private_storage/migrations/026_restore_monthly_periods.sql` to the
+   existing sibling `private_storage/migrations/` directory.
+3. Apply from the deployed copy, then confirm the ledger:
+
+   ```bash
+   php ~/private_storage/bin/migrate.php --status
+   php ~/private_storage/bin/migrate.php
+   php ~/private_storage/bin/migrate.php --status
+   ```
+
+   The final status must show 026 applied with no checksum mismatch. Migration
+   checksums are byte-sensitive; keep the file LF and apply the same copy that
+   was uploaded (see `docs/RELEASE.md`).
+4. Upload the monthly-capable application files and the new `dist/` build.
+5. Monthly summaries start accumulating from the first verification after
+   deployment. To backfill historical months from the submission ledger, run
+   the monthly backfill tool:
+
+   ```bash
+   php ~/private_storage/bin/backfill_monthly.php --dry-run
+   php ~/private_storage/bin/backfill_monthly.php --from=2026-01 --to=2026-10
+   ```
+
+   It writes MONTHLY rows only, recomputes each agent/month from submissions,
+   and never writes rankings or entitlements. Existing MONTHLY rows that differ
+   are reported and left alone unless `--overwrite` is passed. A frozen month
+   is never changed. Exit code 2 means inconsistent historical rows remain for
+   review. Use `--period=YYYY-MM` or `--agent=CODE` to narrow a repair.
+
+   For a single current-month rebuild, `reaggregate.php` still works:
+
+   ```bash
+   php ~/private_storage/bin/reaggregate.php --period=2026-10-01 --type=MONTHLY
+   ```
+6. Run `php ~/private_storage/bin/healthcheck.php` and confirm the leaderboard
+   and rewards screens can switch between Weekly and Monthly.
+
 ---
 
 ## 6. Cron
@@ -413,12 +458,13 @@ cron. Run any of them with no arguments to see usage.
 | `provision_agent.php` | Provision an agent: code, name, optional role, optional site |
 | `pair_device.php` | Issue a one-time device pairing code |
 | `prune.php` | TTL housekeeping; `--dry-run` first |
-| `reaggregate.php` | Rebuild leaderboard summaries; `--period=`, `--all` |
+| `reaggregate.php` | Rebuild leaderboard summaries; `--period=`, `--type=`, `--all` |
+| `backfill_monthly.php` | Backfill historical MONTHLY summaries; `--from=`, `--to=`, `--period=`, `--agent=`, `--dry-run`, `--overwrite`, `--json` |
 | `close_rewards.php` | Close due reward periods; `--period=`, `--all`, `--dry-run` |
 | `../workers/process_queue.php` | Run the verification queue; `--stats`, `--prune` |
 
-Two of these are worth explaining because they are the ones you will reach for
-only when something is already wrong.
+These are worth explaining because they are the ones you will reach for only
+when something is already wrong.
 
 `prune.php --dry-run` prints what it would delete without deleting it. Run it
 first; the counts tell you whether a retention window is set to something
@@ -430,10 +476,16 @@ after changing a threshold in `.env`, or after restoring a database from backup
 every counter is a full recompute rather than an increment, running it twice
 changes nothing, so it is safe to run speculatively.
 
+`backfill_monthly.php` is the historical-month version of that repair. It walks
+the submission ledger month by month and writes only MONTHLY summaries. Start
+with `--dry-run`; if it exits 2, review the reported differences before adding
+`--overwrite`. Frozen months are reported and left unchanged.
+
 ```bash
 php private_storage/bin/prune.php --dry-run
 php private_storage/bin/reaggregate.php --period=2026-09-28
 php private_storage/bin/reaggregate.php --all
+php private_storage/bin/backfill_monthly.php --from=2026-01 --to=2026-10 --dry-run
 ```
 
 ---

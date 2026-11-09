@@ -121,6 +121,9 @@ mismatch was reproducible by converting the current LF file to CRLF and nothing
 else. Apply migrations from the same copy that is deployed; do not edit an
 applied migration to fix the checksum.
 
+`.gitattributes` pins `private_storage/migrations/*.sql` to `eol=lf`, so a fresh
+checkout cannot reintroduce the CRLF/LF split.
+
 ## Running it by hand instead
 
 The gate is a convenience over the individual suites, not a replacement for

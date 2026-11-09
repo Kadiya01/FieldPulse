@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace FieldPulse\Database;
 
+use FieldPulse\Domain\PeriodResolver;
+
 /**
- * SQL for the reward tables (migrations 020/021/022).
+ * SQL for the reward tables (migrations 020/021/022/026).
  *
  * Repositories own SQL and nothing else, so the policy that decides *when* a
  * period closes and *what* an entitlement is worth lives in Reward\RewardService.
@@ -30,13 +32,13 @@ final class RewardRepository extends Repository
      *
      * The fast path for closePeriod(): the answer is one indexed count, and it
      * is what makes a cron tick that fires every minute cost nothing once the
-     * week it is watching has closed.
+     * period it is watching has closed.
      */
-    public function periodIsFrozen(string $periodStartDate): bool
+    public function periodIsFrozen(string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): bool
     {
         return (int) $this->value(
-            'SELECT COUNT(*) FROM reward_rankings WHERE period_start_date = :period',
-            ['period' => $periodStartDate]
+            'SELECT COUNT(*) FROM reward_rankings WHERE period_start_date = :period AND period_type = :type',
+            ['period' => $periodStartDate, 'type' => $periodType]
         ) > 0;
     }
 
@@ -48,18 +50,23 @@ final class RewardRepository extends Repository
      *
      * @return list<string>
      */
-    public function unfrozenPeriodsOnOrBefore(string $cutoffPeriod): array
+    public function unfrozenPeriodsOnOrBefore(string $cutoffPeriod, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
         $rows = $this->all(
             'SELECT DISTINCT period_start_date
                FROM agent_performance_summary
               WHERE period_start_date <= :cutoff
+                AND period_type = :period_type
                 AND NOT EXISTS (
                     SELECT 1 FROM reward_rankings r
                      WHERE r.period_start_date = agent_performance_summary.period_start_date
+                       AND r.period_type = agent_performance_summary.period_type
                 )
               ORDER BY period_start_date',
-            ['cutoff' => $cutoffPeriod]
+            [
+                'cutoff'      => $cutoffPeriod,
+                'period_type' => $periodType,
+            ]
         );
 
         return array_map(static fn (array $r): string => (string) $r['period_start_date'], $rows);
@@ -71,11 +78,11 @@ final class RewardRepository extends Repository
      * IGNORE rather than a bare insert: two cron ticks can reach this at the
      * same instant, and the loser must become a no-op rather than a duplicate
      * key failure that rolls back a close somebody else just committed. The
-     * PRIMARY KEY (period_start_date, rank) is what does the rejecting.
+     * PRIMARY KEY (period_start_date, rank, period_type) is what does the rejecting.
      *
      * @param list<array{agent_id:int,rank:int,verified:int,pending:int,rejected:int,status:string}> $rows
      */
-    public function insertRankings(string $periodStartDate, array $rows): int
+    public function insertRankings(string $periodStartDate, array $rows, string $periodType = PeriodResolver::TYPE_WEEKLY): int
     {
         $written = 0;
 
@@ -86,9 +93,10 @@ final class RewardRepository extends Repository
             $params = [];
 
             foreach ($chunk as $i => $row) {
-                $values[] = "(:p{$i}, :r{$i}, :a{$i}, :v{$i}, :t{$i}, :j{$i}, :s{$i}, UTC_TIMESTAMP())";
+                $values[] = "(:p{$i}, :y{$i}, :r{$i}, :a{$i}, :v{$i}, :t{$i}, :j{$i}, :s{$i}, UTC_TIMESTAMP())";
 
                 $params["p{$i}"] = $periodStartDate;
+                $params["y{$i}"] = $periodType;
                 $params["r{$i}"] = $row['rank'];
                 $params["a{$i}"] = $row['agent_id'];
                 $params["v{$i}"] = $row['verified'];
@@ -99,7 +107,7 @@ final class RewardRepository extends Repository
 
             $written += $this->exec(
                 'INSERT IGNORE INTO reward_rankings (
-                    period_start_date, `rank`, agent_id,
+                    period_start_date, period_type, `rank`, agent_id,
                     total_verified_count, total_pending, total_rejected,
                     agent_status_at_close, snapshot_at
                  ) VALUES ' . implode(', ', $values),
@@ -145,16 +153,16 @@ final class RewardRepository extends Repository
      * that fires.
      *
      * Also note the FK this inherits for free: agent_rewards cannot be written
-     * for an agent and week that reward_rankings does not already hold, because
-     * (period_start_date, agent_id) references it. There is no code path that
-     * could re-derive a reward from live summary numbers — the schema refuses.
+     * for an agent and period that reward_rankings does not already hold, because
+     * (period_start_date, agent_id, period_type) references it. There is no code path
+     * that could re-derive a reward from live summary numbers — the schema refuses.
      *
      * @param list<array{
      *   agent_id:int,rank:int,verified:int,
      *   tier_id:?int,tier_label:?string,reward_amount:?float,currency:?string
      * }> $rows
      */
-    public function insertRewards(string $periodStartDate, array $rows): int
+    public function insertRewards(string $periodStartDate, array $rows, string $periodType = PeriodResolver::TYPE_WEEKLY): int
     {
         $written = 0;
 
@@ -163,10 +171,11 @@ final class RewardRepository extends Repository
             $params = [];
 
             foreach ($chunk as $i => $row) {
-                $values[] = "(:p{$i}, :a{$i}, :r{$i}, :v{$i}, :t{$i}, :l{$i}, :m{$i}, :c{$i},
+                $values[] = "(:p{$i}, :y{$i}, :a{$i}, :r{$i}, :v{$i}, :t{$i}, :l{$i}, :m{$i}, :c{$i},
                               'PENDING', UTC_TIMESTAMP(), UTC_TIMESTAMP(), UTC_TIMESTAMP())";
 
                 $params["p{$i}"] = $periodStartDate;
+                $params["y{$i}"] = $periodType;
                 $params["a{$i}"] = $row['agent_id'];
                 $params["r{$i}"] = $row['rank'];
                 $params["v{$i}"] = $row['verified'];
@@ -180,7 +189,7 @@ final class RewardRepository extends Repository
             // duplicate-key branch; see the docblock above.
             $written += $this->exec(
                 'INSERT INTO agent_rewards (
-                    period_start_date, agent_id, `rank`, total_verified_count,
+                    period_start_date, period_type, agent_id, `rank`, total_verified_count,
                     tier_id, tier_label, reward_amount, currency,
                     status, published_at, created_at, updated_at
                  ) VALUES ' . implode(', ', $values) . '
@@ -201,15 +210,23 @@ final class RewardRepository extends Repository
      *
      * @return list<array<string,mixed>>
      */
-    public function forAgent(int $agentId, int $limit = 24): array
+    public function forAgent(int $agentId, int $limit = 24, ?string $periodType = null): array
     {
+        $where  = ['r.agent_id = :agent'];
+        $params = ['agent' => $agentId];
+
+        if ($periodType !== null) {
+            $where[]               = 'r.period_type = :period_type';
+            $params['period_type'] = $periodType;
+        }
+
         return $this->all(
             'SELECT r.*, a.agent_code
                FROM agent_rewards r
                JOIN agents a ON a.id = r.agent_id
-              WHERE r.agent_id = :agent
+              WHERE ' . implode(' AND ', $where) . '
               ORDER BY r.period_start_date DESC' . self::limitClause($limit, 120, 0),
-            ['agent' => $agentId]
+            $params
         );
     }
 
@@ -218,23 +235,30 @@ final class RewardRepository extends Repository
      *
      * @return list<array<string,mixed>>
      */
-    public function forPeriod(string $periodStartDate, int $limit, int $offset): array
+    public function forPeriod(string $periodStartDate, int $limit, int $offset, string $periodType = PeriodResolver::TYPE_WEEKLY): array
     {
         return $this->all(
             'SELECT r.*, a.agent_code, a.full_name
                FROM agent_rewards r
                JOIN agents a ON a.id = r.agent_id
               WHERE r.period_start_date = :period
+                AND r.period_type = :period_type
               ORDER BY r.`rank`' . self::limitClause($limit, 100, $offset),
-            ['period' => $periodStartDate]
+            [
+                'period'      => $periodStartDate,
+                'period_type' => $periodType,
+            ]
         );
     }
 
-    public function countForPeriod(string $periodStartDate): int
+    public function countForPeriod(string $periodStartDate, string $periodType = PeriodResolver::TYPE_WEEKLY): int
     {
         return (int) $this->value(
-            'SELECT COUNT(*) FROM agent_rewards WHERE period_start_date = :period',
-            ['period' => $periodStartDate]
+            'SELECT COUNT(*) FROM agent_rewards WHERE period_start_date = :period AND period_type = :period_type',
+            [
+                'period'      => $periodStartDate,
+                'period_type' => $periodType,
+            ]
         );
     }
 
@@ -258,13 +282,23 @@ final class RewardRepository extends Repository
      *
      * @return list<string>
      */
-    public function closedPeriods(int $limit = 24): array
+    public function closedPeriods(int $limit = 24, ?string $periodType = null): array
     {
-        $rows = $this->all(
-            'SELECT DISTINCT period_start_date
-               FROM agent_rewards
-              ORDER BY period_start_date DESC' . self::limitClause($limit, 120, 0)
-        );
+        if ($periodType !== null) {
+            $rows = $this->all(
+                'SELECT DISTINCT period_start_date
+                   FROM agent_rewards
+                  WHERE period_type = :period_type
+                  ORDER BY period_start_date DESC' . self::limitClause($limit, 120, 0),
+                ['period_type' => $periodType]
+            );
+        } else {
+            $rows = $this->all(
+                'SELECT DISTINCT period_start_date
+                   FROM agent_rewards
+                  ORDER BY period_start_date DESC' . self::limitClause($limit, 120, 0)
+            );
+        }
 
         return array_map(static fn (array $r): string => (string) $r['period_start_date'], $rows);
     }

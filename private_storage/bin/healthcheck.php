@@ -31,10 +31,11 @@ Cli::init(__FILE__);
 // needs this: verifying a second engine by copying the tree next to a second
 // document root proves nothing about the deployment that will actually run,
 // while re-reading one .env proves the same code against a different server.
-$argv = Cli::argv();
+$argv      = Cli::argv();
+$envOption = Cli::option($argv, 'env');
 
-if (Cli::option($argv, 'env') !== null) {
-    Config::boot(Cli::option($argv, 'env'));
+if ($envOption !== null) {
+    Config::boot($envOption);
 }
 
 $hardFailures = 0;
@@ -404,18 +405,20 @@ try {
     $fail('storage layout: ' . $e->getMessage());
 }
 
-$envFile = FIELDPULSE_PRIVATE_ROOT . '/.env';
+$envFile  = $envOption ?? FIELDPULSE_PRIVATE_ROOT . '/.env';
+$envLabel = basename($envFile);
+
 if (!is_file($envFile)) {
-    $fail('.env missing — copy .env.example and configure it');
+    $fail($envLabel . ' missing — copy .env.example and configure it');
 } else {
     $perms = @fileperms($envFile);
     // POSIX mode bits only. Windows reports 0777 from fileperms() for every
     // file and enforces access through ACLs, so the test there is permanently
     // true and would report a local file as world-readable no matter what.
     if (PHP_OS_FAMILY !== 'Windows' && $perms !== false && ($perms & 0o004) !== 0) {
-        $fail('.env is world-readable - run: chmod 640 .env');
+        $fail($envLabel . ' is world-readable - run: chmod 640 ' . $envLabel);
     } else {
-        $ok('.env present with 0640-style permissions');
+        $ok($envLabel . ' present with 0640-style permissions');
     }
 }
 
@@ -507,6 +510,20 @@ try {
         $present === 1
             ? $ok($rewardTable . ' present')
             : $fail($rewardTable . ' missing — run bin/migrate.php');
+    }
+
+    // Migration 026 separates weekly and monthly rows. A table without the
+    // discriminator would silently merge a month into a week that starts on the
+    // same date, so treat it as a schema failure rather than a warning.
+    foreach (['agent_performance_summary', 'reward_rankings', 'agent_rewards'] as $periodTable) {
+        $hasPeriodType = (int) Connection::fetchValue(
+            'SELECT COUNT(*) FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+            [$periodTable, 'period_type']
+        );
+        $hasPeriodType === 1
+            ? $ok($periodTable . '.period_type present')
+            : $fail($periodTable . '.period_type missing — run bin/migrate.php');
     }
 } catch (Throwable $e) {
     $fail('database: ' . $e->getMessage());

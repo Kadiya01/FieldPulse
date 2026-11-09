@@ -367,6 +367,16 @@ function Verdict({ server }: { server: ServerVerification }) {
           This count is not included in any total.
         </p>
       )}
+      {disposition === 'REJECTED' && (
+        <div className="mt-2.5">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1 rounded-md bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-800"
+          >
+            Correct & Resubmit
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

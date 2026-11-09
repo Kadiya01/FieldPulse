@@ -1,12 +1,12 @@
 # FieldPulse
 
 Responsive web application for agent activity reporting, verification, weekly
-standing, and rewards.
+and monthly standing, and rewards.
 
 Field agents report the enrollment activity they perform in the field. Every
 report a device sends is a *claim* until a server-side pipeline has checked it,
-and only verified work counts toward an agent's weekly standing. At period
-close that verified weekly standing is frozen, and the organisation rewards
+and only verified work counts toward an agent's weekly or monthly standing. At
+period close that verified standing is frozen, and the organisation rewards
 agents from that frozen standing — never from a client assertion, and never
 from a standing that has since moved on.
 
@@ -72,12 +72,12 @@ verdict.
 steps, thirteen of which are checks, against the file itself and against
 server-side facts the client cannot influence: the SHA-256 of the bytes as
 stored, whether GD can decode them, the EXIF block, the perceptual hash, the
-agent's assigned sites, the server's own receive time, and the agent's weekly
+agent's assigned sites, the server's own receive time, and the agent's period
 cap. Only then does the row get a disposition — `VERIFIED`, `REQUIRES_REVIEW`,
 or `REJECTED`.
 
-**At period close.** When a weekly period's grace window has elapsed, closing it
-freezes the verified weekly ranking into an immutable row and writes each
+**At period close.** When a period's grace window has elapsed, closing it
+freezes the verified ranking into an immutable row and writes each
 agent's reward entitlement from that frozen row. The entitlement is *published*
 so the agent can see it; publication is not payment. An operator approves it,
 and only the organisation's own confirmation marks it paid. Later corrections to
@@ -98,9 +98,11 @@ publication rules.
 - **Reporting, not enrollment.** FieldPulse does not perform enrollment. Agents
   report the enrollment activity they did in the field; the application
   captures the evidence for that report and lets the server verify it.
-- **Weekly standing and rewards.** Closing a period freezes the verified weekly
-  ranking and writes reward entitlements from that frozen ranking, ranked by
-  verified count only. Publishing an entitlement tells the agent what they are
+- **Weekly and monthly standing and rewards.** Closing a period freezes the
+  verified ranking and writes reward entitlements from that frozen ranking,
+  ranked by verified count only. Weekly and monthly periods are tracked
+  independently, so a month and a week that start on the same date cannot
+  overwrite each other. Publishing an entitlement tells the agent what they are
   owed — it does not pay them.
 - **Offline capture.** Photo, count and metadata persist to IndexedDB and sync
   later. A failed upload is a state, not an error the agent has to solve.
@@ -247,7 +249,7 @@ model.
   Only the organisation's own confirmation marks an entitlement paid.
 - **It does not perform enrollment.** FieldPulse is not an enrollment system.
   Agents report the enrollment activity they performed in the field; this
-  application captures the evidence, verifies it, freezes the resulting weekly
+  application captures the evidence, verifies it, freezes the resulting period
   standing, and makes the reward defensible. Enrollment itself happens outside
   it. The word "provision" is used for creating an agent account, because
   enrolling an agent is not what that command does.
@@ -255,7 +257,7 @@ model.
   Installing it adds an icon and an offline cache; nothing is distributed through
   an app store, and the service worker can be deleted and re-created.
 - **It does not choose who to reward, or how much.** The organisation supplies
-  the tier schedule. FieldPulse computes the frozen weekly standing the schedule
+  the tier schedule. FieldPulse computes the frozen period standing the schedule
   applies to, and stops there.
 - **It does not decide rewards from a live leaderboard.** The standing used for a
   reward is the one frozen when the period closed. A leaderboard that moves
