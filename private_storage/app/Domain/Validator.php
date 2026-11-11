@@ -74,11 +74,10 @@ final class Validator
     /**
      * IMEI: 14-16 digits, and Luhn-valid.
      *
-     * The agent login flow uses IMEI as its sole typed credential by
-     * requirement. An IMEI is a hardware identifier, not a secret, so this is
-     * materially weaker than password authentication; rate limiting does not
-     * make the identifier secret. Existing P-256 device binding remains in
-     * place for signed requests after the first login.
+     * The IMEI is recorded as an administrative device attribute during
+     * registration and provisioning. It identifies hardware, not a secret, and
+     * is never accepted as a login credential. The value is still validated
+     * here because it is a unique identity attribute.
      */
     public static function imei(mixed $value, string $field = 'imei'): string
     {

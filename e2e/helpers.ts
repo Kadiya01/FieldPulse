@@ -186,12 +186,13 @@ async function completePairingIfAsked(page: Page, creds: Credentials): Promise<v
 }
 
 /**
- * Sign in an agent through the real IMEI form and land on the capture screen.
+ * Sign in an agent through the real username/password form and land on the
+ * capture screen.
  *
- * Typed into the actual input and submitted with the actual button, so the
- * whole authentication path runs: POST /auth/agent-login.php, device key
- * generation, POST /device/register.php, and the pairing exchange when the
- * deployment policy demands one.
+ * Typed into the actual inputs and submitted with the actual button, so the
+ * whole authentication path runs: POST /auth/login.php, device key generation,
+ * POST /device/register.php, and the pairing exchange when the deployment policy
+ * demands one.
  *
  * Not shortcut by seeding localStorage or calling the API directly - a test
  * that skipped this would never exercise the gate that decides whether the app
@@ -202,7 +203,8 @@ export async function signIn(page: Page, creds: Credentials = readCredentials())
 
   await expect(page.getByRole('heading', { name: 'Agent sign in' })).toBeVisible();
 
-  await page.locator('#agent-imei').fill(creds.imei);
+  await page.locator('#username').fill(creds.username);
+  await page.locator('#password').fill(creds.password);
   await page.getByRole('button', { name: 'Sign in' }).click();
 
   await completePairingIfAsked(page, creds);
@@ -212,7 +214,7 @@ export async function signIn(page: Page, creds: Credentials = readCredentials())
 export async function signInOperator(page: Page, creds: Credentials = readOperatorCredentials()): Promise<void> {
   await page.goto('/admin/login');
 
-  await expect(page.getByRole('heading', { name: 'Admin sign in' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible();
 
   await page.locator('#username').fill(creds.username);
   await page.locator('#password').fill(creds.password);

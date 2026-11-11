@@ -17,9 +17,11 @@ type Stage = 'credentials' | 'pairing';
  * trip and a visible pause on the one screen where a pause reads as failure.
  */
 export default function LoginPage({
-  onAuthenticated
+  onAuthenticated,
+  admin = false,
 }: {
   onAuthenticated: (agent: SessionAgent) => void;
+  admin?: boolean;
 }) {
   const [stage, setStage] = useState<Stage>('credentials');
   const [username, setUsername] = useState('');
@@ -180,8 +182,14 @@ export default function LoginPage({
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-sm">
         <BrandHeader className="mb-4 flex justify-center" />
-        <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">Admin sign in</h1>
-        <p className="text-sm text-gray-600 text-center mb-6">For administrators and record reviewers.</p>
+        <h1 className="text-2xl font-bold text-center text-gray-900 mb-2">
+          {admin ? 'Administrator sign in' : 'Agent sign in'}
+        </h1>
+        <p className="text-sm text-gray-600 text-center mb-6">
+          {admin
+            ? 'For administrators and record reviewers.'
+            : 'Use the username and password for your FieldPulse account.'}
+        </p>
 
         {errorMsg && (
           <div role="alert" className="bg-red-100 text-red-800 p-3 rounded mb-4 text-sm">
@@ -231,12 +239,21 @@ export default function LoginPage({
           this device.
         </p>
 
-        <p className="mt-4 text-sm text-gray-700 text-center">
-          Are you an agent?{' '}
-          <Link to="/login" className="text-blue-700 font-medium hover:underline">
-            Sign in with IMEI
-          </Link>
-        </p>
+        {admin ? (
+          <p className="mt-4 text-sm text-gray-700 text-center">
+            Are you an agent?{' '}
+            <Link to="/login" className="text-blue-700 font-medium hover:underline">
+              Agent sign in
+            </Link>
+          </p>
+        ) : (
+          <p className="mt-4 text-sm text-gray-700 text-center">
+            New to FieldPulse?{' '}
+            <Link to="/register" className="text-blue-700 font-medium hover:underline">
+              Register as an agent
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

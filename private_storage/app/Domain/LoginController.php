@@ -155,16 +155,11 @@ final class LoginController implements ActionInterface
             throw self::genericFailure();
         }
 
-        // Only reachable once the password matched, so these checks cannot be
-        // used to probe account state without the password.
+        // Only reachable once the password matched, so this check cannot be
+        // used to probe account state without the password. An approved
+        // self-registered applicant is an ordinary ACTIVE agent and signs in
+        // here exactly like an administrator-created one.
         if ($agent === null || $agent['status'] !== AgentRepository::ACTIVE) {
-            throw self::genericFailure();
-        }
-
-        if (
-            ($agent['role'] ?? 'AGENT') === 'AGENT'
-            && (int) ($agent['self_registered'] ?? 0) === 1
-        ) {
             throw self::genericFailure();
         }
 

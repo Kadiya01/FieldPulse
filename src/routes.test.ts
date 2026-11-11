@@ -151,8 +151,11 @@ describe('route table and navigation agree', () => {
   it('keeps agent and administrator sign-in on separate public routes', () => {
     expect(appSource).toMatch(/path="\/login"/);
     expect(appSource).toMatch(/path="\/admin\/login"/);
-    expect(appSource).toMatch(/AgentLoginPage/);
     expect(appSource).toMatch(/LoginPage/);
+    // IMEI-only sign-in was retired in Phase 5; both routes now use the
+    // username/password page, and only the copy changes.
+    expect(appSource).not.toMatch(/AgentLoginPage/);
+    expect(read('pages/LoginPage.tsx')).toContain('admin?: boolean');
   });
 
   it('has exactly one review route, and it is operator-only', () => {
@@ -200,6 +203,6 @@ describe('route table and navigation agree', () => {
     expect(read('pages/RegisterPage.tsx')).toContain('registerAgent');
 
     // The agent sign-in page points new agents to registration.
-    expect(read('pages/AgentLoginPage.tsx')).toMatch(/to="\/register"/);
+    expect(read('pages/LoginPage.tsx')).toMatch(/to="\/register"/);
   });
 });

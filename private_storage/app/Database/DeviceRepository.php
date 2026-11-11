@@ -68,11 +68,11 @@ final class DeviceRepository extends Repository
                 'imei'           => $row['device_imei'],
             ],
             'agent' => [
-                'id'         => (int) $row['agent_id'],
-                'agent_code' => (string) $row['agent_code'],
-                'full_name'  => (string) $row['full_name'],
-                'status'     => (string) $row['agent_status'],
-                'imei'       => $row['agent_imei'],
+                'id'            => (int) $row['agent_id'],
+                'agent_code'    => (string) $row['agent_code'],
+                'full_name'     => (string) $row['full_name'],
+                'status'        => (string) $row['agent_status'],
+                'imei'          => $row['agent_imei'],
                 // Kernel::assertOperator() reads $context->agent()['role'] and
                 // falls back to 'AGENT' when the key is absent, so omitting this
                 // projected every authenticated caller as a plain agent. Every
@@ -81,7 +81,7 @@ final class DeviceRepository extends Repository
                 // The queue still listed correctly, because it filters on
                 // submissions.status rather than on disposition — so the failure
                 // presented as a populated queue where every action errored.
-                'role'       => (string) $row['agent_role'],
+                'role'          => (string) $row['agent_role'],
             ],
         ];
     }

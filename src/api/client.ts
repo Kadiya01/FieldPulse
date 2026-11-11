@@ -314,29 +314,14 @@ export async function login(username: string, password: string): Promise<LoginRe
   return data;
 }
 
-export async function loginAgent(imei: string): Promise<LoginResult> {
-  const response = await fetch(`${API_BASE}/auth/agent-login.php`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ imei })
-  });
-
-  if (!response.ok) {
-    throw await toApiError(response);
-  }
-
-  const data = (await response.json()) as LoginResult;
-  setAccessToken(data.access_token);
-  announceAccessToken(data.access_token);
-  return data;
-}
-
 export interface AgentRegistrationInput {
   full_name: string;
   nin: string;
   phone: string;
   imei: string;
   device_type: string;
+  username: string;
+  password: string;
   email?: string;
   location?: string;
 }
@@ -1463,6 +1448,17 @@ export async function fetchProfile(): Promise<ProfileData> {
   }
   const envelope = (await response.json()) as { data: ProfileData };
   return envelope.data;
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await authenticatedFetch('/auth/password.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
 }
 
 export async function updateProfile(input: ProfileUpdateInput): Promise<ProfileData> {

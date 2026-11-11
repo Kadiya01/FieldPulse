@@ -104,9 +104,10 @@ Verdict: `FIELDPULSE RELEASE CANDIDATE: PASS`.
 The deployment at `monthlyperformance.abhglobalinformationtechnologysolutions.com.ng`
 reports **MySQL 8.4.13** and **PHP 8.4.27** from its own host. Both are outside
 the cells the matrix above ran, so they are recorded as observed and are not
-claimed as certified. Agent registration, admin approval, IMEI login, device
-pairing and the deployed API entry point were exercised against that host and
-worked, but a working smoke test is not a matrix run.
+claimed as certified. Agent registration, admin approval, IMEI login (since
+retired in Phase 5), device pairing and the deployed API entry point were
+exercised against that host and worked, but a working smoke test is not a
+matrix run.
 
 ## Migration checksums and line endings
 

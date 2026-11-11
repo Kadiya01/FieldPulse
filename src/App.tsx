@@ -3,7 +3,6 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import CapturePage from './pages/CapturePage';
 import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
-import AgentLoginPage from './pages/AgentLoginPage';
 import RegisterPage from './pages/RegisterPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
@@ -200,6 +199,7 @@ export default function App() {
                * way forward and no way to reach the app without a manual reload.
                */
               <LoginPage
+                admin
                 onAuthenticated={(authenticated) => {
                   setAgent(authenticated);
                   setGate('ready');
@@ -215,7 +215,7 @@ export default function App() {
             gate === 'ready' ? (
               <Navigate to="/" replace />
             ) : (
-              <AgentLoginPage
+              <LoginPage
                 onAuthenticated={(authenticated) => {
                   setAgent(authenticated);
                   setGate('ready');

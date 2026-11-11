@@ -112,12 +112,12 @@ uses a bearer header, which a browser will not attach cross-origin.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/api/v1/agents/register.php` | public, self-registration |
-| POST | `/api/v1/auth/agent-login.php` | public, IMEI |
-| POST | `/api/v1/auth/login.php` | public, username + password for administrators/reviewers |
+| POST | `/api/v1/agents/register.php` | public, self-registration with username + password |
+| POST | `/api/v1/auth/login.php` | public, username + password for every account |
+| POST | `/api/v1/auth/password.php` | signed, own password change |
 | POST | `/api/v1/auth/refresh.php` | refresh cookie + Origin |
 | POST | `/api/v1/auth/logout.php` | refresh cookie + Origin |
-| POST | `/api/v1/device/register.php` | bootstrap token; new self-registered agents do not need a pairing code |
+| POST | `/api/v1/device/register.php` | bootstrap token; configured pairing policy |
 | POST | `/api/v1/submit.php` | **signed** |
 | GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
 | GET | `/api/v1/dashboard.php` | bearer, own standing only |
@@ -152,8 +152,9 @@ the first cPanel request.
 
 ### POST /api/v1/auth/login.php
 
-Exchanges an administrator/reviewer username and password for a **bootstrap**
-session. Agent accounts use `/api/v1/auth/agent-login.php`.
+Exchanges a username and password for a **bootstrap** session. Every account —
+agent, reviewer or administrator — signs in here. The IMEI is never a login
+credential.
 
 ```json
 { "username": "ada", "password": "…" }
@@ -193,9 +194,10 @@ them being distinguishable is a way to learn things about the account.
 limit is keyed on the username **and** the source IP; per-IP is what stops a
 single host walking the whole user table.
 
-This route does not authenticate AGENT-role accounts created through public
-self-registration. Pre-existing agent accounts retain their current login
-credentials for compatibility; new agents use IMEI login.
+Publicly self-registered agents become ordinary `ACTIVE` accounts after
+approval and sign in here with the username and password chosen at registration.
+A row left over from the retired IMEI-only model has no password hash and is
+treated exactly like an unknown username until an administrator sets one.
 
 ---
 
@@ -207,6 +209,8 @@ administrator approves it in the account directory.
 ```json
 {
   "full_name": "Ada Lovelace",
+  "username": "ada.lovelace",
+  "password": "…",
   "nin": "12345678901",
   "phone": "08012345678",
   "imei": "490154203237518",
@@ -216,27 +220,45 @@ administrator approves it in the account directory.
 }
 ```
 
-`phone` accepts a Nigerian mobile number as `08012345678`, `+2348012345678`
-or `2348012345678`; the server stores it in E.164 form. The NIN and phone are
-stored and exposed only through the ADMIN-only account directory.
-`device_type` must be one of `EACRUGGED`, `EASTAEON`, `HENA`, `MANTRA`,
-`OUKITEL`, `SAMSUNG` or `WHEATEK`. `email` and `location` are optional profile
-fields; `email` is stored lowercased and must be unique. Duplicate NIN, IMEI or
-email values receive a generic `409 STATE_CONFLICT` response. Registration
-attempts are rate-limited by NIN and source IP.
+`username` is 3–64 characters of letters, digits, dot, underscore or hyphen and
+must contain at least one letter. `password` is 8–128 characters; it is stored
+only as a bcrypt hash. `phone` accepts a Nigerian mobile number as
+`08012345678`, `+2348012345678` or `2348012345678`; the server stores it in
+E.164 form. The NIN and phone are stored and exposed only through the
+ADMIN-only account directory. `device_type` must be one of `EACRUGGED`,
+`EASTAEON`, `HENA`, `MANTRA`, `OUKITEL`, `SAMSUNG` or `WHEATEK`. `email` and
+`location` are optional profile fields; `email` is stored lowercased and must
+be unique. Duplicate NIN, IMEI, email or username values receive a generic
+`409 STATE_CONFLICT` response. Registration attempts are rate-limited by NIN and
+source IP.
 
 The successful response includes the registration status and an agent summary,
-but never returns the NIN, phone or IMEI. A pending registration cannot use
-`/api/v1/auth/agent-login.php`; after approval the agent can sign in with the
-registered IMEI and bind the browser's device key.
+but never returns the NIN, phone, IMEI or password. A pending registration
+cannot sign in. After approval the agent signs in at
+`/api/v1/auth/login.php` with the chosen username and password, then binds the
+browser's device key through the configured pairing policy.
+
+### POST /api/v1/auth/password.php
+
+Changes the signed-in agent's own password. Requires a **signed** request and
+the current password, so possession of a live session alone cannot take the
+account over.
+
+```json
+{ "current_password": "…", "new_password": "…" }
+```
+
+Success is `200 { "status": "CHANGED" }`. A wrong current password is
+`422 VALIDATION_FAILED` with `details.field = "current_password"`; the message
+can be specific because the caller is already authenticated. The response never
+echoes either password.
 
 ### POST /api/v1/auth/agent-login.php
 
-Exchanges an active agent's IMEI for a **bootstrap** session. The IMEI is an
-identifier, not a secret; anyone who knows or copies it may impersonate that
-agent. Requests are rate-limited by IMEI and source IP. The client must bind
-the browser's device key at `/api/v1/device/register.php` before making signed
-requests.
+Retired. This route previously exchanged an IMEI for a bootstrap session; it now
+returns `401 UNAUTHENTICATED` without reading the body and never issues a token.
+An IMEI is hardware identification, not a secret, and cannot authenticate a
+person.
 
 ---
 
@@ -269,7 +291,10 @@ the JWK above is sent. The field is `public_key_jwk`, a JWK object — not a PEM
 string.
 
 `pairing_code` is required when the agent's policy demands it (`ALWAYS`, or
-`FIRST_DEVICE_ONLY` before the first device exists). If it is missing, this
+`FIRST_DEVICE_ONLY` before the first device exists). This applies to every
+account, including publicly self-registered agents: entering an IMEI in a web
+form does not prove control of the handset, so approval never waives pairing. If
+it is missing, this
 returns `422 VALIDATION_FAILED` with `error.details.field = "pairing_code"`,
 which is how the client knows to prompt: the policy is server-side, so the UI
 asks when it is asked rather than guessing. Codes are issued out of band by
@@ -901,14 +926,16 @@ account-status oracle.
 
 ## Client integration order
 
-For agents, register at `/register` with full name, NIN, IMEI and one of the
-supported device types. Registration activates the account immediately. Then
-sign in at `/login` with the registered IMEI; the agent flow binds the browser's
-device key without an administrator-issued code. An IMEI is an identifier, not
-a secret.
+For agents, register at `/register` with full name, username, password, NIN,
+IMEI and one of the supported device types. Registration creates a `PENDING`
+account; sign-in is unavailable until an administrator approves it. After
+approval, sign in at `/login` with the username and password chosen at
+registration. The first browser then registers its device key under the
+configured pairing policy, which may require an operator-issued code. An IMEI
+identifies a device, not a secret and never a login credential.
 
-For administrators and reviewers, sign in at `/admin/login` with username and
-password:
+Administrators and reviewers sign in at `/admin/login` with username and
+password. The same credential flow applies:
 
 1. `POST /api/v1/auth/login.php` with username and password. Keep the returned access token
    in memory only — never in `localStorage` or `sessionStorage` — and let the

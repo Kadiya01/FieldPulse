@@ -97,21 +97,21 @@ jobs:
           code=""
           for attempt in 1 2 3 4 5; do
             code=$(curl -sS -H 'Cache-Control: no-cache' \
-              -o /tmp/agent-login.json -w '%{http_code}' \
-              "$SITE_URL/api/v1/auth/agent-login.php" || true)
+              -o /tmp/login.json -w '%{http_code}' \
+              "$SITE_URL/api/v1/auth/login.php" || true)
             [ "$code" = "405" ] && break
             sleep 5
           done
 
           if [ "$code" != "405" ]; then
-            echo "agent-login.php returned $code from $SITE_URL"
-            cat /tmp/agent-login.json || true
+            echo "login.php returned $code from $SITE_URL"
+            cat /tmp/login.json || true
             exit 1
           fi
 
-          grep -q METHOD_NOT_ALLOWED /tmp/agent-login.json || {
-            echo "agent-login.php did not reach the kernel:"
-            cat /tmp/agent-login.json
+          grep -q METHOD_NOT_ALLOWED /tmp/login.json || {
+            echo "login.php did not reach the kernel:"
+            cat /tmp/login.json
             exit 1
           }
 

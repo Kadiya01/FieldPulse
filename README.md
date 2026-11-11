@@ -196,11 +196,11 @@ verdict on screen.
 - **Two factors on state-changing calls.** A 15-minute HS256 bearer token *and*
   an ECDSA signature over `METHOD\nPATH\nTIMESTAMP\nNONCE\nSHA256HEX(body)`, with
   a replay-protected nonce and a timestamp window.
-- **A weak first token by design.** Admins and reviewers sign in with username
-  and password; newly registered agents use their IMEI alone. Both receive a
-  `scope=bootstrap` token that can reach exactly one route: device registration.
-  IMEI is an identifier, not a secret, so anyone who knows it may impersonate
-  the agent before a device key is bound.
+- **A weak first token by design.** Admins, reviewers and agents all sign in
+  with a username and password. Every login receives a `scope=bootstrap` token
+  that can reach exactly one route: device registration. The IMEI identifies a
+  device, never a login credential, and binding a browser key still follows the
+  configured pairing policy.
 - **The refresh cookie is unreadable by design.** `HttpOnly`, `Secure`,
   `SameSite=Strict`, scoped to `/api/v1/auth`, and `Origin`-checked — the only
   two cookie-authenticated endpoints, so they are the only two that need CSRF
@@ -211,10 +211,11 @@ verdict on screen.
 - **Validation details are safe in production.** `error.details.field` is
   allowlisted rather than gated behind `APP_DEBUG`, so a client can tell an agent
   which input is wrong without the debug flag leaking internals.
-- **Self-service agent registration.** Applicants submit their name, NIN,
-  Nigerian mobile number, IMEI and device type. Accounts remain pending until an
-  administrator approves or rejects them in account management. Full NIN and
-  phone are returned only by the ADMIN-only account directory.
+- **Self-service agent registration.** Applicants submit their name, username,
+  password, NIN, Nigerian mobile number, IMEI and device type. Accounts remain
+  pending until an administrator approves or rejects them in account
+  management. Full NIN and phone are returned only by the ADMIN-only account
+  directory.
 
 ## What this is not evidence of
 
@@ -398,8 +399,9 @@ the changed backend PHP files and new API entry points, then upload the built
 `dist/` contents into the hostname's document root. Do not upload `dist/` alone:
 the backend and database migration are also required.
 
-The agent registration page is `/register`, agent IMEI sign-in is `/login`,
-and administrator/reviewer username-password sign-in is `/admin/login`.
+The agent registration page is `/register`, agent username-password sign-in is
+`/login`, and administrator/reviewer username-password sign-in is
+`/admin/login`.
 `private_storage/` must remain outside and beside the active document root.
 
 ## Documentation

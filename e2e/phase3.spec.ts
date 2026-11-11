@@ -24,6 +24,8 @@ test.describe('agent enrollment workflow', () => {
     const phone = '080' + randomDigits(8);
     const email = `phase3-${Date.now()}-${randomDigits(4)}@example.test`;
     const location = 'Lagos';
+    const username = `phase3.agent.${Date.now()}.${randomDigits(4)}`;
+    const password = 'phase3-agent-password';
 
     const adminContext = await launchApp(testInfo, 'phase3-admin');
     const adminPage = await firstPage(adminContext);
@@ -39,6 +41,9 @@ test.describe('agent enrollment workflow', () => {
     );
 
     await adminPage.locator('#full-name').fill('Phase Three Agent');
+    await adminPage.locator('#username').fill(username);
+    await adminPage.locator('#password').fill(password);
+    await adminPage.locator('#confirm-password').fill(password);
     await adminPage.locator('#phone').fill(phone);
     await adminPage.locator('#nin').fill(nin);
     await adminPage.locator('#imei').fill(imei);
@@ -52,8 +57,8 @@ test.describe('agent enrollment workflow', () => {
     const registered = await registration;
     expect(registered.status()).toBe(201);
 
-    const pendingLogin = await adminPage.request.post('/api/v1/auth/agent-login.php', {
-      data: { imei }
+    const pendingLogin = await adminPage.request.post('/api/v1/auth/login.php', {
+      data: { username, password }
     });
 
     expect(pendingLogin.status()).toBe(401);
@@ -112,8 +117,8 @@ test.describe('agent enrollment workflow', () => {
 
     await signIn(agentPage, {
       agentCode,
-      username: '',
-      password: '',
+      username,
+      password,
       pairingCode: pairingCode!,
       imei,
       role: 'AGENT'
@@ -218,8 +223,8 @@ test.describe('agent enrollment workflow', () => {
 
     expect([401, 403]).toContain(suspendedDashboard.status());
 
-    const suspendedLogin = await agentPage.request.post('/api/v1/auth/agent-login.php', {
-      data: { imei }
+    const suspendedLogin = await agentPage.request.post('/api/v1/auth/login.php', {
+      data: { username, password }
     });
 
     expect(suspendedLogin.status()).toBe(401);

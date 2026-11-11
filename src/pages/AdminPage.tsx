@@ -928,7 +928,7 @@ export default function AdminPage() {
                 void runAction(
                   agent,
                   { action: 'SET_STATUS', status: 'ACTIVE', reason },
-                  `Approve ${agent.full_name}'s agent registration? They will be able to sign in with their IMEI.`
+                  `Approve ${agent.full_name}'s agent registration? They will be able to sign in with the username and password chosen at registration.`
                 )}
               onReject={(reason) =>
                 void runAction(

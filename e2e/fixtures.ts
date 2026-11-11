@@ -56,10 +56,10 @@ export type Credentials = {
 /**
  * A unique, Luhn-valid 15-digit IMEI.
  *
- * Agents sign in with the IMEI they registered, so a provisioned identity
- * without one cannot exercise the real login path. The TAC prefix is constant
- * and the six serial digits are random, which keeps the value valid while
- * making a collision between concurrently provisioned identities negligible.
+ * Agents register an IMEI, but sign in with a username and password. The TAC
+ * prefix is constant and the six serial digits are random, which keeps the
+ * value valid while making a collision between concurrently provisioned
+ * identities negligible.
  */
 function luhnImei(): string {
   let base = '35693803';

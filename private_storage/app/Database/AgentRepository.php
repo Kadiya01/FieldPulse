@@ -7,10 +7,10 @@ namespace FieldPulse\Database;
 /**
  * agents access.
  *
- * Administrator/reviewer credentials are stored as password hashes. New
- * self-registered agents identify themselves with the IMEI stored on their
- * account; this is intentionally a weak identifier-only login because an IMEI
- * is printed on the handset/box and can be copied.
+ * Every account signs in with a username and password stored as a password
+ * hash. The IMEI remains an administrative device attribute and is never an
+ * authentication factor: it is printed on the handset and box and can be
+ * copied, so it cannot stand in for a secret.
  */
 final class AgentRepository extends Repository
 {
@@ -55,10 +55,9 @@ final class AgentRepository extends Repository
     /**
      * Give an agent a username and password.
      *
-     * $passwordHash must already be a password_hash() output. This method never
-     * hashes anything itself so that there is exactly one place in the codebase
-     * that calls password_hash(), and it is a command run by an operator rather
-     * than a request handler.
+     * $passwordHash must already be a Credentials::hash() output. This method
+     * never hashes anything itself so that password hashing has one audited
+     * entry point rather than being duplicated across controllers.
      */
     public function setCredentials(int $agentId, string $username, string $passwordHash): void
     {
@@ -88,9 +87,8 @@ final class AgentRepository extends Repository
     /**
      * True when the agent holds a usable password credential.
      *
-     * Checked by the login controller so that a row enrolled under the previous
-     * IMEI model, whose password_hash is NULL, fails as "no such user" rather
-     * than reaching password_verify() with an empty hash.
+     * A row enrolled under the retired IMEI-only model has password_hash NULL,
+     * and login treats that exactly like an unknown username.
      */
     public function hasPasswordCredential(int $agentId): bool
     {
@@ -102,8 +100,16 @@ final class AgentRepository extends Repository
         return is_string($value) && $value !== '';
     }
 
+    public function usernameExists(string $username): bool
+    {
+        return $this->one(
+            'SELECT id FROM agents WHERE username = :username LIMIT 1',
+            ['username' => $username]
+        ) !== null;
+    }
+
     /**
-     * Lookup for agent IMEI login and the administrative account directory.
+     * Administrative lookup by device IMEI. Never used for authentication.
      *
      * @return array<string,mixed>|null
      */
@@ -130,25 +136,33 @@ final class AgentRepository extends Repository
         string $phone,
         string $imei,
         string $deviceType,
+        string $username,
+        string $passwordHash,
         ?string $email = null,
         ?string $location = null
     ): int {
         $this->exec(
             'INSERT INTO agents
-                (agent_code, full_name, nin, phone, email, location, role, status, imei, device_type, self_registered, created_at, updated_at)
+                (agent_code, full_name, nin, phone, email, location, username, password_hash,
+                 password_updated_at, role, status, imei, device_type, self_registered,
+                 created_at, updated_at)
              VALUES
-                (:code, :name, :nin, :phone, :email, :location, :role, :status, :imei, :device_type, 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+                (:code, :name, :nin, :phone, :email, :location, :username, :password_hash,
+                 UTC_TIMESTAMP(), :role, :status, :imei, :device_type, 1,
+                 UTC_TIMESTAMP(), UTC_TIMESTAMP())',
             [
-                'code'        => $code,
-                'name'        => $fullName,
-                'nin'         => $nin,
-                'phone'       => $phone,
-                'email'       => $email,
-                'location'    => $location,
-                'role'        => 'AGENT',
-                'status'      => self::PENDING,
-                'imei'        => $imei,
-                'device_type' => $deviceType,
+                'code'          => $code,
+                'name'          => $fullName,
+                'nin'           => $nin,
+                'phone'         => $phone,
+                'email'         => $email,
+                'location'      => $location,
+                'username'      => $username,
+                'password_hash' => $passwordHash,
+                'role'          => 'AGENT',
+                'status'        => self::PENDING,
+                'imei'          => $imei,
+                'device_type'   => $deviceType,
             ]
         );
 

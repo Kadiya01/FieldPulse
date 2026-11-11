@@ -271,9 +271,9 @@ that tier did not run rather than quietly passing.
 ### Updating an existing installation for agent self-registration
 
 This release changes both the backend and frontend. Uploading `dist/` alone
-does **not** enable self-registration or IMEI sign-in. Apply the additive
-database migration first; the previous application continues to work while
-the update is in progress.
+does **not** enable self-registration or username-password sign-in. Apply the
+additive database migration first; the previous application continues to work
+while the update is in progress.
 
 1. Back up the production database and the existing `private_storage/app/` and
    web document-root trees. Do not overwrite `private_storage/.env`.
@@ -297,17 +297,19 @@ the update is in progress.
    private_storage/app/Config/schema.php
    private_storage/app/Database/AgentRepository.php
    private_storage/app/Domain/AdminAgentController.php
-   private_storage/app/Domain/AgentLoginController.php        (new)
+   private_storage/app/Domain/AgentLoginController.php        (retired IMEI tombstone)
    private_storage/app/Domain/AgentRegistrationController.php (new)
    private_storage/app/Domain/DeviceController.php
    private_storage/app/Domain/LoginController.php
+   private_storage/app/Domain/PasswordController.php          (new)
    private_storage/app/Domain/Validator.php
    private_storage/app/Http/Kernel.php
    private_storage/app/Security/RateLimiter.php
    private_storage/migrations/024_self_registration.sql
    private_storage/migrations/025_pending_agent_approval.sql
    public_html/api/v1/agents/register.php                     (new)
-   public_html/api/v1/auth/agent-login.php                    (new)
+   public_html/api/v1/auth/agent-login.php                    (retired IMEI tombstone)
+   public_html/api/v1/auth/password.php                       (new)
    ```
 
    Keep `private_storage` outside the active web document root. Do not replace
@@ -320,10 +322,10 @@ the update is in progress.
    content-hashed files from that directory; do not delete the document root
    or its protected files.
 6. Run `php ~/private_storage/bin/healthcheck.php`. Check `/login` for agent
-   IMEI sign-in, `/register` for self-registration, and `/admin/login` for
-   administrator/reviewer username-password sign-in. Confirm the API routes
-   return API responses rather than SPA HTML, and that an authorized
-   administrator can view the account directory.
+   username-password sign-in, `/register` for self-registration, and
+   `/admin/login` for administrator/reviewer username-password sign-in. Confirm
+   the API routes return API responses rather than SPA HTML, and that an
+   authorized administrator can view the account directory.
 
 New registrations remain pending until an administrator approves them in
 account management; rejected registrations can be reopened there for
@@ -507,14 +509,14 @@ file, so this is a correctness check, not a hardening preference.
 
 ## 9. Security model in one paragraph
 
-Administrators and reviewers sign in with a **username and password** (bcrypt).
-Agents self-register with their full name, NIN, IMEI and an approved device type,
-then sign in with the registered IMEI. The IMEI is an identifier, not a secret:
-anyone who knows it can request an agent bootstrap session. The session can only
-bind a browser device key; subsequent state-changing requests require a device
-signature. New self-registered agents bind their first browser without a
-pairing code, while existing managed accounts continue to follow their
-configured pairing policy.
+Every account signs in with a **username and password** (bcrypt). Agents
+self-register with their full name, username, password, NIN, IMEI and an
+approved device type; the account stays pending until an administrator approves
+it. The IMEI identifies a device, not a secret and never a login credential. A
+login returns a bootstrap session that can only bind a browser device key;
+subsequent state-changing requests require a device signature. New devices
+follow the configured pairing policy, which may require an operator-issued
+one-time code.
 
 Every login failure is byte-identical, and the password hash is verified even
 when the username does not exist, so neither the body nor the response time is

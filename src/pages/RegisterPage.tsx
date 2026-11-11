@@ -16,6 +16,9 @@ const DEVICE_TYPES = [
 
 export default function RegisterPage() {
   const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [nin, setNin] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -30,10 +33,18 @@ export default function RegisterPage() {
     setBusy(true);
     setErrorMsg('');
 
+    if (password !== confirmPassword) {
+      setErrorMsg('The two passwords do not match.');
+      setBusy(false);
+      return;
+    }
+
     try {
       const normalizedImei = imei.replace(/[\s-]/g, '');
       await registerAgent({
         full_name: fullName.trim(),
+        username: username.trim(),
+        password,
         nin: nin.trim(),
         phone: phone.trim(),
         email: email.trim() ? email.trim() : undefined,
@@ -57,8 +68,8 @@ export default function RegisterPage() {
           <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="mt-5 text-2xl font-bold text-slate-900">Registration submitted</h1>
           <p className="mt-3 text-sm leading-6 text-slate-600">
-            Your registration is waiting for administrator approval. You can sign in with your IMEI
-            after it is approved.
+            Your registration is waiting for administrator approval. Once approved, sign in with
+            the username and password you just chose.
           </p>
           {errorMsg && (
             <p role="status" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
@@ -104,6 +115,63 @@ export default function RegisterPage() {
               required
               value={fullName}
               onChange={event => setFullName(event.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
+            />
+          </div>
+          <div>
+            <label htmlFor="username" className="block text-sm font-semibold text-slate-800">
+              Username
+            </label>
+            <input
+              id="username"
+              type="text"
+              autoComplete="username"
+              minLength={3}
+              maxLength={64}
+              pattern="[A-Za-z0-9._-]{3,64}"
+              required
+              value={username}
+              onChange={event => setUsername(event.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
+              aria-describedby="username-note"
+            />
+            <p id="username-note" className="mt-2 text-xs text-slate-500">
+              3–64 letters, digits, dots, underscores or hyphens. This is your sign-in name.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="password" className="block text-sm font-semibold text-slate-800">
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              maxLength={128}
+              required
+              value={password}
+              onChange={event => setPassword(event.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
+              aria-describedby="password-note"
+            />
+            <p id="password-note" className="mt-2 text-xs text-slate-500">
+              At least 8 characters. Never share it with anyone.
+            </p>
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor="confirm-password" className="block text-sm font-semibold text-slate-800">
+              Confirm password
+            </label>
+            <input
+              id="confirm-password"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              maxLength={128}
+              required
+              value={confirmPassword}
+              onChange={event => setConfirmPassword(event.target.value)}
               className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-slate-900 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100"
             />
           </div>

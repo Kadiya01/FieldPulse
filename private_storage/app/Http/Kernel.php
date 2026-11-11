@@ -28,6 +28,7 @@ final class Kernel
     private const ROUTES = [
         'auth.login'       => \FieldPulse\Domain\LoginController::class,
         'auth.agent_login' => \FieldPulse\Domain\AgentLoginController::class,
+        'auth.password'    => \FieldPulse\Domain\PasswordController::class,
         'agent.register'   => \FieldPulse\Domain\AgentRegistrationController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
@@ -77,15 +78,16 @@ final class Kernel
      *              SUPERVISOR to hold it would be one misassigned role away
      *              from a hostile supervisor.
      *
-     * device.register is `bootstrap`, not `public`. Both login routes issue a
-     * bootstrap token and the route upgrades it to a device-bound session.
-     * Existing accounts still follow the configured pairing policy; public
-     * self-registered agents can bind their first browser without an operator
-     * code because registration is immediately active.
+     * device.register is `bootstrap`, not `public`. The login route issues a
+     * bootstrap token and this route upgrades it to a device-bound session.
+     * Every account follows the configured pairing policy; public
+     * self-registration does not exempt an agent from proving control of a
+     * device out of band.
      */
     private const AUTH = [
         'auth.login'       => 'public',
         'auth.agent_login' => 'public',
+        'auth.password'    => 'signed',
         'agent.register'   => 'public',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
