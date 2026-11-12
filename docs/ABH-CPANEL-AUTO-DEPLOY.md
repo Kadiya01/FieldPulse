@@ -41,7 +41,13 @@ Create two dedicated FTP accounts in cPanel. Do not use the main cPanel account 
 
 ### 1. Public preview FTP account
 
-In cPanel → FTP Accounts, create an account whose **Directory** is exactly:
+In cPanel → FTP Accounts, create an account whose **Directory** field is:
+
+```text
+public_html/monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+```
+
+cPanel interprets this as a path relative to the account home directory, so its resulting access root must be:
 
 ```text
 /home/abhgloba/public_html/monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/
@@ -51,7 +57,13 @@ This account must not be able to navigate to other domains or the account home d
 
 ### 2. Private preview FTP account
 
-Create a second FTP account whose **Directory** is exactly:
+Create a second FTP account whose **Directory** field is:
+
+```text
+abhpreview_private_storage
+```
+
+Its resulting access root must be:
 
 ```text
 /home/abhgloba/abhpreview_private_storage/
@@ -59,7 +71,7 @@ Create a second FTP account whose **Directory** is exactly:
 
 This account must not be able to access `/home/abhgloba/private_storage/` or any production directory. It uploads application code only.
 
-Use explicit FTPS (FTP over TLS), not unencrypted FTP. Confirm the FTP hostname and port in cPanel/hosting documentation. The workflow defaults to port 21; override it with the Actions Variable below if the host uses another FTPS port.
+Use explicit FTPS (FTP over TLS), not unencrypted FTP. In cPanel's **Configure FTP Client** panel, use the server hostname and port shown in its Manual Settings; do not assume the website domain is the correct TLS hostname. The workflow defaults to port 21; override it with the Actions Variable below if cPanel shows another FTPS port. If explicit FTPS is not available, stop and ask the hosting provider before choosing a different transport.
 
 ## GitHub configuration
 
