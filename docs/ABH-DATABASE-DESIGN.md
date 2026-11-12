@@ -47,7 +47,6 @@ Management owns the reward decision. Authorized management users must be able to
 - `audit_events`: actor, action, target entity, before/after summary, reason, request correlation ID and timestamp.
 - `notifications`: recipient, event, message, read state and timestamp.
 
-
 ## 3. Proposed table-level schema (review draft)
 
 This is a logical schema proposal for MySQL/MariaDB with InnoDB. Names and columns are recommendations, not an instruction to run SQL yet. Use BIGINT unsigned primary keys unless an existing project convention requires otherwise; use UTC `DATETIME` values for event timestamps and `DATE` for calendar boundaries.
@@ -122,7 +121,7 @@ ABH selected a time-based tie-breaker. When two or more agents finish the month 
 3. Secondary tie-break rule if agents have both the same final approved quantity and the same `reached_final_total_at` timestamp.
 4. Whether a reward programme can contain multiple reward categories or only one set of eligibility rules per month.
 5. Which management roles may create programmes, change gifts, select recipients and approve final awards.
-6. Whether management wants the system to display eligible agents as recommendations, or to allow completely manual winner selection without eligibility filtering. In either case, management makes the final gift and recipient decision.
+6.  In either case, management makes the final gift and recipient decision.
 7. Whether a rejected submission is terminal or can be reopened by an admin.
 
 ## 3. Important constraints and transaction rules
