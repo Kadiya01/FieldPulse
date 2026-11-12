@@ -41,10 +41,12 @@ Do not point staging code, credentials, uploads, scheduled jobs or deployment ac
 
 ### Phase 1 — Safety and baseline
 - Keep the feature branch isolated from production.
-- Run CI checks only; no automatic FTP or production deployment.
+- Run CI checks on pushes and pull requests.
+- Prepare a gated FTPS workflow for the preview host only. It remains disabled until the PHP bootstrap is proven staging-safe and the ABH application is ready.
+- Do not configure production deployment credentials or production deployment targets.
 - Document the product rules and staging boundaries.
 
-Gate: workflow contains no deployment action, no production URL and no deployment secrets.
+Gate: CI validation passes; preview deployment readiness switches remain false until the bootstrap and ABH release gates pass; no production target or credential is configured. See [ABH cPanel automatic deployment](ABH-CPANEL-AUTO-DEPLOY.md).
 
 ### Phase 2 — Data model and migration plan
 - Inspect the existing schema and identify reusable tables without assuming old workflow semantics are correct.
@@ -68,9 +70,11 @@ Gate: automated tests prove access restrictions, agent data isolation, evidence 
 Gate: role/permission tests, audit tests and transactional review tests pass.
 
 ### Phase 5 — Staging deployment and acceptance
-- Configure a dedicated staging-only deployment after paths and credentials are verified.
-- Confirm the PHP application bootstrap resolves only the staging private directory.
-- Run end-to-end tests on the preview host.
+- Configure the two least-privilege FTPS accounts and GitHub environment secrets.
+- Confirm the PHP application bootstrap resolves only the staging private directory; fail tests if it resolves production.
+- Enable the gated preview deployment only after the ABH release is ready.
+- Run a dry-run first, inspect its file targets, then enable actual preview uploads.
+- Run end-to-end tests on the preview host. Database migrations and Cron Jobs remain separate, deliberate staging operations.
 
 Gate: staging acceptance checklist passes. Production deployment requires a separate explicit approval and plan.
 
