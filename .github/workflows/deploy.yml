@@ -1,42 +1,46 @@
-name: ABH Preview CI and Auto Deploy
+name: ABH Preview Checks and Guarded cPanel Deployment
 
 on:
   push:
     branches:
       - feature/abh-monthly-enrollment
+    paths:
+      - "src/**"
+      - "public/**"
+      - "public_html/api/**"
+      - "private_storage/app/**"
+      - "private_storage/bin/**"
+      - "private_storage/migrations/**"
+      - "private_storage/workers/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.*"
+      - ".github/workflows/deploy.yml"
   pull_request:
     branches:
       - feature/abh-monthly-enrollment
   workflow_dispatch:
-    inputs:
-      deploy_preview:
-        description: "Deploy to the ABH cPanel preview site after all readiness gates pass"
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: abh-preview-${{ github.ref }}
+  group: abh-preview-checks-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
     name: Validate ABH feature branch
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
@@ -53,152 +57,180 @@ jobs:
       - name: Verify build output
         run: test -s dist/index.html
 
-  deploy-preview:
-    name: Deploy to ABH cPanel preview
+      - name: Prepare cPanel deployment bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d public_html/api
+          test -d private_storage/app
+          test -d private_storage/bin
+          test -d private_storage/migrations
+          test -d private_storage/workers
+
+          rm -rf deploy/preview
+          mkdir -p deploy/preview/public deploy/preview/private
+
+          # Public document root: built frontend and API entry points only.
+          cp -a dist/. deploy/preview/public/
+          mkdir -p deploy/preview/public/api
+          cp -a public_html/api/. deploy/preview/public/api/
+
+          # Private sibling directory: application code and operator tools only.
+          # Never package .env, user uploads, logs, or runtime storage.
+          cp -a private_storage/app private_storage/bin private_storage/migrations private_storage/workers deploy/preview/private/
+
+          test -s deploy/preview/public/index.html
+          test -s deploy/preview/private/app/bootstrap.php
+
+      - name: Upload staging deployment bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: abh-preview-deployment
+          path: deploy/preview/
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy_preview:
+    name: Deploy to ABH preview cPanel (FTPS)
     needs: validate
+    if: github.event_name == 'push' && vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
       name: abh-preview
       url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
-    # All three readiness switches must be deliberately enabled in repository
-    # Actions Variables. Pull requests can never deploy.
-    if: >-
-      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' &&
-      vars.ABH_PREVIEW_BOOTSTRAP_READY == 'true' &&
-      vars.ABH_PREVIEW_ABH_RELEASE_READY == 'true' &&
-      (
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_dispatch' && inputs.deploy_preview == true)
-      )
+    permissions:
+      contents: read
+    concurrency:
+      group: abh-preview-cpanel-deploy
+      cancel-in-progress: false
     steps:
-      - name: Check out validated commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Check out deployment policy
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 22
-          cache: npm
-          package-manager-cache: false
-
-      - name: Rebuild the exact commit being deployed
+      - name: Require explicit ABH staging deployment readiness
+        shell: bash
         run: |
-          npm ci
-          npm run lint
-          npm test
-          npm run build
-          test -s dist/index.html
+          set -euo pipefail
+          test -f docs/ABH-PREVIEW-DEPLOYMENT-READY.md || {
+            echo "::error::Deployment is locked. Complete the ABH staging readiness checklist and add docs/ABH-PREVIEW-DEPLOYMENT-READY.md before enabling deployment."
+            exit 1
+          }
+          test -s private_storage/app/bootstrap.php
+          test -d public_html/api
 
-      # The public FTP account must be restricted by cPanel to the preview
-      # document root only. This step does not upload .htaccess, .user.ini or
-      # api/ and never performs a clean-slate deletion.
-      - name: Upload frontend to preview document root
-        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+      - name: Download validated deployment bundle
+        uses: actions/download-artifact@v4
         with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          name: abh-preview-deployment
+          path: deploy/preview
+
+      - name: Validate staging-only FTP destinations
+        shell: bash
+        env:
+          PUBLIC_SERVER_DIR: ${{ vars.ABH_PREVIEW_PUBLIC_SERVER_DIR }}
+          PRIVATE_SERVER_DIR: ${{ vars.ABH_PREVIEW_PRIVATE_SERVER_DIR }}
+        run: |
+          set -euo pipefail
+
+          [[ "$PUBLIC_SERVER_DIR" == *"monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng"* ]] || {
+            echo "::error::Public FTP directory must point only to the ABH preview document root."
+            exit 1
+          }
+          [[ "$PRIVATE_SERVER_DIR" == *"abhpreview_private_storage"* ]] || {
+            echo "::error::Private FTP directory must point only to abhpreview_private_storage."
+            exit 1
+          }
+          [[ "$PUBLIC_SERVER_DIR" == */ ]] || {
+            echo "::error::ABH_PREVIEW_PUBLIC_SERVER_DIR must end with a slash."
+            exit 1
+          }
+          [[ "$PRIVATE_SERVER_DIR" == */ ]] || {
+            echo "::error::ABH_PREVIEW_PRIVATE_SERVER_DIR must end with a slash."
+            exit 1
+          }
+
+      - name: Verify dedicated FTPS credentials are configured
+        shell: bash
+        env:
+          PUBLIC_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          PUBLIC_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          PUBLIC_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          PRIVATE_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          PRIVATE_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          PRIVATE_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in PUBLIC_FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_SERVER PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required GitHub Actions secret: ABH preview FTPS credentials are incomplete."
+              exit 1
+            fi
+          done
+
+      - name: Deploy private application files to staging storage
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview/private/
+          server-dir: ${{ vars.ABH_PREVIEW_PRIVATE_SERVER_DIR }}
+          dangerous-clean-slate: false
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env
+            **/.env.*
+            **/*.log
+            **/fieldpulse/**
+            **/uploads/**
+            **/quarantine/**
+            **/processed/**
+            **/tmp/**
+
+      - name: Deploy public application files to preview document root
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
           username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
           password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
-          protocol: ftps
           port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
-          local-dir: dist/
-          server-dir: ./
-          state-name: .abh-preview-public-sync-state.json
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
-          dangerous-clean-slate: false
+          protocol: ftps
           security: strict
+          local-dir: deploy/preview/public/
+          server-dir: ${{ vars.ABH_PREVIEW_PUBLIC_SERVER_DIR }}
+          dangerous-clean-slate: false
+          timeout: 60000
           exclude: |
             **/.git*
             **/.git*/**
             **/node_modules/**
             **/.htaccess
             **/.user.ini
-            **/api/**
-            **/.env*
+            **/.env
+            **/.env.*
+            private_storage/**
+            **/private_storage/**
 
-      # The private FTP account must be restricted by cPanel to
-      # /home/abhgloba/abhpreview_private_storage/ only. Deploy application
-      # code folders separately so .env, uploads, logs and runtime data are
-      # never part of the upload set. SQL files are uploaded, never executed.
-      - name: Upload private application code
-        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
-        with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
-          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
-          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
-          protocol: ftps
-          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
-          local-dir: private_storage/app/
-          server-dir: app/
-          state-name: .abh-preview-app-sync-state.json
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
-          dangerous-clean-slate: false
-          security: strict
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            **/.env*
-
-      - name: Upload private operator tools
-        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
-        with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
-          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
-          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
-          protocol: ftps
-          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
-          local-dir: private_storage/bin/
-          server-dir: bin/
-          state-name: .abh-preview-bin-sync-state.json
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
-          dangerous-clean-slate: false
-          security: strict
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            **/.env*
-            **/*.log
-
-      - name: Upload private migration files (not executed)
-        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
-        with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
-          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
-          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
-          protocol: ftps
-          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
-          local-dir: private_storage/migrations/
-          server-dir: migrations/
-          state-name: .abh-preview-migrations-sync-state.json
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
-          dangerous-clean-slate: false
-          security: strict
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            **/.env*
-            **/*.log
-
-      - name: Upload private worker code
-        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
-        with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
-          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
-          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
-          protocol: ftps
-          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
-          local-dir: private_storage/workers/
-          server-dir: workers/
-          state-name: .abh-preview-workers-sync-state.json
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
-          dangerous-clean-slate: false
-          security: strict
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-            **/.env*
-            **/*.log
+      - name: Verify preview site responds over HTTPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          preview_url="https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng"
+          root_status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$preview_url/")"
+          [[ "$root_status" == "200" ]] || {
+            echo "::error::Preview homepage returned HTTP $root_status; inspect cPanel deployment and document-root configuration."
+            exit 1
+          }
+          env_status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$preview_url/.env")"
+          [[ "$env_status" == "403" || "$env_status" == "404" ]] || {
+            echo "::error::Preview .env protection check returned HTTP $env_status; stop and review document-root protection."
+            exit 1
+          }
