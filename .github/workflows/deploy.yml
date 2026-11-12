@@ -1,24 +1,25 @@
+name: ABH Preview Branch Checks
 
-name: FieldPulse Deployment
-
-"on":
+on:
   push:
     branches:
-      - main
+      - feature/abh-monthly-enrollment
+  pull_request:
+    branches:
+      - feature/abh-monthly-enrollment
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: fieldpulse-deploy
-  cancel-in-progress: false
+  group: abh-preview-checks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
-    name: Build frontend and deploy
+  validate:
+    name: Validate ABH feature branch (no deployment)
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -32,108 +33,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run unit tests
+        run: npm test
+
       - name: Build frontend
         run: npm run build
 
-      - name: Verify frontend build
+      - name: Verify build output
         run: test -s dist/index.html
 
-      - name: Upload frontend (dist/) to document root
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          local-dir: dist/
-          server-dir: ${{ vars.FTP_DOCROOT_DIR || './' }}
-          state-name: .ftp-deploy-sync-state-frontend.json
-          dangerous-clean-slate: false
-
-      - name: Upload PHP entry points (public_html/) to document root
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          local-dir: public_html/
-          server-dir: ${{ vars.FTP_DOCROOT_DIR || './' }}
-          state-name: .ftp-deploy-sync-state-public-html.json
-          dangerous-clean-slate: false
-
-      - name: Upload application code (private_storage/)
-        if: ${{ vars.DEPLOY_PRIVATE_STORAGE == 'true' }}
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          local-dir: private_storage/
-          server-dir: ${{ vars.PRIVATE_STORAGE_SERVER_DIR }}
-          state-name: .ftp-deploy-sync-state-private-storage.json
-          dangerous-clean-slate: false
-          exclude: |
-            .env
-            .env.*
-            fieldpulse/
-            logs/
-            *.log
-
-      # A green upload step only proves the bytes went somewhere. This proves
-      # they went to the docroot that actually serves the site: the API entry
-      # point has to reach the PHP kernel (405 on GET, not 404), and the served
-      # index.html has to reference the asset hash this run just built.
-      - name: Smoke test deployment
-        env:
-          SITE_URL: ${{ vars.SITE_URL || 'https://monthlyperformance.abhglobalinformationtechnologysolutions.com.ng' }}
-        run: |
-          set -euo pipefail
-
-          code=""
-          for attempt in 1 2 3 4 5; do
-            code=$(curl -sS -H 'Cache-Control: no-cache' \
-              -o /tmp/login.json -w '%{http_code}' \
-              "$SITE_URL/api/v1/auth/login.php" || true)
-            [ "$code" = "405" ] && break
-            sleep 5
-          done
-
-          if [ "$code" != "405" ]; then
-            echo "login.php returned $code from $SITE_URL"
-            cat /tmp/login.json || true
-            exit 1
-          fi
-
-          grep -q METHOD_NOT_ALLOWED /tmp/login.json || {
-            echo "login.php did not reach the kernel:"
-            cat /tmp/login.json
-            exit 1
-          }
-
-          asset=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' dist/index.html | head -n1)
-
-          if [ -z "$asset" ]; then
-            echo "dist/index.html references no hashed asset"
-            exit 1
-          fi
-
-          for attempt in 1 2 3 4 5; do
-            if curl -sS -f -H 'Cache-Control: no-cache' \
-              "$SITE_URL/index.html" -o /tmp/live-index.html \
-              && grep -q "$asset" /tmp/live-index.html; then
-              break
-            fi
-            sleep 5
-          done
-
-          grep -q "$asset" /tmp/live-index.html || {
-            echo "live index.html does not reference $asset"
-            exit 1
-          }
-
-          echo "Smoke test passed: $asset is live and the API entry point is routed."
+      - name: Confirm validation-only workflow
+        run: echo "Checks completed. This workflow does not deploy to any server."
