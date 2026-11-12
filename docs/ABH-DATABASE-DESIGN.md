@@ -83,7 +83,7 @@ Submission status belongs to the parent submission and reflects the current revi
 |---|---|---|
 | `abh_monthly_targets` | `id`, `reporting_period_id`, `scope_type`, `agent_id` nullable, `target_quantity`, `created_by_admin_id`, `updated_by_admin_id`, timestamps | Initial scope types: ORGANISATION and AGENT. ORGANISATION requires null agent; AGENT requires an agent ID. Unique one target per period+scope (and agent for AGENT). Target must be positive. |
 | `abh_monthly_agent_totals` | `reporting_period_id`, `agent_id`, `approved_quantity`, `approved_submission_count`, `updated_at` | Composite primary key. Derived cache only, never authoritative; rebuild from approved current revisions plus authorized adjustments. |
-| `abh_monthly_leaderboard_snapshots` | `id`, `reporting_period_id`, `agent_id`, `rank_position`, `approved_quantity`, `agent_code_snapshot`, `display_name_snapshot`, `created_at` | Unique period+agent; index period+rank. Immutable after period close. |
+| `abh_monthly_leaderboard_snapshots` | `id`, `reporting_period_id`, `agent_id`, `rank_position`, `approved_quantity`, `reached_final_total_at`, `agent_code_snapshot`, `display_name_snapshot`, `created_at` | Unique period+agent; index period+rank. Immutable after period close. For equal final approved quantities, rank the agent earlier if their cumulative net approved quantity first reached that final quantity earlier in the month. Derive this timestamp from the approval and adjustment event history and freeze it at close. |
 | `abh_monthly_organisation_snapshots` | `reporting_period_id`, `approved_quantity`, `target_quantity`, `progress_percent`, `agent_count`, `closed_at` | One immutable organisation summary per period close, including the organisation target used at close. |
 
 The organisation approved total is the sum of qualifying agent totals for that period; do not add the organisation target itself into agent totals. The organisation target and individual targets are separate measures. If an agent has no individual target, show “Not configured”; do not silently borrow the organisation target.
@@ -99,6 +99,10 @@ The organisation approved total is the sum of qualifying agent totals for that p
 | `abh_audit_events` | `id`, `actor_type`, `actor_id`, `action_key`, `entity_type`, `entity_id`, `reason`, `before_json`, `after_json`, `request_id`, `created_at` | Append-only; do not log passwords, session tokens, raw evidence or unnecessary personal data. |
 | `abh_notifications` | `id`, `recipient_type`, `recipient_id`, `event_key`, `title`, `message`, `read_at`, `created_at` | Index recipient+read state+created time; notification content must not expose another agent’s data. |
 
+### Leaderboard tie-break policy
+
+ABH selected a time-based tie-breaker. When two or more agents finish the month with the same approved quantity, the agent whose cumulative net approved quantity first reached that final quantity earlier in the reporting month ranks higher. The qualifying timestamp must be derived from the ordered approval/reversal/adjustment history, stored as `reached_final_total_at` in the monthly leaderboard snapshot, and frozen when the month closes. If the qualifying timestamps are identical, the design still needs an explicit secondary tie rule before implementation; do not silently rely on database row order.
+
 ### Core relationship map
 
 - One agent has one credential record, may have multiple registered device records, and may submit multiple independent reports in the same reporting month.
@@ -113,7 +117,7 @@ The organisation approved total is the sum of qualifying agent totals for that p
 
 1. Submission frequency decision: agents may submit multiple separate reports during an open month. Each report has its own reference, idempotency key, evidence, review lifecycle and revision history. A correction revises that specific report; it does not replace or merge other reports from the same agent.
 2. Activity-date policy selected: agents may report any activity date within the current open reporting month, including earlier dates in that same month. The server must reject dates before the period start, after the period end, or submissions against a closed period. No seven-day limit applies.
-3. The exact tie-break rule for equal approved quantities.
+3. Secondary tie-break rule if agents have both the same final approved quantity and the same `reached_final_total_at` timestamp.
 4. Whether a reward programme can contain multiple reward categories or only one set of rank awards per month.
 5. Whether reward qualification is automatic with a separate admin approval, or whether admins manually select winners from eligible agents.
 6. Whether a rejected submission is terminal or can be reopened by an admin.
@@ -172,7 +176,7 @@ The organisation approved total is the sum of qualifying agent totals for that p
 
 - Target policy selected: both organisation-wide and individual monthly targets are required. Team/location targets are optional future scope and require separate ABH approval.
 - Whether an organisation-wide target may be used as a fallback when an individual target is missing (default: no; display “Not configured”).
-- Whether ranking ties share a rank or use a documented tie-break rule.
+- Primary tie-break decision recorded: for equal final approved quantities, the agent who reached that final quantity first ranks higher. A secondary rule is still required if the qualifying timestamps are identical.
 - Whether rewards require a minimum approved quantity in addition to rank.
 - Reward values, currency, qualification rules and any exclusions.
 - Who may approve submissions, reverse approvals, close months and record payment/delivery.
