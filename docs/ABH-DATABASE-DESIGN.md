@@ -18,7 +18,7 @@ Do not point the ABH application at the production FieldPulse database. Build an
 - Device IMEI is descriptive/administrative metadata. It is not a password and must not be accepted as the only authentication factor.
 
 ### Monthly activity and review
-- `enrollment_submissions`: one submitted activity record, with agent, reporting month, claimed quantity, submission reference, idempotency key, current review state and timestamps.
+- `enrollment_submissions`: one separately submitted activity report, with agent, reporting month, claimed quantity, submission reference, idempotency key, current review state and timestamps. An agent may create multiple separate reports during the same open month.
 - `submission_revisions`: immutable versions of quantity/details when an agent corrects a submission.
 - `submission_evidence`: evidence metadata and private storage key; never expose a filesystem path or store evidence under the public document root.
 - `submission_reviews`: append-only review decisions, reviewer, decision, reason/note and timestamp.
@@ -101,7 +101,7 @@ The organisation approved total is the sum of qualifying agent totals for that p
 
 ### Core relationship map
 
-- One agent has one credential record, may have multiple registered device records, and may have many submissions.
+- One agent has one credential record, may have multiple registered device records, and may submit multiple independent reports in the same reporting month.
 - One reporting period has many submissions and targets, and at most one organisation target plus one individual target per agent.
 - One submission has one or more immutable revisions; each revision may have multiple evidence files and review decisions.
 - Only the currently approved revision contributes to the agent's monthly total. An authorized adjustment changes the counted quantity through a separate ledger entry.
@@ -111,7 +111,7 @@ The organisation approved total is the sum of qualifying agent totals for that p
 
 ### Design points requiring confirmation before SQL migrations
 
-1. Whether an agent may submit multiple reports in one month or whether ABH expects exactly one monthly submission with later revisions.
+1. Submission frequency decision: agents may submit multiple separate reports during an open month. Each report has its own reference, idempotency key, evidence, review lifecycle and revision history. A correction revises that specific report; it does not replace or merge other reports from the same agent.
 2. Whether agents can submit for a past activity date within an open reporting period, and the allowed date range.
 3. The exact tie-break rule for equal approved quantities.
 4. Whether a reward programme can contain multiple reward categories or only one set of rank awards per month.
