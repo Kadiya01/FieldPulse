@@ -15,11 +15,18 @@ on:
       - "package.json"
       - "package-lock.json"
       - "vite.config.*"
+      - "docs/ABH-PREVIEW-DEPLOYMENT-READY.md"
       - ".github/workflows/deploy.yml"
   pull_request:
     branches:
       - feature/abh-monthly-enrollment
   workflow_dispatch:
+    inputs:
+      deploy_preview:
+        description: "Run the preview deployment job (all safety switches still apply)"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -94,7 +101,12 @@ jobs:
   deploy_preview:
     name: Deploy to ABH preview cPanel (FTPS)
     needs: validate
-    if: github.event_name == 'push' && vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true'
+    if: >-
+      needs.validate.result == 'success' &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' &&
+      vars.ABH_PREVIEW_BOOTSTRAP_READY == 'true' &&
+      vars.ABH_PREVIEW_ABH_RELEASE_READY == 'true' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_preview == true))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -154,15 +166,14 @@ jobs:
       - name: Verify dedicated FTPS credentials are configured
         shell: bash
         env:
-          PUBLIC_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          FTP_SERVER: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
           PUBLIC_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
           PUBLIC_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
-          PRIVATE_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
           PRIVATE_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
           PRIVATE_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
         run: |
           set -euo pipefail
-          for name in PUBLIC_FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_SERVER PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
+          for name in FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing required GitHub Actions secret: ABH preview FTPS credentials are incomplete."
               exit 1
@@ -172,7 +183,7 @@ jobs:
       - name: Deploy private application files to staging storage
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
-          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
           username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
           password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
           port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
@@ -180,6 +191,7 @@ jobs:
           security: strict
           local-dir: deploy/preview/private/
           server-dir: ${{ vars.ABH_PREVIEW_PRIVATE_SERVER_DIR }}
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
           dangerous-clean-slate: false
           timeout: 60000
           exclude: |
@@ -198,7 +210,7 @@ jobs:
       - name: Deploy public application files to preview document root
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
-          server: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
           username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
           password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
           port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
@@ -206,6 +218,7 @@ jobs:
           security: strict
           local-dir: deploy/preview/public/
           server-dir: ${{ vars.ABH_PREVIEW_PUBLIC_SERVER_DIR }}
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
           dangerous-clean-slate: false
           timeout: 60000
           exclude: |
@@ -220,6 +233,7 @@ jobs:
             **/private_storage/**
 
       - name: Verify preview site responds over HTTPS
+        if: vars.ABH_PREVIEW_DRY_RUN == 'false'
         shell: bash
         run: |
           set -euo pipefail
