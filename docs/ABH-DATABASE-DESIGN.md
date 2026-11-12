@@ -35,12 +35,13 @@ Recommended review states: PENDING_REVIEW, CORRECTION_REQUESTED, APPROVED, REJEC
 Only approved quantities count. Organisation-wide progress and each agent’s individual progress are calculated independently against their respective monthly targets. Each agent’s target is configured independently and may differ from other agents. Do not automatically substitute the organisation-wide target when an individual target is missing; unless ABH explicitly enables a fallback rule later, display “Not configured”. The progress formula is approved quantity divided by the applicable target, multiplied by 100. If the target is missing or zero, display “Not configured”; do not divide by zero.
 
 ### Rewards and fulfilment
-- `reward_programs`: monthly programme, active dates, description and status.
-- `reward_rules`: rank bands, minimum approved quantity, eligibility conditions, reward label/value/currency and rule version.
+- `reward_programs`: monthly programme, active dates, description and status; management can create or change programmes for each month.
+- `reward_rules`: management-configured rank bands, minimum approved quantity and eligibility conditions. These rules help identify eligible agents; they do not force a particular gift.
 - `reward_qualifications`: period, agent, frozen rank, approved total, rule version and qualification outcome.
-- `reward_fulfilment_events`: separate approval, payment and delivery records, actor, timestamp, reference and notes.
+- `reward_awards`: the actual gift/reward selected and assigned by management to a particular agent for a period, including its description, quantity/value, approval and assignment status.
+- `reward_fulfilment_events`: separate payment and delivery records, actor, timestamp, reference and notes, linked to the management-approved award.
 
-A published qualification is not proof of payment. Payment and delivery are separately recorded events. Closing a month freezes the leaderboard and reward qualification basis.
+Management owns the reward decision. Authorized management users must be able to create, edit and assign gifts every month through the Admin Website without developer or code/database changes. The system may calculate rankings and show agents who meet configured eligibility criteria, but management chooses the actual gift, its value/details, the recipients and the final winners. A qualification is not an award, and an award is not proof of payment or delivery. Payment and delivery are separately recorded events. Closing a month freezes the leaderboard and the performance basis used for management's reward decisions.
 
 ### Governance and communication
 - `audit_events`: actor, action, target entity, before/after summary, reason, request correlation ID and timestamp.
@@ -93,9 +94,10 @@ The organisation approved total is the sum of qualifying agent totals for that p
 | Table | Main columns | Important rules |
 |---|---|---|
 | `abh_reward_programs` | `id`, `reporting_period_id`, `name`, `description`, `status`, `created_by_admin_id`, timestamps | One or more explicitly configured programmes per period; define whether multiple programmes are allowed before implementation. |
-| `abh_reward_rules` | `id`, `program_id`, `rule_version`, `rank_from`, `rank_to`, `minimum_approved_quantity`, `reward_title`, `reward_value`, `currency_code`, `conditions_json`, `is_active` | Version rules; do not hardcode reward amounts or positions. Validate overlapping rank bands and currency before publication. |
-| `abh_reward_qualifications` | `id`, `program_id`, `rule_id`, `agent_id`, `reporting_period_id`, `frozen_rank`, `frozen_approved_quantity`, `qualification_status`, `reviewed_by_admin_id`, `reviewed_at` | Unique programme+agent. Qualification/winner approval is not payment. Store frozen values used to decide eligibility. |
-| `abh_reward_fulfilment_events` | `id`, `qualification_id`, `event_type`, `amount`, `currency_code`, `reference_no`, `note`, `recorded_by_admin_id`, `created_at` | Append-only events such as APPROVED, PAID and DELIVERED; require the appropriate permission and supporting reference where applicable. |
+| `abh_reward_rules` | `id`, `program_id`, `rule_version`, `rank_from`, `rank_to`, `minimum_approved_quantity`, `eligibility_conditions_json`, `is_active` | Management-configured eligibility criteria only. Do not hardcode gift names, values or positions in application code. Validate overlapping rank bands before publication. |
+| `abh_reward_qualifications` | `id`, `program_id`, `rule_id`, `agent_id`, `reporting_period_id`, `frozen_rank`, `frozen_approved_quantity`, `qualification_status`, `reviewed_by_admin_id`, `reviewed_at` | Unique programme+agent. Records system-calculated eligibility and any management review; eligibility is not an award or payment. |
+| `abh_reward_awards` | `id`, `qualification_id`, `agent_id`, `reporting_period_id`, `gift_title`, `gift_description`, `gift_quantity`, nullable `estimated_value`, nullable `currency_code`, `assigned_by_admin_id`, `approved_by_admin_id`, `award_status`, `assigned_at`, `approved_at` | Management explicitly chooses and assigns the actual gift and recipient. Preserve the gift details as a historical snapshot; allow monthly changes through the Admin Website. Require permission and audit events. |
+| `abh_reward_fulfilment_events` | `id`, `award_id`, `event_type`, `amount`, `currency_code`, `reference_no`, `note`, `recorded_by_admin_id`, `created_at` | Append-only events such as PAID and DELIVERED, linked to the management-assigned award; require the appropriate permission and supporting reference where applicable. |
 | `abh_audit_events` | `id`, `actor_type`, `actor_id`, `action_key`, `entity_type`, `entity_id`, `reason`, `before_json`, `after_json`, `request_id`, `created_at` | Append-only; do not log passwords, session tokens, raw evidence or unnecessary personal data. |
 | `abh_notifications` | `id`, `recipient_type`, `recipient_id`, `event_key`, `title`, `message`, `read_at`, `created_at` | Index recipient+read state+created time; notification content must not expose another agent’s data. |
 
@@ -110,7 +112,7 @@ ABH selected a time-based tie-breaker. When two or more agents finish the month 
 - One submission has one or more immutable revisions; each revision may have multiple evidence files and review decisions.
 - Only the currently approved revision contributes to the agent's monthly total. An authorized adjustment changes the counted quantity through a separate ledger entry.
 - One reporting period has one final leaderboard snapshot per agent and one organisation summary snapshot.
-- One reward programme has versioned rules and qualification records; each qualification may have multiple fulfilment events.
+- One reward programme has versioned eligibility rules and qualification records. Management may assign a gift to a qualified agent through a separate award record; each award may have multiple payment/delivery fulfilment events.
 - Admin users perform reviews, target changes, period closure and reward fulfilment; each privileged action creates an audit event.
 
 ### Design points requiring confirmation before SQL migrations
@@ -118,9 +120,10 @@ ABH selected a time-based tie-breaker. When two or more agents finish the month 
 1. Submission frequency decision: agents may submit multiple separate reports during an open month. Each report has its own reference, idempotency key, evidence, review lifecycle and revision history. A correction revises that specific report; it does not replace or merge other reports from the same agent.
 2. Activity-date policy selected: agents may report any activity date within the current open reporting month, including earlier dates in that same month. The server must reject dates before the period start, after the period end, or submissions against a closed period. No seven-day limit applies.
 3. Secondary tie-break rule if agents have both the same final approved quantity and the same `reached_final_total_at` timestamp.
-4. Whether a reward programme can contain multiple reward categories or only one set of rank awards per month.
-5. Whether reward qualification is automatic with a separate admin approval, or whether admins manually select winners from eligible agents.
-6. Whether a rejected submission is terminal or can be reopened by an admin.
+4. Whether a reward programme can contain multiple reward categories or only one set of eligibility rules per month.
+5. Which management roles may create programmes, change gifts, select recipients and approve final awards.
+6. Whether management wants the system to display eligible agents as recommendations, or to allow completely manual winner selection without eligibility filtering. In either case, management makes the final gift and recipient decision.
+7. Whether a rejected submission is terminal or can be reopened by an admin.
 
 ## 3. Important constraints and transaction rules
 
@@ -178,5 +181,5 @@ ABH selected a time-based tie-breaker. When two or more agents finish the month 
 - Whether an organisation-wide target may be used as a fallback when an individual target is missing (default: no; display “Not configured”).
 - Primary tie-break decision recorded: for equal final approved quantities, the agent who reached that final quantity first ranks higher. A secondary rule is still required if the qualifying timestamps are identical.
 - Whether rewards require a minimum approved quantity in addition to rank.
-- Reward values, currency, qualification rules and any exclusions.
-- Who may approve submissions, reverse approvals, close months and record payment/delivery.
+- Reward eligibility rules and any exclusions; management supplies gift names, descriptions, quantities and values for each month.
+- Who may create/change monthly gifts, select recipients, approve awards, approve submissions, reverse approvals, close months and record payment/delivery.
