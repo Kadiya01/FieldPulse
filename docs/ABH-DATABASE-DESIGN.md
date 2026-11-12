@@ -46,6 +46,78 @@ A published qualification is not proof of payment. Payment and delivery are sepa
 - `audit_events`: actor, action, target entity, before/after summary, reason, request correlation ID and timestamp.
 - `notifications`: recipient, event, message, read state and timestamp.
 
+
+## 3. Proposed table-level schema (review draft)
+
+This is a logical schema proposal for MySQL/MariaDB with InnoDB. Names and columns are recommendations, not an instruction to run SQL yet. Use BIGINT unsigned primary keys unless an existing project convention requires otherwise; use UTC `DATETIME` values for event timestamps and `DATE` for calendar boundaries.
+
+### Identity and access tables
+
+| Table | Main columns | Important rules |
+|---|---|---|
+| `abh_agents` | `id`, `agent_code`, `full_name`, `phone`, nullable `email`, `location_text`, `profile_photo_key`, `status`, `registered_at`, `approved_at`, `approved_by_admin_id`, `created_at`, `updated_at` | Unique agent code; index phone, email and status. Status values: PENDING, APPROVED, REJECTED, SUSPENDED. Never hard-delete an agent with activity history. |
+| `abh_agent_credentials` | `agent_id`, `password_hash`, `password_changed_at`, `must_reset_password`, `last_login_at` | One credential row per agent; password hash only. Authentication is separate from IMEI. |
+| `abh_agent_devices` | `id`, `agent_id`, `device_label`, `imei_value`, `status`, `registered_at`, `verified_at`, `verified_by_admin_id` | Device metadata and authorization history; never use IMEI as password. Restrict access to full IMEI and consider masked display. |
+| `abh_admin_users` | `id`, `full_name`, `email`, `password_hash`, `status`, `last_login_at`, timestamps | Separate admin identity from agent identity; unique normalized email. |
+| `abh_admin_roles` | `id`, `role_key`, `role_name` | Unique role key. Seed only approved roles. |
+| `abh_admin_permissions` | `id`, `permission_key`, `description` | Unique permission key. |
+| `abh_admin_user_roles` | `admin_user_id`, `role_id` | Composite primary key; many-to-many assignment. |
+| `abh_admin_role_permissions` | `role_id`, `permission_id` | Composite primary key; permissions are checked server-side on every privileged action. |
+
+### Reporting, submissions and review tables
+
+| Table | Main columns | Important rules |
+|---|---|---|
+| `abh_reporting_periods` | `id`, `period_key` (YYYY-MM), `starts_on`, `ends_on`, `timezone`, `status`, `closed_at`, `closed_by_admin_id` | Unique period key; status OPEN or CLOSED. Use Africa/Lagos for period boundaries. A closed period rejects new submissions and changes except a separately authorized, audited correction process. |
+| `abh_enrollment_submissions` | `id`, `reference_no`, `agent_id`, `reporting_period_id`, `current_revision_id`, `status`, `idempotency_key`, `submitted_at`, timestamps | Unique reference and idempotency key; index agent+period+status. Agent ID comes only from authenticated session. |
+| `abh_submission_revisions` | `id`, `submission_id`, `revision_no`, `claimed_quantity`, `activity_date`, `agent_note`, `created_at`, `created_by_agent_id` | Unique submission+revision number. Append-only; correction creates a new revision rather than overwriting the old one. |
+| `abh_submission_evidence` | `id`, `revision_id`, `storage_key`, `original_filename`, `mime_type`, `byte_size`, `sha256`, `uploaded_at` | Store file outside public web root. Keep only opaque storage key and verified metadata in DB. Validate file type, size and content on upload. |
+| `abh_submission_reviews` | `id`, `submission_id`, `revision_id`, `reviewer_admin_id`, `decision`, `reason_code`, `review_note`, `created_at` | Append-only. Decisions include APPROVED, REJECTED and CORRECTION_REQUESTED. A reviewer can decide a revision only once; enforce with unique revision+reviewer+decision policy or a transaction/state guard appropriate to the final workflow. |
+| `abh_submission_adjustments` | `id`, `submission_id`, `approved_revision_id`, `quantity_delta`, `reason`, `created_by_admin_id`, `created_at` | Used only for authorized post-approval correction/reversal. Never silently edit an approved revision; every adjustment is reasoned and audited. |
+
+Submission status belongs to the parent submission and reflects the current revision: PENDING_REVIEW, CORRECTION_REQUESTED, APPROVED or REJECTED. When an agent resubmits after correction, create a new revision and return the parent to PENDING_REVIEW. Preserve all prior reviews and evidence.
+
+### Targets, totals and historical ranking
+
+| Table | Main columns | Important rules |
+|---|---|---|
+| `abh_monthly_targets` | `id`, `reporting_period_id`, `scope_type`, `agent_id` nullable, `target_quantity`, `created_by_admin_id`, `updated_by_admin_id`, timestamps | Initial scope types: ORGANISATION and AGENT. ORGANISATION requires null agent; AGENT requires an agent ID. Unique one target per period+scope (and agent for AGENT). Target must be positive. |
+| `abh_monthly_agent_totals` | `reporting_period_id`, `agent_id`, `approved_quantity`, `approved_submission_count`, `updated_at` | Composite primary key. Derived cache only, never authoritative; rebuild from approved current revisions plus authorized adjustments. |
+| `abh_monthly_leaderboard_snapshots` | `id`, `reporting_period_id`, `agent_id`, `rank_position`, `approved_quantity`, `agent_code_snapshot`, `display_name_snapshot`, `created_at` | Unique period+agent; index period+rank. Immutable after period close. |
+| `abh_monthly_organisation_snapshots` | `reporting_period_id`, `approved_quantity`, `target_quantity`, `progress_percent`, `agent_count`, `closed_at` | One immutable organisation summary per period close, including the organisation target used at close. |
+
+The organisation approved total is the sum of qualifying agent totals for that period; do not add the organisation target itself into agent totals. The organisation target and individual targets are separate measures. If an agent has no individual target, show “Not configured”; do not silently borrow the organisation target.
+
+### Rewards, audit and notifications
+
+| Table | Main columns | Important rules |
+|---|---|---|
+| `abh_reward_programs` | `id`, `reporting_period_id`, `name`, `description`, `status`, `created_by_admin_id`, timestamps | One or more explicitly configured programmes per period; define whether multiple programmes are allowed before implementation. |
+| `abh_reward_rules` | `id`, `program_id`, `rule_version`, `rank_from`, `rank_to`, `minimum_approved_quantity`, `reward_title`, `reward_value`, `currency_code`, `conditions_json`, `is_active` | Version rules; do not hardcode reward amounts or positions. Validate overlapping rank bands and currency before publication. |
+| `abh_reward_qualifications` | `id`, `program_id`, `rule_id`, `agent_id`, `reporting_period_id`, `frozen_rank`, `frozen_approved_quantity`, `qualification_status`, `reviewed_by_admin_id`, `reviewed_at` | Unique programme+agent. Qualification/winner approval is not payment. Store frozen values used to decide eligibility. |
+| `abh_reward_fulfilment_events` | `id`, `qualification_id`, `event_type`, `amount`, `currency_code`, `reference_no`, `note`, `recorded_by_admin_id`, `created_at` | Append-only events such as APPROVED, PAID and DELIVERED; require the appropriate permission and supporting reference where applicable. |
+| `abh_audit_events` | `id`, `actor_type`, `actor_id`, `action_key`, `entity_type`, `entity_id`, `reason`, `before_json`, `after_json`, `request_id`, `created_at` | Append-only; do not log passwords, session tokens, raw evidence or unnecessary personal data. |
+| `abh_notifications` | `id`, `recipient_type`, `recipient_id`, `event_key`, `title`, `message`, `read_at`, `created_at` | Index recipient+read state+created time; notification content must not expose another agent’s data. |
+
+### Core relationship map
+
+- One agent has one credential record, may have multiple registered device records, and may have many submissions.
+- One reporting period has many submissions and targets, and at most one organisation target plus one individual target per agent.
+- One submission has one or more immutable revisions; each revision may have multiple evidence files and review decisions.
+- Only the currently approved revision contributes to the agent's monthly total. An authorized adjustment changes the counted quantity through a separate ledger entry.
+- One reporting period has one final leaderboard snapshot per agent and one organisation summary snapshot.
+- One reward programme has versioned rules and qualification records; each qualification may have multiple fulfilment events.
+- Admin users perform reviews, target changes, period closure and reward fulfilment; each privileged action creates an audit event.
+
+### Design points requiring confirmation before SQL migrations
+
+1. Whether an agent may submit multiple reports in one month or whether ABH expects exactly one monthly submission with later revisions.
+2. Whether agents can submit for a past activity date within an open reporting period, and the allowed date range.
+3. The exact tie-break rule for equal approved quantities.
+4. Whether a reward programme can contain multiple reward categories or only one set of rank awards per month.
+5. Whether reward qualification is automatic with a separate admin approval, or whether admins manually select winners from eligible agents.
+6. Whether a rejected submission is terminal or can be reopened by an admin.
+
 ## 3. Important constraints and transaction rules
 
 1. Use InnoDB and foreign keys for relational integrity.
@@ -61,7 +133,7 @@ A published qualification is not proof of payment. Payment and delivery are sepa
 11. Evidence files are stored outside the public web root. Database rows hold opaque storage keys and verified metadata, not public URLs.
 12. Use Africa/Lagos for business reporting periods and UTC for stored event timestamps.
 
-## 4. Existing FieldPulse structures: reuse assessment
+## 5. Existing FieldPulse structures: reuse assessment
 
 | Existing structure/pattern | Assessment for ABH |
 |---|---|
@@ -73,7 +145,7 @@ A published qualification is not proof of payment. Payment and delivery are sepa
 | `reward_tiers`, `reward_rankings`, `agent_rewards` | Useful patterns for rank bands and separation of qualification from payment, but the current design is weekly and must be replaced or adapted for monthly periods and ABH rules. |
 | Existing audit and notification patterns | Candidate for reuse after confirming coverage, actor identity and immutable event history. |
 
-## 5. Migration approach
+## 6. Migration approach
 
 - Keep existing migrations unchanged; the legacy migrator checks file checksums.
 - Create a new, clearly named ABH migration series or a separate ABH schema/database.
@@ -83,7 +155,7 @@ A published qualification is not proof of payment. Payment and delivery are sepa
 - Before any staging migration, verify the DB name from the application configuration at runtime and reject any name other than the exact staging database.
 - Do not run a migration from cPanel until the schema has been reviewed and a verified staging backup exists.
 
-## 6. Acceptance tests before implementation
+## 7. Acceptance tests before implementation
 
 - Pending, rejected and suspended agents cannot submit or view another agent's data.
 - A browser cannot submit on behalf of another agent by changing an agent ID.
@@ -96,7 +168,7 @@ A published qualification is not proof of payment. Payment and delivery are sepa
 - Reward qualification does not mark an award as paid or delivered.
 - Every privileged action has an attributable audit event.
 
-## 7. Open policy values (must be configured, not invented)
+## 8. Open policy values (must be configured, not invented)
 
 - Target policy selected: both organisation-wide and individual monthly targets are required. Team/location targets are optional future scope and require separate ABH approval.
 - Whether an organisation-wide target may be used as a fallback when an individual target is missing (default: no; display “Not configured”).
