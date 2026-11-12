@@ -1,4 +1,4 @@
-name: ABH Preview Branch Checks
+name: ABH Preview CI and Auto Deploy
 
 on:
   push:
@@ -8,27 +8,35 @@ on:
     branches:
       - feature/abh-monthly-enrollment
   workflow_dispatch:
+    inputs:
+      deploy_preview:
+        description: "Deploy to the ABH cPanel preview site after all readiness gates pass"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: abh-preview-checks-${{ github.ref }}
+  group: abh-preview-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
-    name: Validate ABH feature branch (no deployment)
+    name: Validate ABH feature branch
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: npm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
@@ -45,5 +53,152 @@ jobs:
       - name: Verify build output
         run: test -s dist/index.html
 
-      - name: Confirm validation-only workflow
-        run: echo "Checks completed. This workflow does not deploy to any server."
+  deploy-preview:
+    name: Deploy to ABH cPanel preview
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+    # All three readiness switches must be deliberately enabled in repository
+    # Actions Variables. Pull requests can never deploy.
+    if: >-
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' &&
+      vars.ABH_PREVIEW_BOOTSTRAP_READY == 'true' &&
+      vars.ABH_PREVIEW_ABH_RELEASE_READY == 'true' &&
+      (
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && inputs.deploy_preview == true)
+      )
+    steps:
+      - name: Check out validated commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: npm
+          package-manager-cache: false
+
+      - name: Rebuild the exact commit being deployed
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+          test -s dist/index.html
+
+      # The public FTP account must be restricted by cPanel to the preview
+      # document root only. This step does not upload .htaccess, .user.ini or
+      # api/ and never performs a clean-slate deletion.
+      - name: Upload frontend to preview document root
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          protocol: ftps
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          local-dir: dist/
+          server-dir: ./
+          state-name: .abh-preview-public-sync-state.json
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dangerous-clean-slate: false
+          security: strict
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.htaccess
+            **/.user.ini
+            **/api/**
+            **/.env*
+
+      # The private FTP account must be restricted by cPanel to
+      # /home/abhgloba/abhpreview_private_storage/ only. Deploy application
+      # code folders separately so .env, uploads, logs and runtime data are
+      # never part of the upload set. SQL files are uploaded, never executed.
+      - name: Upload private application code
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          protocol: ftps
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          local-dir: private_storage/app/
+          server-dir: app/
+          state-name: .abh-preview-app-sync-state.json
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dangerous-clean-slate: false
+          security: strict
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env*
+
+      - name: Upload private operator tools
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          protocol: ftps
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          local-dir: private_storage/bin/
+          server-dir: bin/
+          state-name: .abh-preview-bin-sync-state.json
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dangerous-clean-slate: false
+          security: strict
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env*
+            **/*.log
+
+      - name: Upload private migration files (not executed)
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          protocol: ftps
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          local-dir: private_storage/migrations/
+          server-dir: migrations/
+          state-name: .abh-preview-migrations-sync-state.json
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dangerous-clean-slate: false
+          security: strict
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env*
+            **/*.log
+
+      - name: Upload private worker code
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          protocol: ftps
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          local-dir: private_storage/workers/
+          server-dir: workers/
+          state-name: .abh-preview-workers-sync-state.json
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dangerous-clean-slate: false
+          security: strict
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env*
+            **/*.log
