@@ -7,7 +7,7 @@ on:
     paths:
       - "src/**"
       - "public/**"
-      - "public_html/api/**"
+      - "public_html/**"
       - "private_storage/app/**"
       - "private_storage/bin/**"
       - "private_storage/migrations/**"
@@ -15,15 +15,15 @@ on:
       - "package.json"
       - "package-lock.json"
       - "vite.config.*"
-      - "docs/ABH-PREVIEW-DEPLOYMENT-READY.md"
       - ".github/workflows/deploy.yml"
+      - "docs/ABH-PREVIEW-DEPLOYMENT-READY.md"
   pull_request:
     branches:
       - feature/abh-monthly-enrollment
   workflow_dispatch:
     inputs:
       deploy_preview:
-        description: "Run the preview deployment job (all safety switches still apply)"
+        description: "Deploy to the ABH preview site after all readiness checks pass"
         required: true
         type: boolean
         default: false
@@ -39,15 +39,17 @@ jobs:
   validate:
     name: Validate ABH feature branch
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: npm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
@@ -69,8 +71,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          test -s public_html/.htaccess
+          test -s public_html/.user.ini
           test -d public_html/api
-          test -d private_storage/app
+          test -s private_storage/app/bootstrap.php
           test -d private_storage/bin
           test -d private_storage/migrations
           test -d private_storage/workers
@@ -78,20 +82,29 @@ jobs:
           rm -rf deploy/preview
           mkdir -p deploy/preview/public deploy/preview/private
 
-          # Public document root: built frontend and API entry points only.
+          # Public document root: built frontend, the API entry points and
+          # the reviewed Apache/PHP runtime configuration for the preview host.
           cp -a dist/. deploy/preview/public/
+          cp -a public_html/.htaccess public_html/.user.ini deploy/preview/public/
           mkdir -p deploy/preview/public/api
           cp -a public_html/api/. deploy/preview/public/api/
 
-          # Private sibling directory: application code and operator tools only.
-          # Never package .env, user uploads, logs, or runtime storage.
+          # Private sibling directory: code and operator tools only.
+          # .env, uploaded evidence, logs and runtime data are never packaged.
           cp -a private_storage/app private_storage/bin private_storage/migrations private_storage/workers deploy/preview/private/
 
           test -s deploy/preview/public/index.html
+          test -s deploy/preview/public/.htaccess
+          test -s deploy/preview/public/.user.ini
           test -s deploy/preview/private/app/bootstrap.php
 
+          if find deploy/preview -type f \( -name '.env' -o -name '.env.*' \) | grep -q .; then
+            echo "::error::A secret environment file was found in the deployment bundle."
+            exit 1
+          fi
+
       - name: Upload staging deployment bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: abh-preview-deployment
           path: deploy/preview/
@@ -102,11 +115,10 @@ jobs:
     name: Deploy to ABH preview cPanel (FTPS)
     needs: validate
     if: >-
-      needs.validate.result == 'success' &&
-      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' &&
-      vars.ABH_PREVIEW_BOOTSTRAP_READY == 'true' &&
-      vars.ABH_PREVIEW_ABH_RELEASE_READY == 'true' &&
-      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_preview == true))
+      github.event_name == 'push' && vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' ||
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy_preview == true &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -119,80 +131,67 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Check out deployment policy
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Require explicit ABH staging deployment readiness
         shell: bash
         run: |
           set -euo pipefail
-          test -f docs/ABH-PREVIEW-DEPLOYMENT-READY.md || {
-            echo "::error::Deployment is locked. Complete the ABH staging readiness checklist and add docs/ABH-PREVIEW-DEPLOYMENT-READY.md before enabling deployment."
+
+          readiness_file="docs/ABH-PREVIEW-DEPLOYMENT-READY.md"
+          test -s "$readiness_file" || {
+            echo "::error::Deployment is locked. Complete the ABH preview readiness checklist before enabling deployment."
             exit 1
           }
+
+          grep -Fqx 'BOOTSTRAP_PATH_VERIFIED: true' "$readiness_file"
+          grep -Fqx 'ABH_RELEASE_GATE: PASS' "$readiness_file"
+          grep -Fqx 'STAGING_DATABASE: abhgloba_abhpreview' "$readiness_file"
+
           test -s private_storage/app/bootstrap.php
+          test -s public_html/.htaccess
+          test -s public_html/.user.ini
           test -d public_html/api
 
       - name: Download validated deployment bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           name: abh-preview-deployment
           path: deploy/preview
 
-      - name: Validate staging-only FTP destinations
-        shell: bash
-        env:
-          PUBLIC_SERVER_DIR: ${{ vars.ABH_PREVIEW_PUBLIC_SERVER_DIR }}
-          PRIVATE_SERVER_DIR: ${{ vars.ABH_PREVIEW_PRIVATE_SERVER_DIR }}
-        run: |
-          set -euo pipefail
-
-          [[ "$PUBLIC_SERVER_DIR" == *"monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng"* ]] || {
-            echo "::error::Public FTP directory must point only to the ABH preview document root."
-            exit 1
-          }
-          [[ "$PRIVATE_SERVER_DIR" == *"abhpreview_private_storage"* ]] || {
-            echo "::error::Private FTP directory must point only to abhpreview_private_storage."
-            exit 1
-          }
-          [[ "$PUBLIC_SERVER_DIR" == */ ]] || {
-            echo "::error::ABH_PREVIEW_PUBLIC_SERVER_DIR must end with a slash."
-            exit 1
-          }
-          [[ "$PRIVATE_SERVER_DIR" == */ ]] || {
-            echo "::error::ABH_PREVIEW_PRIVATE_SERVER_DIR must end with a slash."
-            exit 1
-          }
-
       - name: Verify dedicated FTPS credentials are configured
         shell: bash
         env:
-          FTP_SERVER: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          PUBLIC_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
           PUBLIC_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
           PUBLIC_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          PRIVATE_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
           PRIVATE_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
           PRIVATE_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
         run: |
           set -euo pipefail
-          for name in FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
+          for name in PUBLIC_FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_SERVER PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing required GitHub Actions secret: ABH preview FTPS credentials are incomplete."
               exit 1
             fi
           done
 
+      # Each FTP user is jailed by cPanel to one directory, so ./ means only
+      # the dedicated preview directory, never the account home or production.
       - name: Deploy private application files to staging storage
-        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
         with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
           username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
           password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
           port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
           protocol: ftps
           security: strict
           local-dir: deploy/preview/private/
-          server-dir: ${{ vars.ABH_PREVIEW_PRIVATE_SERVER_DIR }}
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          server-dir: ./
           dangerous-clean-slate: false
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
           timeout: 60000
           exclude: |
             **/.git*
@@ -208,25 +207,23 @@ jobs:
             **/tmp/**
 
       - name: Deploy public application files to preview document root
-        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
         with:
-          server: ${{ secrets.ABH_PREVIEW_FTP_SERVER }}
+          server: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
           username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
           password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
           port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
           protocol: ftps
           security: strict
           local-dir: deploy/preview/public/
-          server-dir: ${{ vars.ABH_PREVIEW_PUBLIC_SERVER_DIR }}
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          server-dir: ./
           dangerous-clean-slate: false
+          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
           timeout: 60000
           exclude: |
             **/.git*
             **/.git*/**
             **/node_modules/**
-            **/.htaccess
-            **/.user.ini
             **/.env
             **/.env.*
             private_storage/**
