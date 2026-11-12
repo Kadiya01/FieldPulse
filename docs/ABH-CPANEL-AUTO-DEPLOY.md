@@ -1,135 +1,115 @@
-# ABH cPanel Preview — Automatic Deployment
+# ABH Monthly Enrollment System — cPanel Auto-Deployment
 
-## Purpose and scope
+## Status
 
-This workflow prepares automatic deployment from the `feature/abh-monthly-enrollment` branch to the ABH preview site only:
+The GitHub Actions workflow is prepared for automatic deployment to the ABH preview/staging cPanel environment only. It remains locked until the ABH application is ready.
 
-- Preview document root: `/home/abhgloba/public_html/monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/`
-- Preview private directory: `/home/abhgloba/abhpreview_private_storage/`
-- Preview database: `abhgloba_abhpreview`
+On pushes to the feature branch, validation runs first. A qualifying push then builds a deployment bundle containing:
+- Public bundle: Vite dist/ plus PHP API entry points from public_html/api/.
+- Private bundle: private_storage/app/, bin/, migrations/ and workers/.
 
-Production is explicitly excluded. Do not add production FTP credentials, production paths or production database credentials to this workflow.
+The workflow does not package .env, uploaded evidence, logs, or runtime storage. The root .htaccess and .user.ini are excluded from upload and must be installed and verified separately in cPanel first.
 
-## How it works
+## Safety switches
 
-1. A push to `feature/abh-monthly-enrollment` runs lint, unit tests and the frontend build.
-2. The deployment job can run only after validation succeeds and all readiness switches are deliberately enabled.
-3. The frontend build in `dist/` is uploaded to the preview document root.
-4. The private `app/`, `bin/`, `migrations/` and `workers/` directories are uploaded through a separate FTP account restricted to the preview private directory.
-5. The workflow never executes SQL migrations, edits `.env`, changes cPanel Cron Jobs, or deploys to production.
+Automatic deployment requires all of the following:
 
-Pull requests run checks only. A manual workflow run also requires the `deploy_preview` checkbox and the same readiness switches.
+1. The event is a push to feature/abh-monthly-enrollment, or a manual workflow run with its deploy_preview checkbox selected.
+2. Repository variable ABH_PREVIEW_DEPLOY_ENABLED is true.
+3. Repository variable ABH_PREVIEW_BOOTSTRAP_READY is true.
+4. Repository variable ABH_PREVIEW_ABH_RELEASE_READY is true.
+5. The repository contains docs/ABH-PREVIEW-DEPLOYMENT-READY.md.
+6. The public and private FTP destination variables pass the staging path checks.
+7. The separate public and private FTPS account credentials are configured.
 
-## Important: deployment is intentionally locked at first
+ABH_PREVIEW_DRY_RUN defaults to true. In that mode, the FTP action prints the planned changes and does not upload files. The post-deployment HTTP check runs only when dry-run is set to false.
 
-The following repository Actions Variables must exist and have these exact values before an automatic deployment can happen:
+The deployment uploads private PHP files first and public files second. It uses explicit FTPS with certificate verification and does not use the dangerous clean-slate option. After a real deployment it checks that the preview homepage returns HTTP 200 and that /.env returns HTTP 403 or 404.
 
-| Variable | Initial value | Set to enable deployment |
-|---|---|---|
-| `ABH_PREVIEW_DEPLOY_ENABLED` | `false` or unset | `true` |
-| `ABH_PREVIEW_BOOTSTRAP_READY` | `false` or unset | `true`, only after PHP entry points are proven to load the preview private directory and never production |
-| `ABH_PREVIEW_ABH_RELEASE_READY` | `false` or unset | `true`, only after the deployed application is actually the ABH Monthly Enrollment System and its release gate passes |
-| `ABH_PREVIEW_DRY_RUN` | `true` or unset | Keep `true` for a dry run; set to `false` only when ready to upload |
+The workflow never executes SQL migrations, changes database users, edits Cron Jobs, uploads secrets, or deploys to production. Migration files may be uploaded to the staging private directory but must be reviewed and applied separately after a verified staging backup.
 
-**Do not enable the bootstrap or ABH release switch yet.** The current code still contains legacy FieldPulse path discovery and application behavior. In particular, existing PHP entry points search for a directory named `private_storage`, while the preview private directory is named `abhpreview_private_storage`. That could resolve the production private directory. The bootstrap must first be changed to use an explicit, validated preview path. Also, ABH application code must replace the legacy product behavior before publishing it.
+## cPanel account setup
 
-With all readiness switches enabled and secrets configured, every successful push to the feature branch automatically deploys to the preview site. The workflow defaults to dry-run unless `ABH_PREVIEW_DRY_RUN=false`.
+Create two dedicated FTP accounts in cPanel. Do not use the main cPanel account login and do not create an FTP account rooted at the account home directory.
 
-## cPanel FTP accounts — least privilege
+### Public preview FTP account
 
-Create two dedicated FTP accounts in cPanel. Do not use the main cPanel account login and do not create an FTP account rooted at the whole account home directory.
+Set the cPanel FTP account's Directory field to:
 
-### 1. Public preview FTP account
-
-In cPanel → FTP Accounts, create an account whose **Directory** field is:
-
-```text
 public_html/monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
-```
 
-cPanel interprets this as a path relative to the account home directory, so its resulting access root must be:
+Its effective access root must be:
 
-```text
 /home/abhgloba/public_html/monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/
-```
 
-This account must not be able to navigate to other domains or the account home directory. Its only purpose is to upload the built frontend into the preview document root.
+This account must not be able to navigate to other domains or the account home directory.
 
-### 2. Private preview FTP account
+### Private preview FTP account
 
-Create a second FTP account whose **Directory** field is:
+Set the second FTP account's Directory field to:
 
-```text
 abhpreview_private_storage
-```
 
-Its resulting access root must be:
+Its effective access root must be:
 
-```text
 /home/abhgloba/abhpreview_private_storage/
-```
 
-This account must not be able to access `/home/abhgloba/private_storage/` or any production directory. It uploads application code only.
+This account must not be able to access /home/abhgloba/private_storage/ or any production directory.
 
-Use explicit FTPS (FTP over TLS), not unencrypted FTP. In cPanel's **Configure FTP Client** panel, use the server hostname and port shown in its Manual Settings; do not assume the website domain is the correct TLS hostname. The workflow defaults to port 21; override it with the Actions Variable below if cPanel shows another FTPS port. If explicit FTPS is not available, stop and ask the hosting provider before choosing a different transport.
+Use explicit FTPS (FTP over TLS), not unencrypted FTP. In cPanel's Configure FTP Client panel, use the server hostname and port shown in its Manual Settings. Do not assume the website domain is the correct TLS hostname. The workflow defaults to port 21; set the Actions Variable to another port only when cPanel confirms it. If explicit FTPS is unavailable, stop and ask the hosting provider before selecting another transport.
 
 ## GitHub configuration
 
 ### Create the deployment environment
 
-In the repository, open Settings → Environments and create an environment named:
-
-```text
-abh-preview
-```
-
-Restrict deployments for this environment to the `feature/abh-monthly-enrollment` branch. Environment approval rules may be added later if a human approval should be required before each deployment.
+In the repository, open Settings → Environments and create an environment named abh-preview. Restrict deployments for this environment to the feature/abh-monthly-enrollment branch. Approval rules may be added later if a human approval should be required before each deployment.
 
 ### Add environment secrets
 
-Under the `abh-preview` environment, add these secrets. Never put their values in source files or chat.
+Under the abh-preview environment, add:
 
 | Secret | Value |
 |---|---|
-| `ABH_PREVIEW_FTP_SERVER` | FTPS hostname from cPanel/hosting provider |
-| `ABH_PREVIEW_PUBLIC_FTP_USERNAME` | Username of the public preview FTP account |
-| `ABH_PREVIEW_PUBLIC_FTP_PASSWORD` | Password of the public preview FTP account |
-| `ABH_PREVIEW_PRIVATE_FTP_USERNAME` | Username of the private preview FTP account |
-| `ABH_PREVIEW_PRIVATE_FTP_PASSWORD` | Password of the private preview FTP account |
+| ABH_PREVIEW_FTP_SERVER | FTPS hostname from cPanel/hosting provider |
+| ABH_PREVIEW_PUBLIC_FTP_USERNAME | Username of the public preview FTP account |
+| ABH_PREVIEW_PUBLIC_FTP_PASSWORD | Password of the public preview FTP account |
+| ABH_PREVIEW_PRIVATE_FTP_USERNAME | Username of the private preview FTP account |
+| ABH_PREVIEW_PRIVATE_FTP_PASSWORD | Password of the private preview FTP account |
+
+Never put these values in source files, issues, or chat. Do not send FTP passwords to the assistant.
 
 ### Add repository Actions Variables
 
 Under Settings → Secrets and variables → Actions → Variables, add:
 
-| Variable | Initial value |
-|---|---|
-| `ABH_PREVIEW_DEPLOY_ENABLED` | `false` |
-| `ABH_PREVIEW_BOOTSTRAP_READY` | `false` |
-| `ABH_PREVIEW_ABH_RELEASE_READY` | `false` |
-| `ABH_PREVIEW_DRY_RUN` | `true` |
-| `ABH_PREVIEW_FTP_PORT` | `21` (or the confirmed FTPS port) |
+| Variable | Initial value | When to change |
+|---|---|---|
+| ABH_PREVIEW_DEPLOY_ENABLED | false | Set true only when all deployment checks are complete |
+| ABH_PREVIEW_BOOTSTRAP_READY | false | Set true only after PHP path resolution is tested against the preview private directory |
+| ABH_PREVIEW_ABH_RELEASE_READY | false | Set true only after the ABH application and release checks pass |
+| ABH_PREVIEW_DRY_RUN | true | Keep true for the first deployment plan; set false only when ready to upload |
+| ABH_PREVIEW_PUBLIC_SERVER_DIR | FTP-visible preview document root, ending with / | Set after checking the public account's FTP root |
+| ABH_PREVIEW_PRIVATE_SERVER_DIR | FTP-visible staging private directory, ending with / | Set after checking the private account's FTP root |
+| ABH_PREVIEW_FTP_PORT | 21, or the port confirmed by cPanel | Set only to the confirmed explicit-FTPS port |
 
-The readiness variables are deliberate safety interlocks. Do not switch them on simply to make a workflow run.
+The destination variables must be paths as seen by each restricted FTP account. The public path must contain the preview hostname; the private path must contain abhpreview_private_storage. The workflow checks both.
 
-## Deployment boundaries
+## Readiness checks before enabling
 
-- `dist/` goes to the public preview FTP account's root.
-- `public_html/.htaccess`, `public_html/.user.ini` and `public_html/api/` are excluded from frontend upload and remain managed separately.
-- Private application code is uploaded by folder to the private preview FTP account.
-- `.env`, uploaded evidence, logs, runtime data and database files are not part of the upload set.
-- Migration SQL files may be uploaded to the preview private directory, but this workflow never executes them.
-- cPanel Cron Jobs are not created, modified or removed by this workflow.
-- No production FTP login, database login or production filesystem path belongs in GitHub Actions.
+Do not create docs/ABH-PREVIEW-DEPLOYMENT-READY.md or enable the readiness switches until all checks below are complete:
 
-## First deployment procedure
+- The branch contains the ABH Agent Website and Admin Website, not legacy FieldPulse product behavior.
+- Every API entry point resolves the application from /home/abhgloba/abhpreview_private_storage/app/bootstrap.php on preview and can never fall back to /home/abhgloba/private_storage/.
+- The application resolves the actual preview document root correctly.
+- Staging configuration reads only the abhgloba_abhpreview database. No production database fallback exists.
+- The preview root .htaccess and PHP settings file are already installed and verified.
+- Private storage is outside the document root and writable only by the application account.
+- PHP version, extensions, and upload limits meet the application's requirements.
+- Tests and build pass; a staging database backup is verified before any separately approved migration.
+- Both FTP accounts are proven to be confined to their intended staging directories.
 
-1. Keep all readiness switches false while the application is being redesigned.
-2. Fix and test the PHP bootstrap so every public entry point resolves only `/home/abhgloba/abhpreview_private_storage/app/bootstrap.php` on preview. Add a test that fails if it resolves the production path.
-3. Complete the ABH application and pass its CI/release acceptance checks.
-4. Create the two restricted FTPS accounts and configure the GitHub environment secrets.
-5. Set `ABH_PREVIEW_BOOTSTRAP_READY=true` and `ABH_PREVIEW_ABH_RELEASE_READY=true` only after their respective checks pass.
-6. Set `ABH_PREVIEW_DEPLOY_ENABLED=true`, leave dry-run enabled, and push a harmless commit to inspect the planned file changes in the Actions log.
-7. Confirm the planned targets are the preview document root and preview private directory only. Then set `ABH_PREVIEW_DRY_RUN=false` and push the approved commit.
-8. Verify the preview website and its API responses. Do not run database migrations automatically; migration execution requires a separate staging backup and explicit go-ahead.
+When all checks pass, add docs/ABH-PREVIEW-DEPLOYMENT-READY.md with the evidence and date. Then enable the readiness switches, keep dry-run true, and inspect the Actions plan. Only after confirming the planned changes are limited to the two preview directories should ABH_PREVIEW_DRY_RUN be set to false. After that, qualifying pushes automatically deploy to the preview host.
 
-If the hosting provider does not support explicit FTPS, stop and choose a verified transport before adding credentials. Do not silently downgrade to plain FTP.
+## Rollback
+
+Use a reviewed revert commit on feature/abh-monthly-enrollment. The workflow will revalidate and publish that earlier state to the preview host. Do not manually delete the document root, use clean-slate deployment, or point this workflow at production.
