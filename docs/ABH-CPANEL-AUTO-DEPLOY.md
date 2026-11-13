@@ -27,7 +27,11 @@ Pull requests run validation only. A manual workflow run requires the `deploy_pr
 
 ## Deployment locks — keep them off for now
 
-The current branch still has legacy FieldPulse PHP path discovery and legacy application behavior. Existing PHP entry points search for a directory named `private_storage`; the preview's private directory is instead named `abhpreview_private_storage`. Until that path resolution is explicitly fixed and tested, the application could resolve the production private directory.
+The API entry points no longer perform independent upward searches. They now load the shared `public_html/api/v1/_bootstrap.php` resolver. On the preview host, that resolver requires the canonical preview document root and the dedicated `/home/abhgloba/abhpreview_private_storage/app/bootstrap.php` path. It rejects a missing staging bootstrap, a mismatched preview document root, a private directory inside the public document root, and a staging path that resolves through a symlink. It does not fall back to `/home/abhgloba/private_storage` on the preview host. Other local/non-preview environments retain the conventional sibling `private_storage` lookup.
+
+GitHub Actions now runs PHP 8.2 syntax checks and five automated bootstrap-isolation tests, including the critical case where the staging bootstrap is missing. The latest validation run passed these tests. This is automated code-level evidence, not yet proof from a live cPanel request.
+
+**The application behavior is still the legacy FieldPulse product, not the completed ABH Monthly Enrollment System.** The deployment remains locked until the ABH Agent Website and Admin Website replace the legacy behavior, the exact staging configuration is verified on the live preview host, and the ABH release gate passes.
 
 The deployment is therefore locked by two independent checks:
 
@@ -125,8 +129,8 @@ Repository-level variables are used for the job's deployment gate. FTP credentia
 
 ## First deployment procedure
 
-1. Leave `ABH_PREVIEW_DEPLOY_ENABLED=false` while the app is being redesigned.
-2. Fix the PHP bootstrap and every public API entry point so preview loads only `/home/abhgloba/abhpreview_private_storage/app/bootstrap.php`. Add an automated test that fails if the production private directory is selected.
+1. Leave `ABH_PREVIEW_DEPLOY_ENABLED=false` while the ABH Agent Website and Admin Website are being completed.
+2. Keep the shared bootstrap resolver and its automated tests passing. Before activation, verify through a request to the live preview host that it loads only `/home/abhgloba/abhpreview_private_storage/app/bootstrap.php` and returns a service-unavailable response rather than falling back if that file is absent.
 3. Complete the ABH Agent Website and Admin Website implementation and pass the ABH release gate.
 4. Verify the preview `.htaccess`, `.user.ini`, document root, private storage and staging database isolation.
 5. Create the two restricted FTPS accounts and add the six environment secrets.
