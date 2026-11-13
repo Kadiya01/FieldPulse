@@ -11,7 +11,7 @@ ABH migration files must use the numbered filename form:
 - `004_reward_programmes_gifts_awards.sql`
 - `005_audit_notifications.sql`
 
-Migration 001 creates the identity, admin access and monthly reporting-period tables. Migration 002 creates independent enrollment reports, immutable revisions, evidence metadata, review events and adjustment records. Migration 003 creates organisation and individual monthly targets, agent totals and month-close snapshots. Migration 004 creates reward programmes, versioned eligibility rules, qualification results, the management gift catalogue, assigned awards and separate payment/delivery fulfilment events. Migrations 001, 002, 003 and 004 have passed the disposable CI schema suite on MySQL 8.0 and MariaDB 11.4. Additional changes use the next available three-digit number. Never edit a migration after it has been applied.
+Migration 001 creates the identity, admin access and monthly reporting-period tables. Migration 002 creates independent enrollment reports, immutable revisions, evidence metadata, review events and adjustment records. Migration 003 creates organisation and individual monthly targets, agent totals and month-close snapshots. Migration 004 creates reward programmes, versioned eligibility rules, qualification results, the management gift catalogue, assigned awards and separate payment/delivery fulfilment events. Migrations 001–005 have passed the disposable CI schema suite on MySQL 8.0 and MariaDB 11.4. Additional changes use the next available three-digit number. Never edit a migration after it has been applied.
 
 The dedicated runner is `bin/abh_migrate.php`; its separate ledger is
 `abh_schema_migrations`. The runner is bound to the ABH preview private
@@ -19,4 +19,4 @@ directory, preview URL, preview `.env`, database name and database user. It
 requires both `--apply` and the exact staging database confirmation flag to
 execute SQL. `--status` and `--dry-run` are inspection modes.
 
-These SQL files are migration drafts under development. Migrations 001, 002, 003 and 004 have passed disposable MySQL 8.0 and MariaDB 11.4 CI tests. Migration 005 is pending the same test. None of these files has been applied to the cPanel staging database. Never copy this migration set into the legacy `migrations/` directory.
+These SQL files are migration drafts under development. All five migrations have passed disposable MySQL 8.0 and MariaDB 11.4 CI tests. None has been applied to the cPanel staging database. Never copy this migration set into the legacy `migrations/` directory.
