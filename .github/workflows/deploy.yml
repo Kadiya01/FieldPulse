@@ -11,6 +11,7 @@ on:
       - "private_storage/app/**"
       - "private_storage/bin/**"
       - "private_storage/migrations/**"
+      - "private_storage/abh_migrations/**"
       - "private_storage/workers/**"
       - "package.json"
       - "package-lock.json"
@@ -73,9 +74,14 @@ jobs:
             php -l "$file" >/dev/null
           done < <(find private_storage/app public_html/api -type f -name '*.php' -print0)
           php -l private_storage/bin/bootstrap_path_test.php
+          php -l private_storage/bin/abh_migrate.php
+          php -l private_storage/bin/abh_migration_plan_test.php
 
       - name: Test preview bootstrap path isolation
         run: php private_storage/bin/bootstrap_path_test.php
+
+      - name: Test ABH migration safety and planning
+        run: php private_storage/bin/abh_migration_plan_test.php
 
       - name: Build frontend
         run: npm run build
@@ -94,6 +100,7 @@ jobs:
           test -s private_storage/app/bootstrap.php
           test -d private_storage/bin
           test -d private_storage/migrations
+          test -d private_storage/abh_migrations
           test -d private_storage/workers
 
           rm -rf deploy/preview
@@ -108,7 +115,7 @@ jobs:
 
           # Private sibling directory: code and operator tools only.
           # .env, uploaded evidence, logs and runtime data are never packaged.
-          cp -a private_storage/app private_storage/bin private_storage/migrations private_storage/workers deploy/preview/private/
+          cp -a private_storage/app private_storage/bin private_storage/migrations private_storage/abh_migrations private_storage/workers deploy/preview/private/
 
           test -s deploy/preview/public/index.html
           test -s deploy/preview/public/.htaccess

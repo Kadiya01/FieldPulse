@@ -18,10 +18,10 @@ Production is excluded. Do not create production FTP secrets, production destina
    - built frontend files from `dist/`;
    - API entry points from `public_html/api/`;
    - `.htaccess` and `.user.ini` from `public_html/`;
-   - private `app/`, `bin/`, `migrations/` and `workers/` code.
+   - private `app/`, `bin/`, legacy `migrations/`, ABH-only `abh_migrations/` and `workers/` code.
 3. The deploy job runs only when `ABH_PREVIEW_DEPLOY_ENABLED=true` and the deployment-readiness file exists with all required confirmations.
 4. Two separate FTPS accounts upload the public bundle and private bundle to their respective restricted directory roots.
-5. The workflow never uploads `.env`, uploads evidence, logs or runtime data. It does not execute SQL migrations, change cPanel Cron Jobs or deploy to production.
+5. The workflow never uploads `.env`, evidence, logs or runtime data. It does not execute SQL migrations, change cPanel Cron Jobs or deploy to production. CI syntax-checks the ABH migration runner and runs its local safety/planning tests; these tests do not connect to a database.
 
 Pull requests run validation only. A manual workflow run requires the `deploy_preview` checkbox and the same deployment-enable variable.
 
@@ -47,6 +47,40 @@ STAGING_DATABASE: abhgloba_abhpreview
 **Do not create the readiness file or enable deployment yet.** It is a sign-off record, not a placeholder. Add it only after the PHP bootstrap is proven to load the preview private directory and never production, the ABH application replaces the old FieldPulse behavior, and the ABH release gate passes.
 
 The workflow defaults to FTPS dry-run unless the repository Actions Variable `ABH_PREVIEW_DRY_RUN` is set to `false`. The post-deployment HTTPS smoke check runs only after a real upload.
+
+## Dedicated ABH migration runner
+
+The runner is separate from the old FieldPulse migration system:
+
+- SQL folder: `private_storage/abh_migrations/`
+- Runner: `private_storage/bin/abh_migrate.php`
+- Ledger: `abh_schema_migrations`
+
+It refuses to proceed unless the runtime has all of these exact settings:
+
+- Private root: `/home/abhgloba/abhpreview_private_storage/`
+- `APP_URL=https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng`
+- `DB_NAME=abhgloba_abhpreview`
+- `DB_USER=abhgloba_abhpreview`
+- The loaded `.env` is inside the preview private directory.
+- After connecting, `SELECT DATABASE()` and `CURRENT_USER()` must independently confirm the staging database and staging user.
+
+The legacy `private_storage/migrations/` folder and `schema_migrations` ledger are never used by this ABH runner.
+
+Inspection commands, after the ABH PHP files and preview `.env` are installed:
+
+```bash
+php ~/abhpreview_private_storage/bin/abh_migrate.php --status
+php ~/abhpreview_private_storage/bin/abh_migrate.php --dry-run
+```
+
+Applying SQL is intentionally explicit and is not part of GitHub Actions:
+
+```bash
+php ~/abhpreview_private_storage/bin/abh_migrate.php --apply --confirm-staging-db=abhgloba_abhpreview
+```
+
+Do not run the apply command until the exact schema has been reviewed, a backup of `abhgloba_abhpreview` has been made and verified, and ABH has explicitly approved applying it. MySQL/MariaDB DDL may partially apply if a migration file fails; inspect the staging schema before retrying. There are currently no executable ABH migration SQL files in the repository.
 
 ## cPanel FTP accounts — two restricted roots
 
