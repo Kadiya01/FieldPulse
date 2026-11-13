@@ -76,6 +76,7 @@ jobs:
           php -l private_storage/bin/bootstrap_path_test.php
           php -l private_storage/bin/abh_migrate.php
           php -l private_storage/bin/abh_migration_plan_test.php
+          php -l private_storage/bin/abh_schema_test.php
 
       - name: Test preview bootstrap path isolation
         run: php private_storage/bin/bootstrap_path_test.php
@@ -135,9 +136,54 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  schema_compatibility:
+    name: Test ABH schema on supported database engines
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - name: MySQL 8.0
+            image: mysql:8.0
+          - name: MariaDB 11.4
+            image: mariadb:11.4
+    runs-on: ubuntu-latest
+    services:
+      database:
+        image: ${{ matrix.engine.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: abh_test_migrations
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      ABH_TEST_DB_HOST: 127.0.0.1
+      ABH_TEST_DB_PORT: "3306"
+      ABH_TEST_DB_NAME: abh_test_migrations
+      ABH_TEST_DB_USER: root
+      ABH_TEST_DB_PASSWORD: root
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up PHP 8.2 with PDO MySQL
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: "8.2"
+          extensions: pdo_mysql
+
+      - name: Apply ABH migrations to disposable CI database and test constraints
+        run: php private_storage/bin/abh_schema_test.php
+
   deploy_preview:
     name: Deploy to ABH preview cPanel (FTPS)
-    needs: validate
+    needs: [validate, schema_compatibility]
     if: >-
       github.event_name == 'push' && vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' ||
       github.event_name == 'workflow_dispatch' &&
