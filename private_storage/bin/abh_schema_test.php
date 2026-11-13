@@ -117,6 +117,11 @@ try {
         'abh_agent_credentials',
         'abh_agent_devices',
         'abh_reporting_periods',
+        'abh_enrollment_submissions',
+        'abh_submission_revisions',
+        'abh_submission_evidence',
+        'abh_submission_reviews',
+        'abh_submission_adjustments',
     ];
 
     $tableRows = $pdo->query(
@@ -142,7 +147,7 @@ try {
            AND TABLE_NAME LIKE 'abh\_%'
            AND REFERENCED_TABLE_NAME IS NOT NULL"
     )->fetchColumn();
-    abhSchemaAssert('expected identity and access foreign keys exist', $foreignKeyCount >= 10);
+    abhSchemaAssert('expected identity, access and submission foreign keys exist', $foreignKeyCount >= 19);
 
     // Create synthetic fixture rows. No real agent/admin information is used.
     $adminInsert = $pdo->prepare(
@@ -249,6 +254,218 @@ try {
         abhSchemaExpectFailure(static function () use ($pdo): void {
             $pdo->prepare('INSERT INTO abh_agent_credentials (agent_id, password_hash) VALUES (?, ?)')
                 ->execute([999999999, password_hash('invalid-agent', PASSWORD_DEFAULT)]);
+        })
+    );
+
+
+    // One agent can submit multiple independent reports in the same open month.
+    $submissionInsert = $pdo->prepare(
+        'INSERT INTO abh_enrollment_submissions
+         (reference_no, agent_id, reporting_period_id, status, idempotency_key)
+         VALUES (?, ?, ?, ?, ?)'
+    );
+    $submissionInsert->execute([
+        'ABH-CI-REF-001',
+        $agentId,
+        1,
+        'PENDING_REVIEW',
+        '00000000-0000-4000-8000-000000000001',
+    ]);
+    $submissionOneId = (int) $pdo->lastInsertId();
+    $submissionInsert->execute([
+        'ABH-CI-REF-002',
+        $agentId,
+        1,
+        'PENDING_REVIEW',
+        '00000000-0000-4000-8000-000000000002',
+    ]);
+    $submissionTwoId = (int) $pdo->lastInsertId();
+
+    abhSchemaAssert(
+        'agent can create multiple independent reports in the same month',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_enrollment_submissions WHERE agent_id = ' . $agentId
+        )->fetchColumn() === 2
+    );
+
+    $revisionInsert = $pdo->prepare(
+        'INSERT INTO abh_submission_revisions
+         (submission_id, revision_no, claimed_quantity, activity_date, agent_note, created_by_agent_id)
+         VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    $revisionInsert->execute([
+        $submissionOneId,
+        1,
+        12,
+        '2026-11-05',
+        'Initial report',
+        $agentId,
+    ]);
+    $revisionOneId = (int) $pdo->lastInsertId();
+    $pdo->prepare('UPDATE abh_enrollment_submissions SET current_revision_id = ? WHERE id = ?')
+        ->execute([$revisionOneId, $submissionOneId]);
+
+    $revisionInsert->execute([
+        $submissionOneId,
+        2,
+        15,
+        '2026-11-05',
+        'Corrected quantity',
+        $agentId,
+    ]);
+    $revisionTwoId = (int) $pdo->lastInsertId();
+    $pdo->prepare('UPDATE abh_enrollment_submissions SET current_revision_id = ? WHERE id = ?')
+        ->execute([$revisionTwoId, $submissionOneId]);
+
+    $revisionInsert->execute([
+        $submissionTwoId,
+        1,
+        7,
+        '2026-11-10',
+        'Independent second report',
+        $agentId,
+    ]);
+    $revisionOtherSubmissionId = (int) $pdo->lastInsertId();
+
+    abhSchemaAssert(
+        'submission correction appends a revision and preserves the first',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_submission_revisions WHERE submission_id = ' . $submissionOneId
+        )->fetchColumn() === 2
+    );
+
+    abhSchemaAssert(
+        'current revision cannot point to a different submission',
+        abhSchemaExpectFailure(static function () use ($pdo, $submissionOneId, $revisionOtherSubmissionId): void {
+            $pdo->prepare('UPDATE abh_enrollment_submissions SET current_revision_id = ? WHERE id = ?')
+                ->execute([$revisionOtherSubmissionId, $submissionOneId]);
+        })
+    );
+
+    // Evidence is indexed by revision and stores an opaque private key, not a URL.
+    $evidenceInsert = $pdo->prepare(
+        'INSERT INTO abh_submission_evidence
+         (revision_id, storage_key, original_filename, mime_type, byte_size, sha256)
+         VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    $evidenceInsert->execute([
+        $revisionOneId,
+        'ci/evidence/abh-ci-evidence-001.jpg',
+        'evidence.jpg',
+        'image/jpeg',
+        2048,
+        str_repeat('a', 64),
+    ]);
+    abhSchemaAssert('private evidence metadata can be linked to a revision', true);
+
+    $reviewInsert = $pdo->prepare(
+        'INSERT INTO abh_submission_reviews
+         (submission_id, revision_id, review_cycle_no, reviewer_admin_id, decision, reason_code, review_note, idempotency_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $reviewInsert->execute([
+        $submissionOneId,
+        $revisionOneId,
+        1,
+        $adminId,
+        'CORRECTION_REQUESTED',
+        'CI_TEST',
+        'Please verify the quantity.',
+        '00000000-0000-4000-8000-000000000011',
+    ]);
+    $reviewInsert->execute([
+        $submissionOneId,
+        $revisionTwoId,
+        2,
+        $adminId,
+        'APPROVED',
+        null,
+        'Corrected report approved in disposable CI.',
+        '00000000-0000-4000-8000-000000000012',
+    ]);
+    abhSchemaAssert(
+        'review history supports correction and a later review cycle',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_submission_reviews WHERE submission_id = ' . $submissionOneId
+        )->fetchColumn() === 2
+    );
+
+    abhSchemaAssert(
+        'review cannot reference a revision from another submission',
+        abhSchemaExpectFailure(static function () use (
+            $reviewInsert,
+            $submissionOneId,
+            $revisionOtherSubmissionId,
+            $adminId
+        ): void {
+            $reviewInsert->execute([
+                $submissionOneId,
+                $revisionOtherSubmissionId,
+                3,
+                $adminId,
+                'APPROVED',
+                null,
+                'Invalid cross-submission review.',
+                '00000000-0000-4000-8000-000000000013',
+            ]);
+        })
+    );
+
+    $adjustmentInsert = $pdo->prepare(
+        'INSERT INTO abh_submission_adjustments
+         (submission_id, approved_revision_id, quantity_delta, reason, created_by_admin_id)
+         VALUES (?, ?, ?, ?, ?)'
+    );
+    $adjustmentInsert->execute([
+        $submissionOneId,
+        $revisionTwoId,
+        -2,
+        'Disposable CI quantity adjustment.',
+        $adminId,
+    ]);
+    abhSchemaAssert('authorised quantity adjustment can be appended', true);
+
+    abhSchemaAssert(
+        'adjustment cannot reference a revision from another submission',
+        abhSchemaExpectFailure(static function () use (
+            $adjustmentInsert,
+            $submissionOneId,
+            $revisionOtherSubmissionId,
+            $adminId
+        ): void {
+            $adjustmentInsert->execute([
+                $submissionOneId,
+                $revisionOtherSubmissionId,
+                -1,
+                'Invalid cross-submission adjustment.',
+                $adminId,
+            ]);
+        })
+    );
+
+    abhSchemaAssert(
+        'agent-scoped idempotency key prevents duplicate report creation',
+        abhSchemaExpectFailure(static function () use ($submissionInsert, $agentId): void {
+            $submissionInsert->execute([
+                'ABH-CI-REF-003',
+                $agentId,
+                1,
+                'PENDING_REVIEW',
+                '00000000-0000-4000-8000-000000000001',
+            ]);
+        })
+    );
+
+    abhSchemaAssert(
+        'duplicate submission reference is rejected',
+        abhSchemaExpectFailure(static function () use ($submissionInsert, $agentId): void {
+            $submissionInsert->execute([
+                'ABH-CI-REF-001',
+                $agentId,
+                1,
+                'PENDING_REVIEW',
+                '00000000-0000-4000-8000-000000000004',
+            ]);
         })
     );
 
