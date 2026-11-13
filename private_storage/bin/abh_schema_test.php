@@ -132,6 +132,8 @@ try {
         'abh_reward_gifts',
         'abh_reward_awards',
         'abh_reward_fulfilment_events',
+        'abh_audit_events',
+        'abh_notifications',
     ];
 
     $tableRows = $pdo->query(
@@ -157,7 +159,7 @@ try {
            AND TABLE_NAME LIKE 'abh\_%'
            AND REFERENCED_TABLE_NAME IS NOT NULL"
     )->fetchColumn();
-    abhSchemaAssert('expected identity, submission, performance and reward foreign keys exist', $foreignKeyCount >= 46);
+    abhSchemaAssert('expected identity, submission, performance, reward, audit and notification foreign keys exist', $foreignKeyCount >= 50);
 
     // Create synthetic fixture rows. No real agent/admin information is used.
     $adminInsert = $pdo->prepare(
@@ -859,6 +861,105 @@ try {
         (int) $pdo->query(
             'SELECT COUNT(*) FROM abh_reward_fulfilment_events WHERE award_id = ' . $awardOneId
         )->fetchColumn() === 2
+    );
+
+
+    $auditInsert = $pdo->prepare(
+        'INSERT INTO abh_audit_events
+         (actor_type, actor_admin_user_id, actor_agent_id, action_key, entity_type,
+          entity_id, reason, before_json, after_json, request_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $auditInsert->execute([
+        'ADMIN',
+        $adminId,
+        null,
+        'agent.approve',
+        'agent',
+        $agentId,
+        'Disposable CI audit event.',
+        '{"status":"PENDING"}',
+        '{"status":"APPROVED"}',
+        '00000000-0000-4000-8000-000000000021',
+    ]);
+    $auditInsert->execute([
+        'SYSTEM',
+        null,
+        null,
+        'period.close',
+        'reporting_period',
+        $periodId,
+        null,
+        null,
+        '{"status":"CLOSED"}',
+        '00000000-0000-4000-8000-000000000022',
+    ]);
+    abhSchemaAssert('admin and system audit events can be appended', true);
+
+    abhSchemaAssert(
+        'audit actor type requires the matching actor identity',
+        abhSchemaExpectFailure(static function () use ($auditInsert, $adminId, $agentId): void {
+            $auditInsert->execute([
+                'ADMIN',
+                null,
+                $agentId,
+                'invalid.actor',
+                'agent',
+                $agentId,
+                null,
+                null,
+                null,
+                '00000000-0000-4000-8000-000000000023',
+            ]);
+        })
+    );
+
+    $notificationInsert = $pdo->prepare(
+        'INSERT INTO abh_notifications
+         (recipient_type, recipient_admin_user_id, recipient_agent_id, event_key, title, message)
+         VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    $notificationInsert->execute([
+        'AGENT',
+        null,
+        $agentId,
+        'submission.approved',
+        'Submission approved',
+        'Your November report has been approved.',
+    ]);
+    $notificationAgentId = (int) $pdo->lastInsertId();
+    $notificationInsert->execute([
+        'ADMIN',
+        $adminId,
+        null,
+        'agent.registration',
+        'New agent registration',
+        'An agent registration requires review.',
+    ]);
+    abhSchemaAssert('agent and admin notifications can be stored separately', true);
+
+    abhSchemaAssert(
+        'notification recipient type requires exactly one matching recipient',
+        abhSchemaExpectFailure(static function () use ($notificationInsert, $adminId, $agentId): void {
+            $notificationInsert->execute([
+                'AGENT',
+                $adminId,
+                $agentId,
+                'invalid.recipient',
+                'Invalid notification',
+                'This recipient pair is not permitted.',
+            ]);
+        })
+    );
+
+    $pdo->prepare('UPDATE abh_notifications SET read_at = UTC_TIMESTAMP(6) WHERE id = ?')
+        ->execute([$notificationAgentId]);
+    abhSchemaAssert(
+        'notification read state is recorded without deleting the notification',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_notifications WHERE id = ' . $notificationAgentId
+            . ' AND read_at IS NOT NULL'
+        )->fetchColumn() === 1
     );
 
     abhSchemaAssert(
