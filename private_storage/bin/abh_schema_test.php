@@ -126,6 +126,12 @@ try {
         'abh_monthly_agent_totals',
         'abh_monthly_leaderboard_snapshots',
         'abh_monthly_organisation_snapshots',
+        'abh_reward_programs',
+        'abh_reward_rules',
+        'abh_reward_qualifications',
+        'abh_reward_gifts',
+        'abh_reward_awards',
+        'abh_reward_fulfilment_events',
     ];
 
     $tableRows = $pdo->query(
@@ -151,7 +157,7 @@ try {
            AND TABLE_NAME LIKE 'abh\_%'
            AND REFERENCED_TABLE_NAME IS NOT NULL"
     )->fetchColumn();
-    abhSchemaAssert('expected identity, submission and monthly performance foreign keys exist', $foreignKeyCount >= 29);
+    abhSchemaAssert('expected identity, submission, performance and reward foreign keys exist', $foreignKeyCount >= 46);
 
     // Create synthetic fixture rows. No real agent/admin information is used.
     $adminInsert = $pdo->prepare(
@@ -566,6 +572,293 @@ try {
                 $periodId, 60, 100, '60.00', 2, '2026-11-30 23:00:01.000000', $adminId
             ]);
         })
+    );
+
+
+    // Reward programmes and eligibility are calculated/configured separately
+    // from the final human winner and gift assignment.
+    $programInsert = $pdo->prepare(
+        'INSERT INTO abh_reward_programs
+         (reporting_period_id, program_code, name, description, status, created_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    $programInsert->execute([
+        $periodId,
+        'CI-REWARD-01',
+        'CI Monthly Reward',
+        'Disposable CI reward programme.',
+        'ACTIVE',
+        $adminId,
+    ]);
+    $programOneId = (int) $pdo->lastInsertId();
+
+    $ruleInsert = $pdo->prepare(
+        'INSERT INTO abh_reward_rules
+         (program_id, rule_key, rule_version, rank_from, rank_to, minimum_approved_quantity,
+          eligibility_conditions_json, is_active, created_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $ruleInsert->execute([
+        $programOneId,
+        'TOP_RANKS',
+        1,
+        1,
+        3,
+        null,
+        '{"must_be_eligible":true}',
+        1,
+        $adminId,
+    ]);
+    $ruleOneId = (int) $pdo->lastInsertId();
+
+    $qualificationInsert = $pdo->prepare(
+        'INSERT INTO abh_reward_qualifications
+         (program_id, rule_id, agent_id, reporting_period_id, frozen_rank,
+          frozen_approved_quantity, qualification_status, eligibility_snapshot_json, evaluated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $qualificationInsert->execute([
+        $programOneId,
+        $ruleOneId,
+        $agentId,
+        $periodId,
+        1,
+        25,
+        'ELIGIBLE',
+        '{"rank":1,"approved_quantity":25}',
+        '2026-11-30 23:00:00.000000',
+    ]);
+    $qualificationOneId = (int) $pdo->lastInsertId();
+    abhSchemaAssert('system-calculated reward qualification can be recorded', true);
+
+    abhSchemaAssert(
+        'qualification does not automatically create a gift award',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_reward_awards WHERE qualification_id = ' . $qualificationOneId
+        )->fetchColumn() === 0
+    );
+
+    abhSchemaAssert(
+        'one agent has at most one qualification per programme',
+        abhSchemaExpectFailure(static function () use (
+            $qualificationInsert,
+            $programOneId,
+            $ruleOneId,
+            $agentId,
+            $periodId
+        ): void {
+            $qualificationInsert->execute([
+                $programOneId,
+                $ruleOneId,
+                $agentId,
+                $periodId,
+                1,
+                25,
+                'ELIGIBLE',
+                '{"rank":1,"approved_quantity":25}',
+                '2026-11-30 23:00:01.000000',
+            ]);
+        })
+    );
+
+    // One month can contain multiple reward categories/programmes.
+    $programInsert->execute([
+        $periodId,
+        'CI-REWARD-02',
+        'CI Secondary Reward',
+        'Second disposable reward programme.',
+        'ACTIVE',
+        $adminId,
+    ]);
+    $programTwoId = (int) $pdo->lastInsertId();
+
+    $ruleInsert->execute([
+        $programTwoId,
+        'MINIMUM_COUNT',
+        1,
+        null,
+        null,
+        10,
+        '{"minimum_count":10}',
+        1,
+        $adminId,
+    ]);
+    $ruleTwoId = (int) $pdo->lastInsertId();
+
+    $qualificationInsert->execute([
+        $programTwoId,
+        $ruleTwoId,
+        $agentId,
+        $periodId,
+        1,
+        25,
+        'ELIGIBLE',
+        '{"minimum_count_met":true}',
+        '2026-11-30 23:00:02.000000',
+    ]);
+    abhSchemaAssert(
+        'same agent may qualify for more than one programme in a month',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_reward_qualifications WHERE agent_id = ' . $agentId
+            . ' AND reporting_period_id = ' . $periodId
+        )->fetchColumn() === 2
+    );
+
+    $giftInsert = $pdo->prepare(
+        'INSERT INTO abh_reward_gifts
+         (program_id, gift_code, gift_title, gift_description, available_quantity,
+          estimated_value, currency_code, status, created_by_admin_id, updated_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $giftInsert->execute([
+        $programOneId,
+        'CI-GIFT-01',
+        'CI Gift One',
+        'First disposable gift catalogue item.',
+        5,
+        '25000.00',
+        'NGN',
+        'ACTIVE',
+        $adminId,
+        null,
+    ]);
+    $giftOneId = (int) $pdo->lastInsertId();
+
+    $giftInsert->execute([
+        $programOneId,
+        'CI-GIFT-02',
+        'CI Gift Two',
+        'Second disposable gift catalogue item.',
+        2,
+        '10000.00',
+        'NGN',
+        'ACTIVE',
+        $adminId,
+        $adminId,
+    ]);
+    $giftTwoId = (int) $pdo->lastInsertId();
+    abhSchemaAssert('management gift catalogue stores multiple gift choices', true);
+
+    $awardInsert = $pdo->prepare(
+        'INSERT INTO abh_reward_awards
+         (qualification_id, program_id, gift_id, agent_id, reporting_period_id,
+          gift_title_snapshot, gift_description_snapshot, gift_quantity,
+          estimated_value_snapshot, currency_code_snapshot, assigned_by_admin_id, award_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $awardInsert->execute([
+        $qualificationOneId,
+        $programOneId,
+        $giftOneId,
+        $agentId,
+        $periodId,
+        'CI Gift One',
+        'First disposable gift catalogue item.',
+        1,
+        '25000.00',
+        'NGN',
+        $adminId,
+        'PENDING_APPROVAL',
+    ]);
+    $awardOneId = (int) $pdo->lastInsertId();
+
+    // Multiple gift lines are supported; the system did not choose either gift.
+    $awardInsert->execute([
+        $qualificationOneId,
+        $programOneId,
+        $giftTwoId,
+        $agentId,
+        $periodId,
+        'CI Gift Two',
+        'Second disposable gift catalogue item.',
+        1,
+        '10000.00',
+        'NGN',
+        $adminId,
+        'PENDING_APPROVAL',
+    ]);
+    abhSchemaAssert(
+        'management can assign more than one gift line to an eligible agent',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_reward_awards WHERE qualification_id = ' . $qualificationOneId
+        )->fetchColumn() === 2
+    );
+
+    abhSchemaAssert(
+        'award cannot pair a qualification with a different programme gift',
+        abhSchemaExpectFailure(static function () use (
+            $awardInsert,
+            $qualificationOneId,
+            $programTwoId,
+            $giftOneId,
+            $agentId,
+            $periodId,
+            $adminId
+        ): void {
+            $awardInsert->execute([
+                $qualificationOneId,
+                $programTwoId,
+                $giftOneId,
+                $agentId,
+                $periodId,
+                'Invalid cross-programme award',
+                null,
+                1,
+                null,
+                null,
+                $adminId,
+                'PENDING_APPROVAL',
+            ]);
+        })
+    );
+
+    // Catalogue edits must not rewrite the historical award snapshot.
+    $pdo->prepare('UPDATE abh_reward_gifts SET gift_title = ? WHERE id = ?')
+        ->execute(['Edited CI Gift Title', $giftOneId]);
+    abhSchemaAssert(
+        'award preserves gift title snapshot after catalogue edit',
+        (string) $pdo->query(
+            'SELECT gift_title_snapshot FROM abh_reward_awards WHERE id = ' . $awardOneId
+        )->fetchColumn() === 'CI Gift One'
+    );
+
+    $pdo->prepare(
+        'UPDATE abh_reward_awards
+         SET award_status = ?, approved_by_admin_id = ?, approved_at = UTC_TIMESTAMP(6)
+         WHERE id = ?'
+    )->execute(['APPROVED', $adminId, $awardOneId]);
+    abhSchemaAssert('award approval is recorded separately from assignment', true);
+
+    $fulfilmentInsert = $pdo->prepare(
+        'INSERT INTO abh_reward_fulfilment_events
+         (award_id, event_type, quantity, amount, currency_code, reference_no, note, recorded_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $fulfilmentInsert->execute([
+        $awardOneId,
+        'PAID',
+        null,
+        '25000.00',
+        'NGN',
+        'CI-PAYMENT-001',
+        'Disposable payment record.',
+        $adminId,
+    ]);
+    $fulfilmentInsert->execute([
+        $awardOneId,
+        'DELIVERED',
+        1,
+        null,
+        'NGN',
+        'CI-DELIVERY-001',
+        'Disposable delivery record.',
+        $adminId,
+    ]);
+    abhSchemaAssert(
+        'payment and delivery are separate fulfilment events',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_reward_fulfilment_events WHERE award_id = ' . $awardOneId
+        )->fetchColumn() === 2
     );
 
     abhSchemaAssert(
