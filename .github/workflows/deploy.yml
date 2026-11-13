@@ -177,6 +177,23 @@ jobs:
             fi
           done
 
+          [[ "$PUBLIC_FTP_SERVER" == "ftp.abhglobalinformationtechnologysolutions.com.ng" ]] || {
+            echo "::error::Public FTP server is not the confirmed cPanel FTPS host."
+            exit 1
+          }
+          [[ "$PRIVATE_FTP_SERVER" == "ftp.abhglobalinformationtechnologysolutions.com.ng" ]] || {
+            echo "::error::Private FTP server is not the confirmed cPanel FTPS host."
+            exit 1
+          }
+          [[ "$PUBLIC_FTP_USERNAME" == "abhpreview_public@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]] || {
+            echo "::error::Public FTP username is not the dedicated preview-only account."
+            exit 1
+          }
+          [[ "$PRIVATE_FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]] || {
+            echo "::error::Private FTP username is not the dedicated preview-only account."
+            exit 1
+          }
+
       # Each FTP user is jailed by cPanel to one directory, so ./ means only
       # the dedicated preview directory, never the account home or production.
       - name: Deploy private application files to staging storage
