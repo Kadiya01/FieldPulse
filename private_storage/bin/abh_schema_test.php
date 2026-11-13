@@ -267,7 +267,7 @@ try {
     $submissionInsert->execute([
         'ABH-CI-REF-001',
         $agentId,
-        1,
+        $periodId,
         'PENDING_REVIEW',
         '00000000-0000-4000-8000-000000000001',
     ]);
@@ -275,7 +275,7 @@ try {
     $submissionInsert->execute([
         'ABH-CI-REF-002',
         $agentId,
-        1,
+        $periodId,
         'PENDING_REVIEW',
         '00000000-0000-4000-8000-000000000002',
     ]);
@@ -445,11 +445,11 @@ try {
 
     abhSchemaAssert(
         'agent-scoped idempotency key prevents duplicate report creation',
-        abhSchemaExpectFailure(static function () use ($submissionInsert, $agentId): void {
+        abhSchemaExpectFailure(static function () use ($submissionInsert, $agentId, $periodId): void {
             $submissionInsert->execute([
                 'ABH-CI-REF-003',
                 $agentId,
-                1,
+                $periodId,
                 'PENDING_REVIEW',
                 '00000000-0000-4000-8000-000000000001',
             ]);
@@ -458,11 +458,11 @@ try {
 
     abhSchemaAssert(
         'duplicate submission reference is rejected',
-        abhSchemaExpectFailure(static function () use ($submissionInsert, $agentId): void {
+        abhSchemaExpectFailure(static function () use ($submissionInsert, $agentId, $periodId): void {
             $submissionInsert->execute([
                 'ABH-CI-REF-001',
                 $agentId,
-                1,
+                $periodId,
                 'PENDING_REVIEW',
                 '00000000-0000-4000-8000-000000000004',
             ]);
