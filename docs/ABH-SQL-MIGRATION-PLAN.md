@@ -34,12 +34,12 @@ This isolates both the migration sequence and the table names from the older pro
 | Order | Proposed file | Tables / purpose |
 |---|---|---|
 | 001 | `001_identity_access_periods.sql` | Created. Agents, credentials, registered devices, admin users, roles, permissions, role joins and monthly reporting periods. CI-tested on disposable MySQL 8.0 and MariaDB 11.4 databases; not applied to cPanel staging. |
-| 002 | `002_submissions_reviews.sql` | Created; CI compatibility test pending. Enrollment submissions, immutable revisions, private evidence metadata, review decisions and approved-quantity adjustments. |
+| 002 | `002_submissions_reviews.sql` | Created and CI-tested on disposable MySQL 8.0 and MariaDB 11.4 databases. Enrollment submissions, immutable revisions, private evidence metadata, review decisions and approved-quantity adjustments. Not applied to staging. |
 | 003 | `003_abh_targets_performance_snapshots.sql` | Organisation and individual targets, monthly agent totals, leaderboard snapshots and organisation snapshots |
 | 004 | `004_abh_reward_programmes_gifts_awards.sql` | Monthly reward programmes, eligibility-rule versions, qualification records, management gift catalogue, assigned awards and payment/delivery events |
 | 005 | `005_abh_audit_notifications.sql` | Append-only administrative audit events, agent notifications and supporting indexes |
 
-The order is a proposal. Foreign keys must only reference tables created in an earlier migration or earlier in the same migration. Migration 001 has passed the disposable schema test on both target engine families. The CI test verified creation of all nine tables, InnoDB engines, expected foreign keys, default PENDING agent status, and rejection of duplicate agent codes and normalized admin emails. Migration 002 has now been added and extends the same two-engine CI suite with submission, revision, evidence, review and adjustment relationships. Its new CI run is pending. These tests do not connect to the cPanel database.
+The order is a proposal. Foreign keys must only reference tables created in an earlier migration or earlier in the same migration. Migration 001 has passed the disposable schema test on both target engine families. The CI test verified creation of all nine tables, InnoDB engines, expected foreign keys, default PENDING agent status, and rejection of duplicate agent codes and normalized admin emails. Migration 002 has also passed the same two-engine CI suite. Its tests verify two independent reports for one agent/month, immutable report revisions, current-revision ownership, evidence metadata, correction then approval history, cross-report review/adjustment rejection, and unique report references/idempotency keys. These tests do not connect to the cPanel database.
 
 ## 3. Table and data rules
 
@@ -128,7 +128,7 @@ The order is a proposal. Foreign keys must only reference tables created in an e
 - [ ] All foreign keys and unique constraints are tested, including agent-scoped idempotency.
 - [ ] Approval, duplicate approval, reversal, month close, reward qualification, award assignment and fulfilment transaction tests pass.
 - [x] The initial migration has been tested from empty disposable databases on MySQL 8.0 and MariaDB 11.4.
-- [ ] The full ABH migration sequence is tested from empty databases on both supported engines.
+- [ ] The remaining ABH migrations (targets/snapshots, rewards/gifts/awards, audit/notifications) are tested from empty databases on both supported engines.
 
 ### Staging-only gate
 
