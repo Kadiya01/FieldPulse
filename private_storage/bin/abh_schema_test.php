@@ -218,6 +218,7 @@ try {
          VALUES (?, ?, ?, ?, ?)'
     );
     $periodInsert->execute(['2026-11', '2026-11-01', '2026-11-30', 'Africa/Lagos', 'OPEN']);
+    $periodId = (int) $pdo->lastInsertId();
     abhSchemaAssert('monthly reporting period can be stored', true);
 
     abhSchemaAssert(
