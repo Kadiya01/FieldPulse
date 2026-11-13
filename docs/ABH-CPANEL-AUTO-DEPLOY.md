@@ -80,7 +80,7 @@ Applying SQL is intentionally explicit and is not part of GitHub Actions:
 php ~/abhpreview_private_storage/bin/abh_migrate.php --apply --confirm-staging-db=abhgloba_abhpreview
 ```
 
-Do not run the apply command until the exact schema has been reviewed, a backup of `abhgloba_abhpreview` has been made and verified, and ABH has explicitly approved applying it. MySQL/MariaDB DDL may partially apply if a migration file fails; inspect the staging schema before retrying. There are currently no executable ABH migration SQL files in the repository.
+Do not run the apply command until the exact schema has been reviewed, a backup of `abhgloba_abhpreview` has been made and verified, and ABH has explicitly approved applying it. MySQL/MariaDB DDL may partially apply if a migration file fails; inspect the staging schema before retrying. The first file, `001_identity_access_periods.sql`, is now in the ABH-only folder and has passed disposable MySQL 8.0 and MariaDB 11.4 CI tests. It has **not** been applied to the cPanel staging database.
 
 ## cPanel FTP accounts — two restricted roots
 
