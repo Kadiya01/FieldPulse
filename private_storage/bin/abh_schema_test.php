@@ -122,6 +122,10 @@ try {
         'abh_submission_evidence',
         'abh_submission_reviews',
         'abh_submission_adjustments',
+        'abh_monthly_targets',
+        'abh_monthly_agent_totals',
+        'abh_monthly_leaderboard_snapshots',
+        'abh_monthly_organisation_snapshots',
     ];
 
     $tableRows = $pdo->query(
@@ -147,7 +151,7 @@ try {
            AND TABLE_NAME LIKE 'abh\_%'
            AND REFERENCED_TABLE_NAME IS NOT NULL"
     )->fetchColumn();
-    abhSchemaAssert('expected identity, access and submission foreign keys exist', $foreignKeyCount >= 19);
+    abhSchemaAssert('expected identity, submission and monthly performance foreign keys exist', $foreignKeyCount >= 29);
 
     // Create synthetic fixture rows. No real agent/admin information is used.
     $adminInsert = $pdo->prepare(
@@ -200,6 +204,18 @@ try {
         'approved_by' => null,
     ]);
     $agentId = (int) $pdo->lastInsertId();
+
+    $agentInsert->execute([
+        'code' => 'CI-AGENT-002',
+        'name' => 'CI Test Agent Two',
+        'phone' => '+2348000000002',
+        'phone_norm' => '+2348000000002',
+        'email' => 'agent2@example.invalid',
+        'email_norm' => 'agent2@example.invalid',
+        'status' => 'PENDING',
+        'approved_by' => null,
+    ]);
+    $agentTwoId = (int) $pdo->lastInsertId();
 
     abhSchemaAssert(
         'new agent defaults to PENDING',
@@ -466,6 +482,88 @@ try {
                 $periodId,
                 'PENDING_REVIEW',
                 '00000000-0000-4000-8000-000000000004',
+            ]);
+        })
+    );
+
+
+    // Organisation and individual targets are stored independently. Scope
+    // owner 0 is reserved for the organisation; an agent uses its own positive ID.
+    $targetInsert = $pdo->prepare(
+        'INSERT INTO abh_monthly_targets
+         (reporting_period_id, scope_type, scope_owner_id, agent_id, target_quantity,
+          created_by_admin_id, updated_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    $targetInsert->execute([$periodId, 'ORGANISATION', 0, null, 100, $adminId, null]);
+    $targetInsert->execute([$periodId, 'AGENT', $agentId, $agentId, 50, $adminId, $adminId]);
+    abhSchemaAssert('organisation and individual monthly targets are stored independently', true);
+
+    abhSchemaAssert(
+        'duplicate organisation target for a month is rejected',
+        abhSchemaExpectFailure(static function () use ($targetInsert, $periodId, $adminId): void {
+            $targetInsert->execute([$periodId, 'ORGANISATION', 0, null, 200, $adminId, null]);
+        })
+    );
+    abhSchemaAssert(
+        'duplicate individual target for an agent and month is rejected',
+        abhSchemaExpectFailure(static function () use ($targetInsert, $periodId, $agentId, $adminId): void {
+            $targetInsert->execute([$periodId, 'AGENT', $agentId, $agentId, 75, $adminId, $adminId]);
+        })
+    );
+
+    $totalsInsert = $pdo->prepare(
+        'INSERT INTO abh_monthly_agent_totals
+         (reporting_period_id, agent_id, approved_quantity, approved_submission_count)
+         VALUES (?, ?, ?, ?)'
+    );
+    $totalsInsert->execute([$periodId, $agentId, 25, 2]);
+    $totalsInsert->execute([$periodId, $agentTwoId, 25, 2]);
+    abhSchemaAssert('approved monthly totals can be stored for multiple agents', true);
+
+    abhSchemaAssert(
+        'monthly totals enforce one row per agent and period',
+        abhSchemaExpectFailure(static function () use ($totalsInsert, $periodId, $agentId): void {
+            $totalsInsert->execute([$periodId, $agentId, 30, 3]);
+        })
+    );
+
+    $leaderboardInsert = $pdo->prepare(
+        'INSERT INTO abh_monthly_leaderboard_snapshots
+         (reporting_period_id, agent_id, rank_position, approved_quantity, reached_final_total_at,
+          agent_code_snapshot, display_name_snapshot)
+         VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    $leaderboardInsert->execute([
+        $periodId, $agentId, 1, 25, '2026-11-20 10:00:00.000000', 'CI-AGENT-001', 'CI Test Agent'
+    ]);
+    $leaderboardInsert->execute([
+        $periodId, $agentTwoId, 1, 25, '2026-11-20 10:00:00.000000', 'CI-AGENT-002', 'CI Test Agent Two'
+    ]);
+    abhSchemaAssert(
+        'competition leaderboard allows agents to share the same rank',
+        (int) $pdo->query(
+            'SELECT COUNT(*) FROM abh_monthly_leaderboard_snapshots WHERE reporting_period_id = '
+            . $periodId . ' AND rank_position = 1'
+        )->fetchColumn() === 2
+    );
+
+    $organisationSnapshotInsert = $pdo->prepare(
+        'INSERT INTO abh_monthly_organisation_snapshots
+         (reporting_period_id, approved_quantity, target_quantity, progress_percent,
+          agent_count, closed_at, closed_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    $organisationSnapshotInsert->execute([
+        $periodId, 50, 100, '50.00', 2, '2026-11-30 23:00:00.000000', $adminId
+    ]);
+    abhSchemaAssert('organisation month-close snapshot can be stored', true);
+
+    abhSchemaAssert(
+        'organisation close snapshot is unique per reporting month',
+        abhSchemaExpectFailure(static function () use ($organisationSnapshotInsert, $periodId, $adminId): void {
+            $organisationSnapshotInsert->execute([
+                $periodId, 60, 100, '60.00', 2, '2026-11-30 23:00:01.000000', $adminId
             ]);
         })
     );
