@@ -113,7 +113,7 @@ ABH selected a time-based tie-breaker. When two or more agents finish the month 
 - One submission has one or more immutable revisions; each revision may have multiple evidence files and review decisions.
 - Only the currently approved revision contributes to the agent's monthly total. An authorized adjustment changes the counted quantity through a separate ledger entry.
 - One reporting period has one final leaderboard snapshot per agent and one organisation summary snapshot.
-- One reward programme has versioned eligibility rules and qualification records. Management may assign a gift to a qualified agent through a separate award record; each award may have multiple payment/delivery fulfilment events.
+- One reporting period has one or more reward programmes. Each programme has versioned eligibility rules, qualification records and a management-maintained gift catalogue. Management assigns one or more gift lines to a qualified agent through separate award records; each award may have multiple payment/delivery fulfilment events.
 - Admin users perform reviews, target changes, period closure and reward fulfilment; each privileged action creates an audit event.
 
 ### Business policies recorded and proposed defaults for the SQL draft
@@ -159,10 +159,10 @@ These defaults make the schema flexible, but points 4, 5, 7, 8 and 9 should be c
 
 ## 6. Migration approach
 
-- Keep existing migrations unchanged; the legacy migrator checks file checksums.
-- Create a new, clearly named ABH migration series or a separate ABH schema/database.
+- Keep all legacy migrations unchanged; their existing checksums and execution order are not part of the ABH migration sequence.
+- Store ABH SQL files in `private_storage/abh_migrations/` and use a dedicated `private_storage/bin/abh_migrate.php` runner with a separate `abh_schema_migrations` ledger. Do not make the legacy migration runner execute ABH migrations.
 - Prefer additive, reversible changes. Avoid destructive renames or status rewrites.
-- First migration should create the ABH core tables and constraints; later migrations add targets, monthly snapshots, rewards and notifications.
+- Create the ABH identity/access/period tables first, then submissions/reviews, targets/snapshots, rewards and fulfilment, and finally audit/notifications.
 - Test migrations from an empty staging database and test rollback/restore using a staging backup.
 - Before any staging migration, verify the DB name from the application configuration at runtime and reject any name other than the exact staging database.
 - Do not run a migration from cPanel until the schema has been reviewed and a verified staging backup exists.
@@ -183,8 +183,9 @@ These defaults make the schema flexible, but points 4, 5, 7, 8 and 9 should be c
 ## 8. Policy controls requiring management configuration
 
 - Target policy selected: both organisation-wide and individual monthly targets are required. Team/location targets are optional future scope and require separate ABH approval.
-- Whether an organisation-wide target may be used as a fallback when an individual target is missing (default: no; display “Not configured”).
+- Individual target fallback remains disabled by default: show “Not configured” when an individual target is missing; do not borrow the organisation target.
 - Primary tie-break decision recorded: for equal final approved quantities, the agent who reached that final quantity first ranks higher. The proposed exact-tie default is shared rank when both quantity and qualifying timestamp match.
 - Minimum approved quantity is optional and configurable per reward rule; a null value means rank/other configured conditions apply without a minimum-count threshold.
 - Multiple reward programmes/categories per month and multiple gift lines per eligible agent are supported as flexible schema defaults; management can impose a stricter limit through programme settings if required. Reward eligibility rules and any exclusions are configured by management. The system first displays qualified agents; management chooses recipients and gift assignments.
+- Rejected submission reopening: proposed default is that an authorised admin may reopen a rejected report with a mandatory reason. The reopen event is retained in review and audit history; changed details require a new revision.
 - Management assigns staff roles for agent approval, submission review, target changes, reward/gift management, award approval, period closure, payment and delivery recording.
