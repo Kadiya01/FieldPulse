@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-**Design proposal only. This file contains no executable SQL.** No database connection was opened and no migration was run.
+**Plan document only; this file contains no executable SQL.** The first executable ABH migration is stored separately in `private_storage/abh_migrations/001_identity_access_periods.sql` and has passed disposable CI schema tests on MySQL 8.0 and MariaDB 11.4. No cPanel, staging or production database was connected or migrated.
 
 The first implementation target is the dedicated staging database:
 
@@ -33,13 +33,13 @@ This isolates both the migration sequence and the table names from the older pro
 
 | Order | Proposed file | Tables / purpose |
 |---|---|---|
-| 001 | `001_abh_identity_access_periods.sql` | Agents, credentials, registered devices, admin users, roles, permissions, role joins and monthly reporting periods |
+| 001 | `001_identity_access_periods.sql` | Created. Agents, credentials, registered devices, admin users, roles, permissions, role joins and monthly reporting periods. CI-tested on disposable MySQL 8.0 and MariaDB 11.4 databases; not applied to cPanel staging. |
 | 002 | `002_abh_submissions_reviews.sql` | Enrollment submissions, immutable revisions, private evidence metadata, review decisions and approved-quantity adjustments |
 | 003 | `003_abh_targets_performance_snapshots.sql` | Organisation and individual targets, monthly agent totals, leaderboard snapshots and organisation snapshots |
 | 004 | `004_abh_reward_programmes_gifts_awards.sql` | Monthly reward programmes, eligibility-rule versions, qualification records, management gift catalogue, assigned awards and payment/delivery events |
 | 005 | `005_abh_audit_notifications.sql` | Append-only administrative audit events, agent notifications and supporting indexes |
 
-The order is a proposal. Foreign keys must only reference tables created in an earlier migration or earlier in the same migration.
+The order is a proposal. Foreign keys must only reference tables created in an earlier migration or earlier in the same migration. Migration 001 has passed the disposable schema test on both target engine families. The CI test verified creation of all nine tables, InnoDB engines, expected foreign keys, default PENDING agent status, and rejection of duplicate agent codes and normalized admin emails. These tests do not connect to the cPanel database.
 
 ## 3. Table and data rules
 
@@ -121,12 +121,14 @@ The order is a proposal. Foreign keys must only reference tables created in an e
 
 ### Local migration gate
 
-- [ ] The dedicated ABH runner applies all migrations to a new empty local test database.
+- [x] Migration 001 was applied by the disposable CI schema test to fresh MySQL 8.0 and MariaDB 11.4 service databases; the initial identity/access/period tables and tested constraints passed.
+- [ ] The dedicated ABH runner applies the full migration sequence to a new empty local test database.
 - [ ] Re-running the runner reports no pending migrations and makes no changes.
 - [ ] The checksum ledger detects an edited applied migration.
 - [ ] All foreign keys and unique constraints are tested, including agent-scoped idempotency.
 - [ ] Approval, duplicate approval, reversal, month close, reward qualification, award assignment and fulfilment transaction tests pass.
-- [ ] Both supported database engines are tested from empty databases.
+- [x] The initial migration has been tested from empty disposable databases on MySQL 8.0 and MariaDB 11.4.
+- [ ] The full ABH migration sequence is tested from empty databases on both supported engines.
 
 ### Staging-only gate
 
@@ -137,7 +139,7 @@ The order is a proposal. Foreign keys must only reference tables created in an e
 - [ ] Review the migration plan and backup restoration procedure.
 - [ ] Obtain explicit approval before applying migrations.
 
-**No migration is authorised by this plan.** Production must never be used to test the ABH migration sequence.
+**No staging or production migration is authorised by this plan.** The first migration has only been tested in disposable CI databases. Production must never be used to test the ABH migration sequence.
 
 ## 7. Items deliberately not decided by the developer
 
