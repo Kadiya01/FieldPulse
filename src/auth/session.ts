@@ -23,9 +23,10 @@ const channel: BroadcastChannel | null = typeof BroadcastChannel === 'function'
 interface TokenBroadcast {
   type: 'token';
   access_token: string;
+  agent?: { id: number; agent_code: string; full_name: string; role?: string };
 }
 
-let onRemoteToken: ((token: string) => void) | null = null;
+let onRemoteToken: ((token: string, agent?: TokenBroadcast['agent']) => void) | null = null;
 
 if (channel) {
   channel.onmessage = (event: MessageEvent<TokenBroadcast>) => {
@@ -34,7 +35,7 @@ if (channel) {
       // Adopted without touching storage, and without a broadcast of its own:
       // re-announcing would bounce the same token between every open tab.
       accessToken = data.access_token;
-      onRemoteToken?.(data.access_token);
+      onRemoteToken?.(data.access_token, data.agent);
     }
   };
 }
@@ -47,8 +48,8 @@ export function setAccessToken(token: string | null) {
   accessToken = token;
 }
 
-export function announceAccessToken(token: string): void {
-  channel?.postMessage({ type: 'token', access_token: token } satisfies TokenBroadcast);
+export function announceAccessToken(token: string, agent?: TokenBroadcast['agent']): void {
+  channel?.postMessage({ type: 'token', access_token: token, agent } satisfies TokenBroadcast);
 }
 
 /**
@@ -58,7 +59,7 @@ export function announceAccessToken(token: string): void {
  * issue another refresh, so a tab woken by a sibling's refresh does not
  * immediately spend the cookie that sibling just rotated.
  */
-export function onRemoteAccessToken(listener: (token: string) => void): () => void {
+export function onRemoteAccessToken(listener: (token: string, agent?: TokenBroadcast['agent']) => void): () => void {
   onRemoteToken = listener;
   return () => {
     if (onRemoteToken === listener) {
