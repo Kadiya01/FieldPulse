@@ -88,8 +88,14 @@ export default function AbhAgentPortalPage({
   }, [month]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void refreshHistory(false); }, 0);
-    return () => window.clearTimeout(timer);
+    let active = true;
+    const timer = window.setTimeout(() => {
+      if (active) void refreshHistory(false);
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, [refreshHistory]);
 
   const maximumDate = month === currentMonth() ? todayIso() : monthEnd(month);
