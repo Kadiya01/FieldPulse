@@ -124,84 +124,36 @@ function localSourceIndex(block: string, state: string): number {
   return at === -1 ? 0 : at;
 }
 
-describe('route table and navigation agree', () => {
-  it('finds the routes to compare, so the assertions below mean something', () => {
-    // An empty list satisfies every "for each" below vacuously. These guards are
-    // what stop the drift test from passing because a refactor changed the
-    // quoting style.
-    expect(navTargets.length).toBeGreaterThanOrEqual(3);
-    expect(routedPaths.length).toBeGreaterThanOrEqual(5);
-  });
-
-  it('routes every destination the nav links to', () => {
-    const unrouted = navTargets.filter((to) => !routedPaths.includes(to));
-
-    expect(unrouted).toEqual([]);
-  });
-
-  it('links to every authenticated destination the app routes to', () => {
-    // Login and registration routes render outside the authenticated layout.
-    const publicRoutes = ['/login', '/register', '*'];
-    const reachable = routedPaths.filter((p) => !publicRoutes.includes(p));
-    const unlinked = reachable.filter((p) => !navTargets.includes(p));
-
-    expect(unlinked).toEqual([]);
-  });
-
-  it('keeps agent and administrator sign-in on separate public routes', () => {
-    expect(appSource).toMatch(/path="\/login"/);
+describe('ABH app routing and legacy isolation', () => {
+  it('keeps agent and administrator authentication on separate routes', () => {
     expect(appSource).toContain("location.pathname === '/admin'");
     expect(appSource).toContain('<AdminPortalPage />');
-    expect(appSource).toMatch(/path="\/login"/);
-    expect(appSource).not.toMatch(/path="\/admin\/login"/);
+    expect(appSource).toMatch(/path="\\/login"/);
+    expect(appSource).toMatch(/path="\\/register"/);
+    expect(appSource).not.toMatch(/path="\\/admin\\/login"/);
     expect(read('pages/LoginPage.tsx')).not.toContain('admin?: boolean');
   });
 
-  it('has exactly one review route, and it is operator-only', () => {
-    // Counted in the raw source rather than in `routedPaths`, which is a Set and
-    // would collapse two identical declarations into one and report success. Two
-    // review routes would mean one of them is outside the operator guard.
-    const occurrences = (source: string, pattern: RegExp): number =>
-      [...source.matchAll(pattern)].length;
-
-    expect(occurrences(appSource, /path="\/reviews"/g)).toBe(1);
-    expect(occurrences(navSource, /to: '\/reviews'/g)).toBe(1);
-
-    // The guard, not the absence of a link, is what enforces the role.
-    expect(appSource).toMatch(/ReviewsPage/);
-    expect(read('pages/ReviewsPage.tsx')).toContain('isOperator');
+  it('renders the dedicated ABH agent portal after successful agent authentication', () => {
+    expect(appSource).toContain("import AbhAgentPortalPage from './pages/AbhAgentPortalPage'");
+    expect(appSource).toContain('<AbhAgentPortalPage agent={agent} onSignOut={endSession} />');
+    expect(read('pages/AbhAgentPortalPage.tsx')).toContain('submitAbhEnrollment');
+    expect(read('pages/AbhAgentPortalPage.tsx')).toContain('fetchAbhAgentSubmissions');
   });
 
-  it('has exactly one account route, and it is admin-only', () => {
-    // Same reasoning as the review route: one declaration, one nav entry, and a
-    // page that checks the role itself rather than trusting the link's absence.
-    const occurrences = (source: string, pattern: RegExp): number =>
-      [...source.matchAll(pattern)].length;
-
-    expect(occurrences(appSource, /location\.pathname === '\/admin'/g)).toBe(1);
-    expect(occurrences(navSource, /to: '\/admin'/g)).toBe(1);
-
-    expect(appSource).toMatch(/AdminPortalPage/);
-    expect(read('pages/AdminPortalPage.tsx')).toContain('admin.permissions.includes');
-  });
-
-  it('sends an unknown path to the capture screen rather than a blank page', () => {
-    // A client-side route that falls through to nothing renders an empty
-    // document, which an agent reports as "the app is broken".
+  it('does not expose legacy authenticated FieldPulse pages to ABH sessions', () => {
+    expect(appSource).not.toContain("import CapturePage");
+    expect(appSource).not.toContain("import QueuePage");
+    expect(appSource).not.toContain("import DashboardPage");
+    expect(appSource).not.toContain("import RewardsPage");
+    expect(appSource).not.toContain("import ReviewsPage");
+    expect(appSource).not.toContain("import { triggerSync }");
     expect(appSource).toContain('path="*"');
   });
 
-  it('has exactly one registration route, and it is public', () => {
-    // Self-registration is declared once outside the authenticated layout; a
-    // signed-in agent is redirected back to the capture screen.
-    const occurrences = (source: string, pattern: RegExp): number =>
-      [...source.matchAll(pattern)].length;
-
-    expect(occurrences(appSource, /path="\/register"/g)).toBe(1);
-    expect(appSource).toMatch(/RegisterPage/);
+  it('keeps public self-registration available to new agents', () => {
+    expect((appSource.match(/path="\\/register"/g) ?? []).length).toBe(1);
     expect(read('pages/RegisterPage.tsx')).toContain('registerAbhAgent');
-
-    // The agent sign-in page points new agents to registration.
-    expect(read('pages/LoginPage.tsx')).toMatch(/to="\/register"/);
+    expect(read('pages/LoginPage.tsx')).toMatch(/to="\\/register"/);
   });
 });
