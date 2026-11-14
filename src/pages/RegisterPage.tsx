@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { registerAbhAgent } from '../api/client';
+import { generateAndStoreDeviceIdentity, getDeviceIdentity, signPayload } from '../crypto/keys';
 import BrandHeader from '../components/BrandHeader';
 
 const DEVICE_TYPES = [
@@ -43,14 +44,34 @@ export default function RegisterPage() {
 
     setBusy(true);
     try {
+      // The non-extractable private key stays in this browser. Registration
+      // sends only the public JWK and a proof that this browser owns its key.
+      let device = await getDeviceIdentity();
+      if (!device) {
+        await generateAndStoreDeviceIdentity();
+        device = await getDeviceIdentity();
+      }
+      if (!device) {
+        throw new Error('This browser could not store its security key. Use a supported browser over HTTPS and try again.');
+      }
+
+      const cleanImei = imei.replace(/[\s-]/g, '');
+      const keyProof = await signPayload(
+        `ABH_REGISTRATION\n${device.device_uuid}\n${cleanImei}`,
+        device.private_key
+      );
+
       const result = await registerAbhAgent({
         full_name: fullName.trim(),
         phone: phone.trim(),
         password,
         email: email.trim() || undefined,
         location: location.trim() || undefined,
-        imei: imei.replace(/[\s-]/g, ''),
+        imei: cleanImei,
         device_type: deviceType,
+        device_uuid: device.device_uuid,
+        public_key_jwk: device.public_key_jwk,
+        key_proof: keyProof,
       });
 
       setAgentCode(result.agent.agent_code);
@@ -81,7 +102,7 @@ export default function RegisterPage() {
             <p className="mt-2 text-xs text-slate-500">Keep this reference for your records.</p>
           </div>
           <p className="mt-5 text-sm text-slate-600">
-            The administrator will review your details and your registered device.
+            The administrator will review your account and registered device. Keep this browser available; its security key is required when signing in.
           </p>
         </section>
       </main>
