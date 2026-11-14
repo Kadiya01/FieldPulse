@@ -138,6 +138,9 @@ try {
         'abh_agent_sessions',
         'abh_auth_nonces',
         'abh_auth_attempts',
+        'abh_admin_sessions',
+        'abh_admin_auth_attempts',
+        'abh_admin_bootstrap_guard',
     ];
 
     $tableRows = $pdo->query(
@@ -172,6 +175,42 @@ try {
     foreach (['access_token_hash', 'refresh_token_hash', 'token_family', 'access_expires_at', 'refresh_expires_at', 'revoked_at', 'rotated_to_session_id'] as $column) {
         abhSchemaAssert('ABH session field exists: ' . $column, in_array($column, $sessionColumns, true));
     }
+
+    $adminSessionColumns = $pdo->query(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_admin_sessions'"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    foreach (['access_token_hash', 'refresh_token_hash', 'token_family', 'access_expires_at', 'refresh_expires_at', 'revoked_at', 'rotated_to_session_id'] as $column) {
+        abhSchemaAssert('ABH administrator session field exists: ' . $column, in_array($column, $adminSessionColumns, true));
+    }
+
+    $bootstrapGuard = $pdo->query(
+        "SELECT singleton_id, initialized_at, admin_user_id
+           FROM abh_admin_bootstrap_guard"
+    )->fetchAll(PDO::FETCH_ASSOC);
+    abhSchemaAssert('first-admin bootstrap guard has exactly one locked singleton row', count($bootstrapGuard) === 1 && (int) $bootstrapGuard[0]['singleton_id'] === 1);
+    abhSchemaAssert('first-admin bootstrap starts uninitialized', count($bootstrapGuard) === 1 && $bootstrapGuard[0]['initialized_at'] === null && $bootstrapGuard[0]['admin_user_id'] === null);
+
+    $seededRoles = $pdo->query(
+        "SELECT role_key FROM abh_admin_roles WHERE role_key IN ('SUPER_ADMIN','AGENT_REVIEWER','REWARD_MANAGER','OPERATIONS_MANAGER')"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    sort($seededRoles);
+    abhSchemaAssert('ABH administrator system roles are seeded', $seededRoles === ['AGENT_REVIEWER','OPERATIONS_MANAGER','REWARD_MANAGER','SUPER_ADMIN']);
+
+    $requiredPermissions = $pdo->query(
+        "SELECT permission_key FROM abh_admin_permissions
+          WHERE permission_key IN ('agents.read','agents.approve','agents.reject','agents.suspend','devices.read','devices.approve','devices.revoke','admin.users.manage')"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    abhSchemaAssert('ABH agent, device and administrator permissions are seeded', count($requiredPermissions) === 8);
+
+    $superAdminPermissionCount = (int) $pdo->query(
+        "SELECT COUNT(DISTINCT rp.permission_id)
+           FROM abh_admin_role_permissions rp
+           INNER JOIN abh_admin_roles r ON r.id = rp.role_id
+          WHERE r.role_key = 'SUPER_ADMIN'"
+    )->fetchColumn();
+    $permissionCount = (int) $pdo->query("SELECT COUNT(*) FROM abh_admin_permissions")->fetchColumn();
+    abhSchemaAssert('SUPER_ADMIN receives the complete ABH permission catalogue', $permissionCount > 0 && $superAdminPermissionCount === $permissionCount);
 
     $foreignKeyCount = (int) $pdo->query(
         "SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE
