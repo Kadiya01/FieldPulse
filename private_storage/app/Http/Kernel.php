@@ -39,6 +39,7 @@ final class Kernel
         'abh.admin.auth.refresh' => \FieldPulse\Domain\AbhAdminRefreshController::class,
         'abh.admin.auth.logout' => \FieldPulse\Domain\AbhAdminLogoutController::class,
         'abh.admin.agents' => \FieldPulse\Domain\AbhAdminAgentsController::class,
+        'abh.admin.agent.details' => \FieldPulse\Domain\AbhAdminAgentDetailsController::class,
         'abh.admin.agent.decision' => \FieldPulse\Domain\AbhAdminAgentDecisionController::class,
         'abh.admin.device.decision' => \FieldPulse\Domain\AbhAdminDeviceDecisionController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
