@@ -23,7 +23,7 @@ describe('ABH reporting period finalisation', () => {
     expect(migration).toContain("'SUPER_ADMIN', 'OPERATIONS_MANAGER'");
     expect(migration).toContain('DECIMAL(24,2)');
     expect(schemaTest).toContain("p.permission_key = 'periods.close'");
-    expect(schemaTest).toContain("NUMERIC_PRECISION) === 24");
+    expect(schemaTest).toContain("(int) $snapshotPrecision['NUMERIC_PRECISION'] === 24");
     expect(schemaTest).toContain("'periods.close')");
   });
 
