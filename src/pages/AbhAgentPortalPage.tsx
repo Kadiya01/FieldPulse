@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, FileImage, LogOut, RefreshCw, Send, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
 import {
+  fetchAbhAgentLeaderboard,
   fetchAbhAgentSubmissions,
   submitAbhEnrollment,
   submitAbhCorrection,
   type AbhAgentMonthlySummary,
+  type AbhLeaderboardData,
   type AbhAgentSubmissionItem,
   type SessionAgent
 } from '../api/client';
@@ -57,6 +59,8 @@ export default function AbhAgentPortalPage({
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [correctionSubmissionId, setCorrectionSubmissionId] = useState<number | null>(null);
   const [items, setItems] = useState<AbhAgentSubmissionItem[]>([]);
+  const [leaderboard, setLeaderboard] = useState<AbhLeaderboardData | null>(null);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<AbhAgentMonthlySummary>({
     period_status: null,
@@ -81,7 +85,16 @@ export default function AbhAgentPortalPage({
       setError('');
       setItems(result.items);
       setTotal(result.total);
-      if (result.summary) setSummary(result.summary);
+      setSummary(result.summary ?? {
+        period_status: null,
+        submitted_count: 0,
+        approved_quantity: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        target_quantity: null,
+        progress_percent: null,
+        leaderboard_rank: null
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Submission history could not be loaded.');
     } finally {
@@ -99,6 +112,29 @@ export default function AbhAgentPortalPage({
       window.clearTimeout(timer);
     };
   }, [refreshHistory]);
+
+  const refreshLeaderboard = useCallback(async () => {
+    setLeaderboardLoading(true);
+    try {
+      const result = await fetchAbhAgentLeaderboard(month, 20, 0);
+      setLeaderboard(result);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Monthly leaderboard could not be loaded.');
+    } finally {
+      setLeaderboardLoading(false);
+    }
+  }, [month]);
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      if (active) void refreshLeaderboard();
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [refreshLeaderboard]);
 
   const maximumDate = month === currentMonth() ? todayIso() : monthEnd(month);
   const minimumDate = `${month}-01`;
@@ -170,7 +206,7 @@ export default function AbhAgentPortalPage({
       setEvidence(null);
       if (fileRef.current) fileRef.current.value = '';
       resetRequestKey();
-      await refreshHistory();
+      await Promise.all([refreshHistory(), refreshLeaderboard()]);
     } catch (caught) {
       // Keep the same idempotency key on failure. A network timeout may occur
       // after the server has committed, and retrying must not create a duplicate.
@@ -245,6 +281,73 @@ export default function AbhAgentPortalPage({
             <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.submitted_count}</p>
             <p className="mt-1 text-xs text-slate-500">{total} record(s) shown in history</p>
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Monthly leaderboard</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {leaderboard?.period_status === 'CLOSED' ? 'Final frozen ranking' : 'Live ranking based on approved enrollments only'}
+              </p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{month}</span>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs text-slate-500">Your position</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
+                {leaderboard?.viewer.rank_position ? `#${leaderboard.viewer.rank_position}` : 'Not ranked'}
+              </p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs text-slate-500">Your approved enrollments</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
+                {leaderboard?.viewer.approved_quantity.toLocaleString() ?? '—'}
+              </p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs text-slate-500">Your target progress</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
+                {leaderboard?.viewer.progress_percent === null || leaderboard?.viewer.progress_percent === undefined
+                  ? '—'
+                  : `${leaderboard.viewer.progress_percent}%`}
+              </p>
+            </div>
+          </div>
+
+          {leaderboardLoading ? (
+            <p role="status" className="mt-4 py-5 text-center text-sm text-slate-500">Loading leaderboard…</p>
+          ) : leaderboard?.items.length ? (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[540px] text-left text-sm">
+                <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                  <tr><th className="py-3 pr-4">Rank</th><th className="py-3 pr-4">Agent</th><th className="py-3 pr-4 text-right">Approved</th><th className="py-3 text-right">Target progress</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {leaderboard.items.map(item => (
+                    <tr key={item.agent_id} className={item.is_viewer ? 'bg-blue-50' : ''}>
+                      <td className="py-3 pr-4 font-semibold text-slate-900">#{item.rank_position}</td>
+                      <td className="py-3 pr-4">
+                        <p className="font-semibold text-slate-900">{item.display_name}{item.is_viewer ? ' (You)' : ''}</p>
+                        <p className="text-xs text-slate-500">{item.agent_code}</p>
+                      </td>
+                      <td className="py-3 pr-4 text-right font-semibold tabular-nums text-slate-900">{item.approved_quantity.toLocaleString()}</td>
+                      <td className="py-3 text-right tabular-nums text-slate-700">
+                        {item.progress_percent === null ? '—' : `${item.progress_percent}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-600">No approved enrollments have been recorded for this month yet.</p>
+          )}
+          {leaderboard && leaderboard.total > leaderboard.items.length && (
+            <p className="mt-3 text-xs text-slate-500">Showing the first {leaderboard.items.length} of {leaderboard.total} ranked agents. Your individual position is shown above.</p>
+          )}
         </section>
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
