@@ -2034,7 +2034,7 @@ export interface AbhAdminTargetAgent {
 }
 
 export interface AbhAdminAgentTarget extends AbhAdminTargetAgent {
-  target_id: number;
+  id: number;
   target_quantity: number;
   updated_at: string;
 }
@@ -2050,7 +2050,7 @@ export interface AbhAdminTargetData {
     closed_at: string | null;
   } | null;
   organisation_target: number | null;
-  agent_targets: (AbhAdminAgentTarget & { id: number })[];
+  agent_targets: AbhAdminAgentTarget[];
   agents: AbhAdminTargetAgent[];
 }
 
