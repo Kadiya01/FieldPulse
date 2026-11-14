@@ -46,6 +46,7 @@ final class AbhSubmissionCorrectionRepository
     public static function create(
         int $agentId,
         int $submissionId,
+        string $periodKey,
         string $idempotencyKey,
         string $activityDate,
         int $quantity,
@@ -60,6 +61,7 @@ final class AbhSubmissionCorrectionRepository
             static function (\PDO $pdo) use (
                 $agentId,
                 $submissionId,
+                $periodKey,
                 $idempotencyKey,
                 $activityDate,
                 $quantity,
@@ -124,6 +126,10 @@ final class AbhSubmissionCorrectionRepository
                         'revision_no' => (int) $prior['revision_no'],
                         'idempotent_replay' => true,
                     ];
+                }
+
+                if ((string) $submission['period_key'] !== $periodKey) {
+                    return ['error' => 'period_conflict'];
                 }
 
                 if ((string) $submission['period_status'] !== 'OPEN') {
