@@ -408,10 +408,15 @@ export default function AdminPortalPage() {
 
   useEffect(() => {
     let live = true;
+    const onAdminFailure = () => setAdmin(null);
+    window.addEventListener('admin_auth_failure', onAdminFailure);
     restoreAdminSession()
       .then(value => { if (live) setAdmin(value); })
       .finally(() => { if (live) setChecking(false); });
-    return () => { live = false; };
+    return () => {
+      live = false;
+      window.removeEventListener('admin_auth_failure', onAdminFailure);
+    };
   }, []);
 
   if (checking) {
