@@ -104,6 +104,8 @@ final class AbhAdminPeriodRepository
 
                 $organisationApproved = 0;
                 $rankPosition = 0;
+                $positionIndex = 0;
+                $previousQuantity = null;
                 $snapshotInsert = $pdo->prepare(
                     'INSERT INTO abh_monthly_leaderboard_snapshots
                      (reporting_period_id, agent_id, rank_position, approved_quantity,
@@ -114,8 +116,12 @@ final class AbhAdminPeriodRepository
                 );
 
                 foreach ($agents as $agent) {
-                    $rankPosition++;
+                    $positionIndex++;
                     $quantity = (int) $agent['approved_quantity'];
+                    if ($previousQuantity === null || $quantity !== $previousQuantity) {
+                        $rankPosition = $positionIndex;
+                    }
+                    $previousQuantity = $quantity;
                     $organisationApproved += $quantity;
                     $snapshotInsert->execute([
                         'period_id' => (int) $period['id'],
