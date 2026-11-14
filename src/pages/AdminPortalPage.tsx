@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
@@ -6,10 +6,10 @@ import {
   adminLogin,
   adminLogout,
   bootstrapFirstAdmin,
-  decideAdminAgent,
-  decideAdminDevice,
-  fetchAdminAgentDetails,
-  fetchAdminAgents,
+  decideAbhAdminAgent,
+  decideAbhAdminDevice,
+  fetchAbhAdminAgentDetails,
+  fetchAbhAdminAgents,
   restoreAdminSession,
   type AdminAgentDetails,
   type AdminAgentItem,
@@ -153,7 +153,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
     setLoading(true);
     setError('');
     try {
-      const result = await fetchAdminAgents(status, search);
+      const result = await fetchAbhAdminAgents(status, search);
       setItems(result.items);
       setTotal(result.total);
     } catch (caught) {
@@ -168,14 +168,18 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
     setDetails(null);
     setReason('');
     try {
-      const result = await fetchAdminAgentDetails(id);
+      const result = await fetchAbhAdminAgentDetails(id);
       setDetails(result);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load agent details.');
     }
   }, []);
 
-  useEffect(() => { void loadAgents(); }, [loadAgents]);
+  useEffect(() => {
+    if (!canReadAgents) return;
+    const timer = window.setTimeout(() => { void loadAgents(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [canReadAgents, loadAgents]);
 
   const agentAction = async (decision: 'APPROVE' | 'REJECT' | 'SUSPEND' | 'REACTIVATE') => {
     if (!selectedId) return;
@@ -186,7 +190,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
     setSaving(true);
     setError('');
     try {
-      await decideAdminAgent(selectedId, decision, reason.trim() || undefined);
+      await decideAbhAdminAgent(selectedId, decision, reason.trim() || undefined);
       await loadAgents();
       await loadDetails(selectedId);
     } catch (caught) {
@@ -204,7 +208,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
     setSaving(true);
     setError('');
     try {
-      await decideAdminDevice(deviceId, decision, reason.trim() || undefined);
+      await decideAbhAdminDevice(deviceId, decision, reason.trim() || undefined);
       if (selectedId) await loadDetails(selectedId);
       await loadAgents();
     } catch (caught) {
