@@ -371,6 +371,23 @@ export async function registerAbhAgent(input: AbhAgentRegistrationInput): Promis
 }
 
 /** ABH monthly enrollment submission returned by the dedicated API. */
+export interface AbhNotificationItem {
+  id: number;
+  event_key: string;
+  title: string;
+  message: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface AbhNotificationList {
+  items: AbhNotificationItem[];
+  total: number;
+  unread_count: number;
+  limit: number;
+  offset: number;
+}
+
 export interface AbhLeaderboardItem {
   agent_id: number;
   rank_position: number;
@@ -516,6 +533,42 @@ export async function submitAbhCorrection(input: {
   }
   const envelope = await response.json() as { data: AbhSubmissionResponse };
   return envelope.data;
+}
+
+export async function fetchAbhAgentNotifications(limit = 25, offset = 0): Promise<AbhNotificationList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await authenticatedFetch('/abh/agents/notifications.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhNotificationList };
+  return envelope.data;
+}
+
+export async function markAbhAgentNotificationRead(notificationId: number): Promise<number> {
+  const response = await authenticatedFetch('/abh/agents/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notification_id: notificationId })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
+}
+
+export async function markAllAbhAgentNotificationsRead(): Promise<number> {
+  const response = await authenticatedFetch('/abh/agents/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mark_all: true })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
 }
 
 export async function fetchAbhAgentLeaderboard(
@@ -1998,6 +2051,42 @@ export interface AbhAdminSubmissionList {
   total: number;
   limit: number;
   offset: number;
+}
+
+export async function fetchAbhAdminNotifications(limit = 25, offset = 0): Promise<AbhNotificationList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await adminAuthenticatedFetch('/abh/admin/notifications.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhNotificationList };
+  return envelope.data;
+}
+
+export async function markAbhAdminNotificationRead(notificationId: number): Promise<number> {
+  const response = await adminAuthenticatedFetch('/abh/admin/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notification_id: notificationId })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
+}
+
+export async function markAllAbhAdminNotificationsRead(): Promise<number> {
+  const response = await adminAuthenticatedFetch('/abh/admin/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mark_all: true })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
 }
 
 export async function fetchAbhAdminLeaderboard(
