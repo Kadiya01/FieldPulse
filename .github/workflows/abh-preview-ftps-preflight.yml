@@ -110,8 +110,8 @@ jobs:
               exit 1
             fi
           done
-          [[ "$PUBLIC_FTP_SERVER" == "ftp.abhglobalinformationtechnologysolutions.com.ng" ]]
-          [[ "$PRIVATE_FTP_SERVER" == "ftp.abhglobalinformationtechnologysolutions.com.ng" ]]
+          [[ "$PUBLIC_FTP_SERVER" == "nano.yahmis.com" ]]
+          [[ "$PRIVATE_FTP_SERVER" == "nano.yahmis.com" ]]
           [[ "$PUBLIC_FTP_USERNAME" == "abhpreview_public@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
           [[ "$PRIVATE_FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
 
