@@ -120,7 +120,7 @@ It must not be able to access `/home/abhgloba/private_storage/` or any productio
 
 Each FTP account's home is its own deployment target, so the workflow uploads to `./` for each account. This is why the accounts must be restricted to those exact directories.
 
-Use explicit FTPS (FTP over TLS), not unencrypted FTP. In cPanel's **Configure FTP Client** panel, use the server hostname and port from its Manual Settings. Do not assume the website domain is the correct TLS hostname. If cPanel/hosting does not support explicit FTPS, stop and confirm the supported secure transport before adding any credentials.
+Use explicit FTPS (FTP over TLS), not unencrypted FTP. For this cPanel server, use `nano.yahmis.com` as the FTPS server hostname on port `21` for both restricted accounts. The initial connection to `ftp.abhglobalinformationtechnologysolutions.com.ng` failed strict TLS hostname verification: the server presented a certificate for `nano.yahmis.com`. cPanel documents that FTP does not support SNI and requires the server hostname for SSL connections. Keep strict certificate verification enabled; never bypass it. If the hostname's certificate changes or fails verification, stop and contact the hosting provider.
 
 ## GitHub configuration
 
