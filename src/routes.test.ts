@@ -118,8 +118,8 @@ describe('ABH app routing and legacy isolation', () => {
   });
 
   it('keeps public self-registration available to new agents', () => {
-    expect((appSource.match(/path="\\/register"/g) ?? []).length).toBe(1);
+    expect(appSource.split('path="/register"').length - 1).toBe(1);
     expect(read('pages/RegisterPage.tsx')).toContain('registerAbhAgent');
-    expect(read('pages/LoginPage.tsx')).toMatch(/to="\\/register"/);
+    expect(read('pages/LoginPage.tsx')).toContain('to="/register"');
   });
 });
