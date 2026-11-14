@@ -21,6 +21,79 @@ final class AbhAdminAuthRepository
     {
     }
 
+    /**
+     * Create the first and only bootstrap administrator. The singleton guard
+     * row is locked until commit so concurrent setup requests cannot both win.
+     *
+     * @return array{id:int,full_name:string,email:string}|array{error:string}
+     */
+    public static function bootstrapFirstAdmin(string $fullName, string $email, string $passwordHash): array
+    {
+        return Connection::transaction(
+            static function (\\PDO $pdo) use ($fullName, $email, $passwordHash): array {
+                $guard = $pdo->query(
+                    'SELECT initialized_at FROM abh_admin_bootstrap_guard
+                      WHERE singleton_id = 1 FOR UPDATE'
+                )->fetch(\\PDO::FETCH_ASSOC);
+
+                if (!is_array($guard)) {
+                    return ['error' => 'guard_missing'];
+                }
+                if ($guard['initialized_at'] !== null) {
+                    return ['error' => 'already_initialized'];
+                }
+
+                $role = $pdo->query(
+                    'SELECT id FROM abh_admin_roles WHERE role_key = "SUPER_ADMIN" LIMIT 1'
+                )->fetchColumn();
+                if ($role === false) {
+                    return ['error' => 'role_missing'];
+                }
+
+                $insert = $pdo->prepare(
+                    'INSERT INTO abh_admin_users
+                     (full_name, email, email_normalized, password_hash, status, must_reset_password, created_at)
+                     VALUES (:full_name, :email, :email_normalized, :password_hash, "ACTIVE", 0, UTC_TIMESTAMP(6))'
+                );
+                $insert->execute([
+                    'full_name' => $fullName,
+                    'email' => $email,
+                    'email_normalized' => $email,
+                    'password_hash' => $passwordHash,
+                ]);
+                $adminId = (int) $pdo->lastInsertId();
+
+                $assignment = $pdo->prepare(
+                    'INSERT INTO abh_admin_user_roles (admin_user_id, role_id, assigned_at)
+                     VALUES (:admin_id, :role_id, UTC_TIMESTAMP(6))'
+                );
+                $assignment->execute(['admin_id' => $adminId, 'role_id' => $role]);
+
+                $pdo->prepare(
+                    'UPDATE abh_admin_bootstrap_guard
+                        SET initialized_at = UTC_TIMESTAMP(6), admin_user_id = :admin_id
+                      WHERE singleton_id = 1 AND initialized_at IS NULL'
+                )->execute(['admin_id' => $adminId]);
+
+                $pdo->prepare(
+                    'INSERT INTO abh_audit_events
+                     (actor_type, action_key, entity_type, entity_id, after_json, created_at)
+                     VALUES ("SYSTEM", "admin.bootstrap.created", "admin_user", :admin_id,
+                             :after_json, UTC_TIMESTAMP(6))'
+                )->execute([
+                    'admin_id' => $adminId,
+                    'after_json' => json_encode([
+                        'status' => 'ACTIVE',
+                        'role' => 'SUPER_ADMIN',
+                        'bootstrap' => true,
+                    ], JSON_THROW_ON_ERROR),
+                ]);
+
+                return ['id' => $adminId, 'full_name' => $fullName, 'email' => $email];
+            }
+        );
+    }
+
     /** @return array<string,mixed>|null */
     public static function findLoginIdentity(string $email): ?array
     {
