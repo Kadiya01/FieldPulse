@@ -31,7 +31,9 @@ final class AbhAgentRepository
         ?string $location,
         string $imei,
         string $deviceType,
-        string $passwordHash
+        string $passwordHash,
+        string $deviceUuid,
+        array $publicKeyJwk
     ): array {
         $agentCode = 'ABH-' . strtoupper(bin2hex(random_bytes(5)));
 
@@ -44,7 +46,9 @@ final class AbhAgentRepository
                 $location,
                 $imei,
                 $deviceType,
-                $passwordHash
+                $passwordHash,
+                $deviceUuid,
+                $publicKeyJwk
             ): array {
                 $agent = $pdo->prepare(
                     'INSERT INTO abh_agents
@@ -77,13 +81,15 @@ final class AbhAgentRepository
 
                 $device = $pdo->prepare(
                     'INSERT INTO abh_agent_devices
-                     (agent_id, device_type, imei_value, status, registered_at)
-                     VALUES (:agent_id, :device_type, :imei_value, "PENDING", UTC_TIMESTAMP(6))'
+                     (agent_id, device_type, imei_value, device_uuid, public_key_jwk, status, registered_at)
+                     VALUES (:agent_id, :device_type, :imei_value, :device_uuid, :public_key_jwk, "PENDING", UTC_TIMESTAMP(6))'
                 );
                 $device->execute([
                     'agent_id' => $agentId,
                     'device_type' => $deviceType,
                     'imei_value' => $imei,
+                    'device_uuid' => $deviceUuid,
+                    'public_key_jwk' => json_encode($publicKeyJwk, JSON_THROW_ON_ERROR),
                 ]);
 
                 $audit = $pdo->prepare(
