@@ -48,6 +48,7 @@ final class AbhAgentRegistrationController implements ActionInterface
         }
 
         $phone = Validator::nigerianPhone($body['phone'] ?? null);
+        AbhRegistrationRateLimiter::recordAndEnforce($phone, $request->clientIp());
         $email = Validator::email($body['email'] ?? null);
         $location = Validator::location($body['location'] ?? null);
         $imei = Validator::imei($body['imei'] ?? null);
@@ -80,7 +81,6 @@ final class AbhAgentRegistrationController implements ActionInterface
             );
         }
 
-        AbhRegistrationRateLimiter::recordAndEnforce($phone, $request->clientIp());
         $passwordHash = Credentials::hash($password);
 
         try {
