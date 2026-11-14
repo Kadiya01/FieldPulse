@@ -12,7 +12,7 @@ import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
 import Layout from './components/Layout';
 import BrandHeader from './components/BrandHeader';
-import { restoreSession, type RestoreResult, type SessionAgent } from './api/client';
+import { restoreSession, logout, type RestoreResult, type SessionAgent } from './api/client';
 import { triggerSync } from './sync/coordinator';
 import { SessionContext, useSessionValue } from './auth/sessionContext';
 
@@ -138,6 +138,58 @@ export default function App() {
           </button>
         </div>
       </div>
+    );
+  }
+
+  // ABH authentication is now independent, but the legacy FieldPulse capture,
+  // queue, reward and admin pages still call legacy endpoints. Keep those screens
+  // unreachable until their ABH-specific APIs are implemented; an ABH token must
+  // never be sent to a legacy account or enrollment endpoint.
+  if (gate === 'ready') {
+    const endSession = async () => {
+      await logout();
+      setAgent(null);
+      setGate('login');
+      window.history.replaceState(null, '', '/login');
+    };
+
+    return (
+      <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <section className="w-full max-w-lg rounded-3xl bg-white p-8 text-center shadow-2xl sm:p-10">
+          <BrandHeader className="mb-5 flex justify-center" />
+          {agent ? (
+            <>
+              <h1 className="text-2xl font-bold text-slate-900">ABH account signed in</h1>
+              <p className="mt-3 text-sm text-slate-600">
+                Welcome, {agent.full_name}. Your account and approved browser device have been authenticated.
+              </p>
+              <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Agent reference</p>
+                <p className="mt-1 text-xl font-bold text-slate-900">{agent.agent_code}</p>
+              </div>
+              <p className="mt-5 text-sm leading-6 text-slate-600">
+                The ABH enrollment dashboard and monthly submission pages are the next development stage.
+                Legacy FieldPulse capture and reporting screens are disabled for ABH accounts.
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-2xl font-bold text-slate-900">Connection unavailable</h1>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                The system could not verify an ABH session. No enrollment access has been granted.
+                Reconnect and sign in again.
+              </p>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={endSession}
+            className="mt-7 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white hover:bg-slate-800"
+          >
+            {agent ? 'Sign out' : 'Return to sign in'}
+          </button>
+        </section>
+      </main>
     );
   }
 
