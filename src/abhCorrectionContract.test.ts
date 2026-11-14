@@ -52,6 +52,7 @@ describe('ABH immutable correction workflow', () => {
   });
 
   it('lets agents see the review note and submit a corrected revision from the portal', () => {
+    expect(submissionRepository).toContain('r.agent_note');
     expect(submissionRepository).toContain('AS review_note');
     expect(api).toContain('review_note: string | null');
     expect(api).toContain('export async function submitAbhCorrection');
