@@ -235,15 +235,16 @@ async function refreshUnderLock(): Promise<boolean> {
       return false;
     }
 
-    const data = await response.json();
+    const data = await response.json() as { access_token: string; agent?: SessionAgent };
     // The rotated access token has to be stored before the caller retries.
     // RefreshController returns it under access_token; discarding it here made
     // the retry re-send the token that had just been rejected, so the 401 branch
     // recursed instead of recovering.
     setAccessToken(data.access_token);
+    lastRefreshedAgent = data.agent ?? null;
     // Tell the other tabs. One may be holding a request about to 401, and this
     // is cheaper than letting it spend the cookie again.
-    announceAccessToken(data.access_token);
+    announceAccessToken(data.access_token, data.agent);
     return true;
   };
 
@@ -257,8 +258,12 @@ async function refreshUnderLock(): Promise<boolean> {
 
 // A token announced by a sibling tab means our next refresh can be skipped.
 let remoteTokenSeen = false;
-onRemoteAccessToken(() => {
+let lastRefreshedAgent: SessionAgent | null = null;
+onRemoteAccessToken((_token, agent) => {
   remoteTokenSeen = true;
+  if (agent) {
+    lastRefreshedAgent = agent;
+  }
 });
 
 export interface SessionAgent {
@@ -317,8 +322,9 @@ export async function login(phone: string, password: string): Promise<LoginResul
   }
 
   const data = (await response.json()) as LoginResult;
+  lastRefreshedAgent = data.agent;
   setAccessToken(data.access_token);
-  announceAccessToken(data.access_token);
+  announceAccessToken(data.access_token, data.agent);
   return data;
 }
 /** ABH Monthly Enrollment self-registration contract. */
@@ -480,33 +486,30 @@ export type RestoreResult =
  * still carries a signature.
  */
 export async function restoreSession(): Promise<RestoreResult> {
-  let response: Response;
+  // The browser key is checked before spending a one-time refresh cookie. If
+  // it is missing, revoke the cookie session and require an administrator to
+  // authorize a replacement device.
+  if (!await getDeviceIdentity()) {
+    await logout().catch(() => undefined);
+    return { status: 'unregistered' };
+  }
 
+  let restored: boolean;
   try {
-    response = await fetch(`${API_BASE}/abh/auth/refresh.php`, { method: 'POST' });
+    // Share the same cross-tab lock as ordinary 401 refreshes. Concurrent page
+    // loads must not rotate the same single-use refresh token independently.
+    restored = await refreshUnderLock();
   } catch {
     setAccessToken(null);
     return { status: 'offline' };
   }
 
-  if (!response.ok) {
+  if (!restored) {
     setAccessToken(null);
     return { status: 'anonymous' };
   }
 
-  const data = (await response.json()) as { access_token: string; agent?: SessionAgent };
-  setAccessToken(data.access_token);
-  announceAccessToken(data.access_token);
-
-  if (!await getDeviceIdentity()) {
-    // A refresh cookie is not enough to prove device possession. End the
-    // rotated server session rather than leave a live cookie on a browser that
-    // no longer has its registered private key.
-    await logout().catch(() => undefined);
-    return { status: 'unregistered' };
-  }
-
-  return { status: 'authenticated', agent: data.agent ?? null };
+  return { status: 'authenticated', agent: lastRefreshedAgent };
 }
 
 /**
