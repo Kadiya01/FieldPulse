@@ -14,10 +14,8 @@ import BrandHeader from '../components/BrandHeader';
  */
 export default function LoginPage({
   onAuthenticated,
-  admin = false,
 }: {
   onAuthenticated: (agent: SessionAgent) => void;
-  admin?: boolean;
 }) {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -40,24 +38,6 @@ export default function LoginPage({
       setBusy(false);
     }
   };
-
-  if (admin) {
-    return (
-      <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-        <section className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-2xl">
-          <BrandHeader className="mb-4 flex justify-center" />
-          <h1 className="text-2xl font-bold text-slate-900">ABH Administrator Portal</h1>
-          <p className="mt-3 text-sm leading-6 text-slate-600">
-            Administrator sign-in is being connected to the separate ABH administrator accounts.
-            Agent credentials cannot be used for administrator access.
-          </p>
-          <Link to="/login" className="mt-6 inline-flex items-center justify-center rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white hover:bg-blue-800">
-            Go to agent sign in
-          </Link>
-        </section>
-      </main>
-    );
-  }
 
   return (
     <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
