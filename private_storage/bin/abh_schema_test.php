@@ -134,6 +134,7 @@ try {
         'abh_reward_fulfilment_events',
         'abh_audit_events',
         'abh_notifications',
+        'abh_registration_attempts',
     ];
 
     $tableRows = $pdo->query(
@@ -237,6 +238,28 @@ try {
         'INSERT INTO abh_agent_devices (agent_id, device_type, imei_value) VALUES (?, ?, ?)'
     )->execute([$agentId, 'CI Test Device', '000000000000000']);
 
+    abhSchemaAssert(
+        'a registered device IMEI cannot be assigned to another agent',
+        abhSchemaExpectFailure(static function () use ($pdo, $agentTwoId): void {
+            $pdo->prepare(
+                'INSERT INTO abh_agent_devices (agent_id, device_type, imei_value) VALUES (?, ?, ?)'
+            )->execute([$agentTwoId, 'CI Test Device', '000000000000000']);
+        })
+    );
+
+    $attemptInsert = $pdo->prepare(
+        'INSERT INTO abh_registration_attempts (identifier_hash, ip_hash) VALUES (?, ?)'
+    );
+    $attemptInsert->execute([str_repeat('a', 64), str_repeat('b', 64)]);
+    abhSchemaAssert(
+        'ABH registration throttling stores only fixed-length hashes',
+        (int) $pdo->query(
+            "SELECT COUNT(*) FROM abh_registration_attempts
+             WHERE identifier_hash = '" . str_repeat('a', 64) . "'
+               AND ip_hash = '" . str_repeat('b', 64) . "'"
+        )->fetchColumn() === 1
+    );
+
     $periodInsert = $pdo->prepare(
         'INSERT INTO abh_reporting_periods (period_key, starts_on, ends_on, timezone, status)
          VALUES (?, ?, ?, ?, ?)'
@@ -255,6 +278,22 @@ try {
                 'phone_norm' => '+2348000000001',
                 'email' => 'duplicate@example.invalid',
                 'email_norm' => 'duplicate@example.invalid',
+                'status' => 'PENDING',
+                'approved_by' => null,
+            ]);
+        })
+    );
+
+    abhSchemaAssert(
+        'duplicate normalized agent phone is rejected',
+        abhSchemaExpectFailure(static function () use ($agentInsert): void {
+            $agentInsert->execute([
+                'code' => 'CI-AGENT-DUPLICATE-PHONE',
+                'name' => 'Duplicate Phone Agent',
+                'phone' => '+2348000000000',
+                'phone_norm' => '+2348000000000',
+                'email' => null,
+                'email_norm' => null,
                 'status' => 'PENDING',
                 'approved_by' => null,
             ]);
