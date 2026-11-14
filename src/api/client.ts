@@ -1620,7 +1620,7 @@ let adminAccessToken: string | null = null;
 let adminLastIdentity: SessionAdmin | null = null;
 let adminRemoteTokenSeen = false;
 let adminRefreshInFlight: Promise<boolean> | null = null;
-const adminChannel = typeof BroadcastChannel !== 'undefined'
+const adminChannel = typeof window !== 'undefined' && typeof BroadcastChannel === 'function'
   ? new BroadcastChannel('abh-admin-session')
   : null;
 
@@ -1737,7 +1737,7 @@ export async function adminAuthenticatedFetch(path: string, options: RequestInit
       adminAccessToken = null;
       adminLastIdentity = null;
       adminChannel?.postMessage({ type: 'logout' });
-      handleAuthFailure('SESSION_EXPIRED');
+      window.dispatchEvent(new CustomEvent('admin_auth_failure'));
       return response;
     }
     response = await send();
