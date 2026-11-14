@@ -43,6 +43,20 @@ final class AbhAdminAuthRepository
                     return ['error' => 'already_initialized'];
                 }
 
+                $existingAdmin = $pdo->query(
+                    'SELECT id FROM abh_admin_users ORDER BY id ASC LIMIT 1 FOR UPDATE'
+                )->fetchColumn();
+                if ($existingAdmin !== false) {
+                    $pdo->prepare(
+                        'UPDATE abh_admin_bootstrap_guard
+                            SET initialized_at = COALESCE(initialized_at, UTC_TIMESTAMP(6)),
+                                admin_user_id = COALESCE(admin_user_id, :admin_id)
+                          WHERE singleton_id = 1'
+                    )->execute(['admin_id' => (int) $existingAdmin]);
+
+                    return ['error' => 'already_initialized'];
+                }
+
                 $role = $pdo->query(
                     'SELECT id FROM abh_admin_roles WHERE role_key = "SUPER_ADMIN" LIMIT 1'
                 )->fetchColumn();
@@ -64,8 +78,8 @@ final class AbhAdminAuthRepository
                 $adminId = (int) $pdo->lastInsertId();
 
                 $assignment = $pdo->prepare(
-                    'INSERT INTO abh_admin_user_roles (admin_user_id, role_id, assigned_at)
-                     VALUES (:admin_id, :role_id, UTC_TIMESTAMP(6))'
+                    'INSERT INTO abh_admin_user_roles (admin_user_id, role_id, assigned_by_admin_id)
+                     VALUES (:admin_id, :role_id, NULL)'
                 );
                 $assignment->execute(['admin_id' => $adminId, 'role_id' => $role]);
 
@@ -155,9 +169,10 @@ final class AbhAdminAuthRepository
                 $pdo->prepare(
                     'INSERT INTO abh_audit_events
                      (actor_type, actor_admin_user_id, action_key, entity_type, entity_id, after_json, created_at)
-                     VALUES ("ADMIN", :admin_id, "admin.auth.login", "admin_user", :admin_id, :after_json, UTC_TIMESTAMP(6))'
+                     VALUES ("ADMIN", :actor_admin_id, "admin.auth.login", "admin_user", :entity_admin_id, :after_json, UTC_TIMESTAMP(6))'
                 )->execute([
-                    'admin_id' => $admin['id'],
+                    'actor_admin_id' => $admin['id'],
+                    'entity_admin_id' => $admin['id'],
                     'after_json' => json_encode(['status' => 'ACTIVE'], JSON_THROW_ON_ERROR),
                 ]);
 
@@ -200,10 +215,11 @@ final class AbhAdminAuthRepository
                         $pdo->prepare(
                             'INSERT INTO abh_audit_events
                              (actor_type, actor_admin_user_id, action_key, entity_type, entity_id, after_json, created_at)
-                             VALUES ("ADMIN", :admin_id, "admin.auth.refresh_reuse_detected", "admin_user", :admin_id,
+                             VALUES ("ADMIN", :actor_admin_id, "admin.auth.refresh_reuse_detected", "admin_user", :entity_admin_id,
                                      :after_json, UTC_TIMESTAMP(6))'
                         )->execute([
-                            'admin_id' => $row['admin_user_id'],
+                            'actor_admin_id' => $row['admin_user_id'],
+                            'entity_admin_id' => $row['admin_user_id'],
                             'after_json' => json_encode(['reason' => 'REUSE_DETECTED', 'token_family' => $row['token_family']], JSON_THROW_ON_ERROR),
                         ]);
 
