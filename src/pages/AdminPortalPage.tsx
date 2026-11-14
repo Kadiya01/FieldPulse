@@ -415,7 +415,6 @@ function AdminSubmissionQueue({ admin }: { admin: SessionAdmin }) {
           </section>
         </aside>
       </div>
-      )}
 
       {error && (
         <div role="alert" className="fixed bottom-4 right-4 flex max-w-lg items-start gap-2 rounded-xl bg-red-50 p-4 text-sm text-red-800 shadow-lg">
@@ -714,6 +713,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
           </div>
         </aside>
       </div>
+      )}
       {error && (
         <div role="alert" className="fixed bottom-4 right-4 flex max-w-lg items-start gap-2 rounded-xl bg-red-50 p-4 text-sm text-red-800 shadow-lg">
           <AlertCircle size={18} className="mt-0.5 shrink-0" /> {error}
