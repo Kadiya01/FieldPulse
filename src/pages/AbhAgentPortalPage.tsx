@@ -3,11 +3,15 @@ import { CheckCircle2, Clock3, FileImage, LogOut, RefreshCw, Send, XCircle } fro
 import BrandHeader from '../components/BrandHeader';
 import {
   fetchAbhAgentLeaderboard,
+  fetchAbhAgentNotifications,
+  markAbhAgentNotificationRead,
+  markAllAbhAgentNotificationsRead,
   fetchAbhAgentSubmissions,
   submitAbhEnrollment,
   submitAbhCorrection,
   type AbhAgentMonthlySummary,
   type AbhLeaderboardData,
+  type AbhNotificationItem,
   type AbhAgentSubmissionItem,
   type SessionAgent
 } from '../api/client';
@@ -61,6 +65,10 @@ export default function AbhAgentPortalPage({
   const [items, setItems] = useState<AbhAgentSubmissionItem[]>([]);
   const [leaderboard, setLeaderboard] = useState<AbhLeaderboardData | null>(null);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [notifications, setNotifications] = useState<AbhNotificationItem[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<AbhAgentMonthlySummary>({
     period_status: null,
@@ -136,6 +144,54 @@ export default function AbhAgentPortalPage({
     };
   }, [refreshLeaderboard]);
 
+  const refreshNotifications = useCallback(async () => {
+    setNotificationsLoading(true);
+    try {
+      const result = await fetchAbhAgentNotifications(30, 0);
+      setNotifications(result.items);
+      setUnreadNotifications(result.unread_count);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Notifications could not be loaded.');
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      if (active) void refreshNotifications();
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [refreshNotifications]);
+
+  const markNotificationRead = async (id: number) => {
+    setNotificationsBusy(true);
+    try {
+      await markAbhAgentNotificationRead(id);
+      await refreshNotifications();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The notification could not be marked as read.');
+    } finally {
+      setNotificationsBusy(false);
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    setNotificationsBusy(true);
+    try {
+      await markAllAbhAgentNotificationsRead();
+      await refreshNotifications();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Notifications could not be marked as read.');
+    } finally {
+      setNotificationsBusy(false);
+    }
+  };
+
   const maximumDate = month === currentMonth() ? todayIso() : monthEnd(month);
   const minimumDate = `${month}-01`;
 
@@ -206,7 +262,7 @@ export default function AbhAgentPortalPage({
       setEvidence(null);
       if (fileRef.current) fileRef.current.value = '';
       resetRequestKey();
-      await Promise.all([refreshHistory(), refreshLeaderboard()]);
+      await Promise.all([refreshHistory(), refreshLeaderboard(), refreshNotifications()]);
     } catch (caught) {
       // Keep the same idempotency key on failure. A network timeout may occur
       // after the server has committed, and retrying must not create a duplicate.
@@ -281,6 +337,54 @@ export default function AbhAgentPortalPage({
             <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.submitted_count}</p>
             <p className="mt-1 text-xs text-slate-500">{total} record(s) shown in history</p>
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Notifications</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {unreadNotifications} unread notification(s)
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => void refreshNotifications()} disabled={notificationsLoading || notificationsBusy}
+                className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">
+                Refresh
+              </button>
+              {unreadNotifications > 0 && (
+                <button type="button" onClick={() => void markAllNotificationsRead()} disabled={notificationsBusy}
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                  Mark all read
+                </button>
+              )}
+            </div>
+          </div>
+          {notificationsLoading ? (
+            <p role="status" className="mt-4 text-sm text-slate-500">Loading notifications…</p>
+          ) : notifications.length === 0 ? (
+            <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-600">You have no notifications yet.</p>
+          ) : (
+            <div className="mt-4 space-y-2">
+              {notifications.map(item => (
+                <article key={item.id} className={item.read_at ? 'rounded-xl border border-slate-200 p-4' : 'rounded-xl border border-blue-200 bg-blue-50 p-4'}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold text-slate-900">{item.title}</p>
+                      <p className="mt-1 text-sm leading-6 text-slate-700">{item.message}</p>
+                      <p className="mt-2 text-xs text-slate-500">{new Date(item.created_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()}</p>
+                    </div>
+                    {!item.read_at && (
+                      <button type="button" onClick={() => void markNotificationRead(item.id)} disabled={notificationsBusy}
+                        className="shrink-0 rounded-lg border border-blue-300 px-3 py-2 text-xs font-semibold text-blue-800 disabled:opacity-50">
+                        Mark read
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
