@@ -4,6 +4,7 @@ import BrandHeader from '../components/BrandHeader';
 import {
   fetchAbhAgentSubmissions,
   submitAbhEnrollment,
+  submitAbhCorrection,
   type AbhAgentMonthlySummary,
   type AbhAgentSubmissionItem,
   type SessionAgent
@@ -54,6 +55,7 @@ export default function AbhAgentPortalPage({
   const [note, setNote] = useState('');
   const [evidence, setEvidence] = useState<File | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [correctionSubmissionId, setCorrectionSubmissionId] = useState<number | null>(null);
   const [items, setItems] = useState<AbhAgentSubmissionItem[]>([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<AbhAgentMonthlySummary>({
@@ -137,19 +139,32 @@ export default function AbhAgentPortalPage({
 
     setBusy(true);
     try {
-      const result = await submitAbhEnrollment({
-        idempotency_key: idempotencyKey,
-        reporting_month: month,
-        activity_date: activityDate,
-        claimed_quantity: count,
-        agent_note: note,
-        evidence
-      });
+      const result = correctionSubmissionId === null
+        ? await submitAbhEnrollment({
+            idempotency_key: idempotencyKey,
+            reporting_month: month,
+            activity_date: activityDate,
+            claimed_quantity: count,
+            agent_note: note,
+            evidence
+          })
+        : await submitAbhCorrection({
+            submission_id: correctionSubmissionId,
+            idempotency_key: idempotencyKey,
+            reporting_month: month,
+            activity_date: activityDate,
+            claimed_quantity: count,
+            agent_note: note,
+            evidence
+          });
       setNotice(
         result.idempotent_replay
-          ? `The earlier submission ${result.reference_no} was already received.`
-          : `Submission received. Reference: ${result.reference_no}. It is now awaiting review.`
+          ? `The earlier request for ${result.reference_no} was already received.`
+          : correctionSubmissionId === null
+            ? `Submission received. Reference: ${result.reference_no}. It is now awaiting review.`
+            : `Correction received for ${result.reference_no}. Revision ${result.revision_no} is now awaiting review.`
       );
+      setCorrectionSubmissionId(null);
       setQuantity('1');
       setNote('');
       setEvidence(null);
@@ -235,13 +250,16 @@ export default function AbhAgentPortalPage({
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
           <form onSubmit={submit} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Submit monthly enrollment</h2>
-              <p className="mt-1 text-xs text-slate-500">Your account and approved browser device are linked to this report automatically.</p>
+              <h2 className="text-lg font-bold text-slate-900">{correctionSubmissionId === null ? 'Submit monthly enrollment' : `Correct submission #${correctionSubmissionId}`}</h2>
+              <p className="mt-1 text-xs text-slate-500">{correctionSubmissionId === null
+                ? 'Your account and approved browser device are linked to this report automatically.'
+                : 'This creates a new immutable revision. Your earlier report and evidence remain in the review history.'}</p>
             </div>
 
             <div>
               <label htmlFor="abh-reporting-month" className="block text-sm font-semibold text-slate-700">Reporting month</label>
               <input id="abh-reporting-month" type="month" required max={currentMonth()} value={month}
+                disabled={correctionSubmissionId !== null}
                 onChange={event => changeMonth(event.target.value)}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3 text-slate-900" />
             </div>
@@ -294,8 +312,20 @@ export default function AbhAgentPortalPage({
 
             <button type="submit" disabled={busy || !evidence}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">
-              <Send size={17} aria-hidden="true" /> {busy ? 'Submitting evidence…' : 'Submit for review'}
+              <Send size={17} aria-hidden="true" /> {busy ? 'Submitting evidence…' : correctionSubmissionId === null ? 'Submit for review' : 'Submit corrected revision'}
             </button>
+            {correctionSubmissionId !== null && (
+              <button type="button" disabled={busy} onClick={() => {
+                setCorrectionSubmissionId(null);
+                setQuantity('1');
+                setNote('');
+                setEvidence(null);
+                if (fileRef.current) fileRef.current.value = '';
+                resetRequestKey();
+              }} className="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">
+                Cancel correction
+              </button>
+            )}
             <p className="text-xs leading-5 text-slate-500">
               Your submission will remain pending until an authorised reviewer checks the evidence.
               Do not submit another copy while the same request is processing.
@@ -340,6 +370,31 @@ export default function AbhAgentPortalPage({
                       <strong className="tabular-nums text-slate-900">{item.claimed_quantity}</strong>
                     </div>
                     <p className="mt-2 text-xs text-slate-500">Submitted {new Date(item.submitted_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()}</p>
+                    {item.agent_note && (
+                      <p className="mt-2 text-xs text-slate-600"><strong>Agent note:</strong> {item.agent_note}</p>
+                    )}
+                    {item.status === 'CORRECTION_REQUESTED' && (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                        <p className="text-xs font-semibold text-amber-900">Reviewer requested a correction</p>
+                        {item.review_note && (
+                          <p className="mt-1 whitespace-pre-wrap text-sm text-amber-900">{item.review_note}</p>
+                        )}
+                        <button type="button" onClick={() => {
+                          setCorrectionSubmissionId(item.id);
+                          setMonth(item.period_key);
+                          setActivityDate(item.activity_date);
+                          setQuantity(String(item.claimed_quantity));
+                          setNote(item.agent_note ?? '');
+                          setEvidence(null);
+                          if (fileRef.current) fileRef.current.value = '';
+                          resetRequestKey();
+                          setError('');
+                          setNotice('');
+                        }} className="mt-3 rounded-lg bg-amber-800 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-900">
+                          Correct and resubmit
+                        </button>
+                      </div>
+                    )}
                   </article>
                 ))}
               </div>
