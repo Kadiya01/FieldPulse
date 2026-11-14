@@ -16,9 +16,11 @@ final class AbhAdminTargetsController implements ActionInterface
     public function __invoke(Request $request): Response
     {
         $admin = $request->requireAbhAdminContext();
-        $admin->requirePermission('targets.manage');
 
         if ($request->method() === 'GET') {
+            if (!$admin->hasPermission('targets.manage') && !$admin->hasPermission('periods.close')) {
+                $admin->requirePermission('targets.manage');
+            }
             $month = Validator::periodMonth(
                 $request->query('month') ?? (new \DateTimeImmutable('now', new \DateTimeZone('Africa/Lagos')))->format('Y-m'),
                 'month',
@@ -30,6 +32,7 @@ final class AbhAdminTargetsController implements ActionInterface
         }
 
         if ($request->method() === 'POST') {
+            $admin->requirePermission('targets.manage');
             $body = $request->json();
             Validator::assertNoUnknownKeys(
                 $body,
