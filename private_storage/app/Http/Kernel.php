@@ -31,7 +31,7 @@ final class Kernel
         'auth.password'    => \FieldPulse\Domain\PasswordController::class,
         'agent.register'   => \FieldPulse\Domain\AgentRegistrationController::class,
         'abh.agent.register' => \FieldPulse\Domain\AbhAgentRegistrationController::class,
-        'abh.agent.submissions' => \\FieldPulse\\Domain\\AbhAgentSubmissionsController::class,
+        'abh.agent.submissions' => \FieldPulse\Domain\AbhAgentSubmissionsController::class,
         'abh.auth.login' => \FieldPulse\Domain\AbhAgentLoginController::class,
         'abh.auth.refresh' => \FieldPulse\Domain\AbhAgentRefreshController::class,
         'abh.auth.logout' => \FieldPulse\Domain\AbhAgentLogoutController::class,
