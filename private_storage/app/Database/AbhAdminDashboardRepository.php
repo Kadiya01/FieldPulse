@@ -228,8 +228,18 @@ final class AbhAdminDashboardRepository
             }
         }
 
+        $periodData = $period === null ? null : [
+            'id' => (int) $period['id'],
+            'period_key' => (string) $period['period_key'],
+            'starts_on' => (string) $period['starts_on'],
+            'ends_on' => (string) $period['ends_on'],
+            'timezone' => (string) $period['timezone'],
+            'status' => (string) $period['status'],
+            'closed_at' => $period['closed_at'] === null ? null : (string) $period['closed_at'],
+        ];
+
         return [
-            'period' => $period,
+            'period' => $periodData,
             'agents' => $agents,
             'submissions' => $submissions,
             'performance' => $performance,
