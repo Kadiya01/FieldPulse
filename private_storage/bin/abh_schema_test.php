@@ -205,9 +205,33 @@ try {
 
     $requiredPermissions = $pdo->query(
         "SELECT permission_key FROM abh_admin_permissions
-          WHERE permission_key IN ('agents.read','agents.approve','agents.reject','agents.suspend','devices.read','devices.approve','devices.revoke','admin.users.manage')"
+          WHERE permission_key IN ('agents.read','agents.approve','agents.reject','agents.suspend','devices.read','devices.approve','devices.revoke','admin.users.manage','targets.manage','submissions.read','submissions.review','periods.close')"
     )->fetchAll(PDO::FETCH_COLUMN);
-    abhSchemaAssert('ABH agent, device and administrator permissions are seeded', count($requiredPermissions) === 8);
+    abhSchemaAssert('ABH agent, device, submission, target and period permissions are seeded', count($requiredPermissions) === 12);
+
+    $periodCloseGranted = (int) $pdo->query(
+        "SELECT COUNT(*)
+           FROM abh_admin_role_permissions rp
+           INNER JOIN abh_admin_roles r ON r.id = rp.role_id
+           INNER JOIN abh_admin_permissions p ON p.id = rp.permission_id
+          WHERE r.role_key = 'OPERATIONS_MANAGER'
+            AND p.permission_key = 'periods.close'"
+    )->fetchColumn();
+    abhSchemaAssert('OPERATIONS_MANAGER receives the explicit period-close permission', $periodCloseGranted === 1);
+
+    $snapshotPrecision = $pdo->query(
+        "SELECT NUMERIC_PRECISION, NUMERIC_SCALE
+           FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'abh_monthly_organisation_snapshots'
+            AND COLUMN_NAME = 'progress_percent'"
+    )->fetch(PDO::FETCH_ASSOC);
+    abhSchemaAssert(
+        'organisation snapshot percentage preserves large reporting ratios',
+        is_array($snapshotPrecision)
+            && (int) $snapshotPrecision['NUMERIC_PRECISION'] === 24
+            && (int) $snapshotPrecision['NUMERIC_SCALE'] === 2
+    );
 
     $superAdminPermissionCount = (int) $pdo->query(
         "SELECT COUNT(DISTINCT rp.permission_id)
