@@ -314,6 +314,46 @@ export async function login(username: string, password: string): Promise<LoginRe
   return data;
 }
 
+/** ABH Monthly Enrollment self-registration contract. */
+export interface AbhAgentRegistrationInput {
+  full_name: string;
+  phone: string;
+  password: string;
+  imei: string;
+  device_type: string;
+  email?: string;
+  location?: string;
+}
+
+export interface AbhAgentRegistrationResult {
+  status: 'PENDING';
+  message: string;
+  agent: {
+    id: number;
+    agent_code: string;
+    full_name: string;
+    status: 'PENDING';
+  };
+}
+
+/**
+ * Register against the ABH identity tables. This endpoint is intentionally
+ * separate from the legacy FieldPulse registration route.
+ */
+export async function registerAbhAgent(input: AbhAgentRegistrationInput): Promise<AbhAgentRegistrationResult> {
+  const response = await fetch(`${API_BASE}/abh/agents/register.php`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  return await response.json() as AbhAgentRegistrationResult;
+}
+
 export interface AgentRegistrationInput {
   full_name: string;
   nin: string;
