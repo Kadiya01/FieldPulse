@@ -380,6 +380,8 @@ export interface AbhAgentSubmissionItem {
   claimed_quantity: number;
   submitted_at: string;
   revision_no: number;
+  agent_note: string | null;
+  review_note: string | null;
 }
 
 export interface AbhAgentMonthlySummary {
@@ -428,6 +430,46 @@ export async function submitAbhEnrollment(input: {
 }): Promise<AbhSubmissionResponse> {
   const evidenceHash = await sha256Hex(input.evidence);
   const payload = {
+    idempotency_key: input.idempotency_key,
+    reporting_month: input.reporting_month,
+    activity_date: input.activity_date,
+    claimed_quantity: input.claimed_quantity,
+    ...(input.agent_note?.trim() ? { agent_note: input.agent_note.trim() } : {}),
+    evidence_sha256: evidenceHash
+  };
+  const rawPayload = JSON.stringify(payload);
+  const form = new FormData();
+  form.append('payload', rawPayload);
+  form.append('evidence', input.evidence, input.evidence.name || 'evidence');
+
+  const response = await authenticatedFetch('/abh/agents/submissions.php', {
+    method: 'POST',
+    body: form,
+    signedBody: rawPayload
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhSubmissionResponse };
+  return envelope.data;
+}
+
+/**
+ * Submit a corrected immutable revision for a submission awaiting correction.
+ * The original reporting month is retained by the API and cannot be changed.
+ */
+export async function submitAbhCorrection(input: {
+  submission_id: number;
+  idempotency_key: string;
+  reporting_month: string;
+  activity_date: string;
+  claimed_quantity: number;
+  agent_note?: string;
+  evidence: File;
+}): Promise<AbhSubmissionResponse> {
+  const evidenceHash = await sha256Hex(input.evidence);
+  const payload = {
+    submission_id: input.submission_id,
     idempotency_key: input.idempotency_key,
     reporting_month: input.reporting_month,
     activity_date: input.activity_date,
