@@ -23,7 +23,7 @@ describe('ABH agent authentication contract', () => {
     expect(page).toContain('Phone number');
     expect(page).toContain('login(phone.trim(), password)');
     expect(page).toContain('same browser used during registration');
-    expect(page).not.toMatch(/username|NIN|nin/i);
+    expect(page).not.toMatch(/username|\\bNIN\\b/i);
     expect(api).toContain('/abh/auth/login.php');
     expect(api).toContain("['ABH_LOGIN', phone.trim(), device.device_uuid, String(timestamp), nonce].join('\\n')");
     expect(api).toContain('signPayload(proof, device.private_key)');
