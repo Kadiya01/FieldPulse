@@ -310,7 +310,7 @@ export default function AbhAgentPortalPage({
                       <span className="text-slate-600">Claimed enrollments</span>
                       <strong className="tabular-nums text-slate-900">{item.claimed_quantity}</strong>
                     </div>
-                    <p className="mt-2 text-xs text-slate-500">Submitted {new Date(item.submitted_at.replace(' ', 'T') + 'Z').toLocaleString()}</p>
+                    <p className="mt-2 text-xs text-slate-500">Submitted {new Date(item.submitted_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()}</p>
                   </article>
                 ))}
               </div>
