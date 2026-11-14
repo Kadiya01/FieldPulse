@@ -54,7 +54,7 @@ The dedicated migration runner is bound to:
 - Preview URL: `https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng`
 - Private root: `/home/abhgloba/abhpreview_private_storage`
 
-The six ABH migrations passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. The latest schema suite passed 98 checks on MySQL 8.0.46 and 98 checks on MariaDB 11.4.13. Those tests used disposable CI databases; they did not apply migrations to cPanel. No migration has been applied to the cPanel staging database.
+Migrations 001–006 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests (98 checks per engine before the authentication migration). Migration 007 adds ABH browser-key binding, opaque agent sessions, replay nonces and a dedicated login-attempt ledger; it is awaiting its next schema-compatibility run. These tests use disposable CI databases; they do not apply migrations to cPanel. No migration has been applied to the cPanel staging database.
 
 ## 4. Application readiness — remaining blocker
 
@@ -62,17 +62,21 @@ Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
 The first ABH application slice is now implemented and CI-verified:
 
-- `src/pages/RegisterPage.tsx` now collects full name, Nigerian phone, password, IMEI, device type and optional email/location. It no longer asks for username or NIN.
-- The form calls the dedicated `/api/v1/abh/agents/register.php` endpoint. The legacy `/api/v1/agents/register.php` route remains unchanged.
-- `AbhAgentRegistrationController` validates the ABH contract and writes only to ABH-owned tables.
-- `AbhAgentRepository` creates the pending agent, password hash, pending device, audit event and active-admin notifications in one database transaction.
-- Migration 006 adds unique normalized phone and globally unique registered-device IMEI constraints, plus hashed ABH registration throttling.
-- GitHub Actions run #62 passed frontend lint and 110 tests, PHP syntax checks, bootstrap isolation, migration safety, build preparation, and all six migration compatibility checks: 98 MySQL 8.0.46 checks and 98 MariaDB 11.4.13 checks.
+- `src/pages/RegisterPage.tsx` collects full name, Nigerian phone, password, IMEI, device type and optional email/location. It does not ask for username or NIN.
+- Registration creates a non-extractable P-256 browser key, sends only the public JWK, and proves possession before the server stores the device in PENDING status.
+- The form calls the dedicated `/api/v1/abh/agents/register.php` endpoint. The legacy registration route remains unchanged.
+- `AbhAgentRegistrationController` and `AbhAgentRepository` write only to ABH-owned tables; the account, password hash, pending device key, audit event and admin notifications are created transactionally.
+- Migration 006 adds unique normalized phone and globally unique IMEI constraints plus hashed ABH registration throttling.
+- Migration 007 adds browser device UUID/JWK columns, ABH-only access/refresh session records, one-time nonces and a login-attempt ledger.
+- ABH agent login now uses phone/password plus proof of the registered browser key. Pending/rejected/suspended agents and non-active devices are denied. Refresh tokens rotate; reuse revokes the token family and device.
+- ABH requests are authenticated by a dedicated `AbhAuthenticator`; ABH tokens are not sent to legacy FieldPulse authentication tables.
+- The authenticated app temporarily blocks legacy FieldPulse screens until ABH dashboard, submission and admin APIs are implemented.
+- GitHub Actions run #62 is the last previously verified release run; Phase 2 commits and migration 007 still require a new successful CI run before this section can be marked verified.
 
 The overall build is still **NOT READY** for deployment as the complete ABH Monthly Enrollment System:
 
-- `src/pages/LoginPage.tsx` still uses the legacy FieldPulse login flow; ABH phone/password authentication is the next implementation slice.
-- ABH admin authentication, approval, suspension and device authorization are not yet connected to the new ABH tables.
+- ABH agent authentication code is implemented but migration 007 and the new contract tests are still awaiting CI verification.
+- ABH admin authentication, agent approval/rejection/suspension, and device authorization are not yet connected to the new ABH tables.
 - The old capture/queue/review/rewards route tree still exists; the ABH enrollment reporting and management pages are not yet complete.
 - ABH submissions, evidence, reviews, target management, final monthly leaderboard, reward management and payment/delivery flows still need their ABH-specific controllers and end-to-end tests.
 
@@ -80,12 +84,12 @@ Do not upload this intermediate build as the completed ABH system. The registrat
 
 ## 5. Required work before application deployment
 
-1. Implement ABH phone/password login and revocable sessions against `abh_agents` and `abh_agent_credentials`; pending, rejected and suspended agents must be denied. IMEI remains device metadata, not a password.
+1. Finish CI verification and runtime tests for ABH phone/password login, browser-key proof, revocable sessions and replay protection. Pending, rejected and suspended agents must be denied; IMEI remains device metadata, not a password.
 2. Implement ABH admin authentication, agent approval, suspension, device authorization and role separation against the ABH tables.
 3. Implement ABH enrollment submission, private evidence storage, correction/resubmission and admin review against `abh_enrollment_submissions`, revisions, evidence and reviews.
 4. Implement monthly targets, approved totals, leaderboard finalization, reward eligibility, management award decisions, payment/delivery and audit records.
 5. Complete agent/admin browser end-to-end tests and the required PHP/database release gate.
-6. Create the deployment readiness sign-off only after the live preview bootstrap and staging configuration are verified, and the ABH application release gate passes.
+6. Create the deployment readiness sign-off only after the preview bootstrap and staging configuration are verified, and the complete ABH application release gate passes.
 
 ## 6. Current deployment controls
 
