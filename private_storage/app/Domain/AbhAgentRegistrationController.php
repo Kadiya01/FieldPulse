@@ -67,7 +67,7 @@ final class AbhAgentRegistrationController implements ActionInterface
         $keyProof = Validator::string($body['key_proof'] ?? null, 80, 180, 'key_proof');
         SignatureVerifier::assertProofOfPossession(
             $publicKeyJwk,
-            "ABH_REGISTRATION\\n" . $deviceUuid . "\\n" . $imei,
+            "ABH_REGISTRATION\n" . $deviceUuid . "\n" . $imei,
             $keyProof
         );
 
