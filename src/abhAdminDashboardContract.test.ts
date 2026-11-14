@@ -45,7 +45,7 @@ describe('ABH administrator dashboard contract', () => {
     ]) {
       expect(repository).toContain(table);
     }
-    expect(repository).not.toMatch(/\\bFROM\\s+(agents|submissions|monthly_targets|reward_programs)\\b/i);
+    expect(repository).not.toMatch(/\bFROM\s+(agents|submissions|monthly_targets|reward_programs)\b/i);
     expect(repository).toContain('approved_quantity');
     expect(repository).toContain('PENDING_REVIEW');
   });
