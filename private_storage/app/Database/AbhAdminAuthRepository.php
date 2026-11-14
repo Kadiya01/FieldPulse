@@ -30,11 +30,11 @@ final class AbhAdminAuthRepository
     public static function bootstrapFirstAdmin(string $fullName, string $email, string $passwordHash): array
     {
         return Connection::transaction(
-            static function (\\PDO $pdo) use ($fullName, $email, $passwordHash): array {
+            static function (\PDO $pdo) use ($fullName, $email, $passwordHash): array {
                 $guard = $pdo->query(
                     'SELECT initialized_at FROM abh_admin_bootstrap_guard
                       WHERE singleton_id = 1 FOR UPDATE'
-                )->fetch(\\PDO::FETCH_ASSOC);
+                )->fetch(\PDO::FETCH_ASSOC);
 
                 if (!is_array($guard)) {
                     return ['error' => 'guard_missing'];
