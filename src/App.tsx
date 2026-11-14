@@ -122,19 +122,20 @@ export default function App() {
           <BrandHeader className="mb-4 flex justify-center" />
           <h1 className="text-xl font-bold text-gray-900 mb-2">Device key missing</h1>
           <p className="text-sm text-gray-700 mb-6">
-            This browser&apos;s device key is no longer available, so it cannot prove
-            which device it is. Sign in again to generate a new one.
+            The private security key created during registration is no longer available in this browser.
+            For security, the session has been ended. An administrator must revoke the lost device
+            and authorize a replacement before you can sign in again.
           </p>
           <p className="text-sm text-gray-700 mb-6">
-            Any captures already queued are still on this device and will upload once a
-            device is bound again.
+            Use the original browser profile if the key is still available there. Do not register a duplicate
+            account; contact your administrator for device replacement.
           </p>
           <button
             type="button"
             onClick={() => { window.location.href = '/login'; }}
             className="w-full bg-blue-700 text-white p-3 rounded-md font-medium hover:bg-blue-800"
           >
-            Sign in again
+            Return to sign in
           </button>
         </div>
       </div>
@@ -147,10 +148,15 @@ export default function App() {
   // never be sent to a legacy account or enrollment endpoint.
   if (gate === 'ready') {
     const endSession = async () => {
-      await logout();
-      setAgent(null);
-      setGate('login');
-      window.history.replaceState(null, '', '/login');
+      try {
+        await logout();
+      } catch {
+        // The local token is cleared by logout() even when the server is offline.
+      } finally {
+        setAgent(null);
+        setGate('login');
+        window.history.replaceState(null, '', '/login');
+      }
     };
 
     return (
