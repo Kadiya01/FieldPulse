@@ -94,9 +94,9 @@ describe('ABH app routing and legacy isolation', () => {
   it('keeps agent and administrator authentication on separate routes', () => {
     expect(appSource).toContain("location.pathname === '/admin'");
     expect(appSource).toContain('<AdminPortalPage />');
-    expect(appSource).toMatch(/path="\\/login"/);
-    expect(appSource).toMatch(/path="\\/register"/);
-    expect(appSource).not.toMatch(/path="\\/admin\\/login"/);
+    expect(appSource).toContain('path="/login"');
+    expect(appSource).toContain('path="/register"');
+    expect(appSource).not.toContain('path="/admin/login"');
     expect(read('pages/LoginPage.tsx')).not.toContain('admin?: boolean');
   });
 
