@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, ClipboardList, FileImage, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ClipboardList, FileImage, LayoutDashboard, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
 import {
   adminLogin,
@@ -20,7 +20,9 @@ import {
   markAllAbhAdminNotificationsRead,
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
+  fetchAbhAdminDashboard,
   restoreAdminSession,
+  type AbhAdminDashboardData,
   type AdminAgentDetails,
   type AdminAgentItem,
   type AbhAdminSubmissionItem,
@@ -982,13 +984,158 @@ function AdminNotificationsView() {
   );
 }
 
+function formatDashboardNumber(value: number): string {
+  return new Intl.NumberFormat('en-NG').format(value);
+}
+
+function currentDashboardMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function AdminOverview() {
+  const [month, setMonth] = useState(currentDashboardMonth);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [data, setData] = useState<AbhAdminDashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setError('');
+    fetchAbhAdminDashboard(month)
+      .then(result => { if (live) setData(result); })
+      .catch(caught => {
+        if (live) setError(caught instanceof Error ? caught.message : 'Could not load dashboard summaries.');
+      })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [month, refreshVersion]);
+
+  const metrics: Array<{ label: string; value: string; detail: string }> = [];
+  if (data?.agents) {
+    metrics.push(
+      { label: 'Registered agents', value: formatDashboardNumber(data.agents.total), detail: `${formatDashboardNumber(data.agents.active)} active` },
+      { label: 'Pending applications', value: formatDashboardNumber(data.agents.pending), detail: 'Awaiting administrator review' },
+      { label: 'Suspended agents', value: formatDashboardNumber(data.agents.suspended), detail: `${formatDashboardNumber(data.agents.rejected)} rejected` }
+    );
+  }
+  if (data?.submissions) {
+    metrics.push(
+      { label: 'Reports submitted', value: formatDashboardNumber(data.submissions.total), detail: `${formatDashboardNumber(data.submissions.claimed_quantity)} claimed enrollments` },
+      { label: 'Awaiting review', value: formatDashboardNumber(data.submissions.pending_review + data.submissions.correction_requested), detail: `${formatDashboardNumber(data.submissions.pending_review)} pending · ${formatDashboardNumber(data.submissions.correction_requested)} corrections` },
+      { label: 'Approved reports', value: formatDashboardNumber(data.submissions.approved), detail: `${formatDashboardNumber(data.submissions.rejected)} rejected` }
+    );
+  }
+  if (data?.performance) {
+    metrics.push({
+      label: 'Approved enrollments',
+      value: formatDashboardNumber(data.performance.approved_quantity),
+      detail: data.performance.organisation_target === null
+        ? 'Organisation target not set'
+        : `Target: ${formatDashboardNumber(data.performance.organisation_target)} · ${data.performance.progress_percent ?? '0.00'}%`
+    });
+  }
+  if (data?.rewards) {
+    const programCount = Object.values(data.rewards.programs_by_status).reduce((sum, value) => sum + value, 0);
+    const eligibleCount = data.rewards.qualifications_by_status.ELIGIBLE ?? 0;
+    const pendingAwards = data.rewards.awards_by_status.PENDING_APPROVAL ?? 0;
+    metrics.push(
+      { label: 'Reward programmes', value: formatDashboardNumber(programCount), detail: 'For the selected reporting month' },
+      { label: 'Eligible agents', value: formatDashboardNumber(eligibleCount), detail: 'Calculated by the reward rules' },
+      { label: 'Awards awaiting approval', value: formatDashboardNumber(pendingAwards), detail: `${formatDashboardNumber(data.rewards.paid_events)} paid · ${formatDashboardNumber(data.rewards.delivered_events)} delivered` }
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-6 px-4 py-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Administration overview</h1>
+          <p className="mt-1 text-sm text-slate-600">Live account, enrollment, performance and reward summaries from the ABH database.</p>
+        </div>
+        <div className="flex items-end gap-2">
+          <label className="text-xs font-semibold text-slate-600">
+            Reporting month
+            <input type="month" value={month} onChange={event => setMonth(event.target.value)}
+              className="mt-1 block rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800" />
+          </label>
+          <button type="button" onClick={() => setRefreshVersion(value => value + 1)} disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-60">
+            <RefreshCw size={16} aria-hidden="true" /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {data?.period ? (
+        <p className="text-sm text-slate-600">
+          Period {data.period.period_key} · {data.period.status === 'CLOSED' ? 'Finalised' : 'Open'}
+        </p>
+      ) : data && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          No reporting period has been created for {month}. Monthly totals are shown as zero until the period is opened.
+        </p>
+      )}
+
+      {loading && <p role="status" className="text-sm text-slate-500">Loading live summaries…</p>}
+      {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+
+      {data && (
+        <>
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {metrics.map(metric => (
+              <article key={metric.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <p className="text-sm font-medium text-slate-500">{metric.label}</p>
+                <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{metric.value}</p>
+                <p className="mt-2 text-xs text-slate-500">{metric.detail}</p>
+              </article>
+            ))}
+          </section>
+
+          {data.performance && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4">
+                <h2 className="text-lg font-bold text-slate-900">Top agents this month</h2>
+                <p className="text-sm text-slate-500">Ranked by approved enrollments, not unreviewed submissions.</p>
+              </div>
+              {data.performance.top_agents.length === 0 ? (
+                <p className="text-sm text-slate-500">No approved agent totals are recorded for this month yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-left text-sm">
+                    <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                      <tr><th className="py-2 pr-3">Rank</th><th className="py-2 pr-3">Agent</th><th className="py-2 pr-3">Approved enrollments</th><th className="py-2">Agent target</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {data.performance.top_agents.map(agent => (
+                        <tr key={agent.agent_id}>
+                          <td className="py-3 pr-3 font-semibold text-slate-700">#{agent.rank_position}</td>
+                          <td className="py-3 pr-3"><span className="font-semibold text-slate-900">{agent.full_name}</span><span className="block text-xs text-slate-500">{agent.agent_code}</span></td>
+                          <td className="py-3 pr-3 tabular-nums font-semibold text-slate-900">{formatDashboardNumber(agent.approved_quantity)}</td>
+                          <td className="py-3 tabular-nums text-slate-600">{agent.target_quantity === null ? 'Not set' : `${formatDashboardNumber(agent.target_quantity)} (${agent.progress_percent ?? '0.00'}%)`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
-  const [activeSection, setActiveSection] = useState<'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications'>(() =>
-    admin.permissions.includes('agents.read')
-      ? 'agents'
-      : admin.permissions.includes('submissions.read')
-        ? 'submissions'
-        : 'targets'
+  const canViewOverview = [
+    'agents.read', 'submissions.read', 'targets.manage', 'periods.close', 'rewards.manage', 'rewards.approve'
+  ].some(permission => admin.permissions.includes(permission));
+  const [activeSection, setActiveSection] = useState<'overview' | 'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications'>(() =>
+    canViewOverview
+      ? 'overview'
+      : 'notifications'
   );
   const [status, setStatus] = useState<AgentStatus>('PENDING');
   const [search, setSearch] = useState('');
@@ -1104,6 +1251,12 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
 
       <nav aria-label="Administrator sections" className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl gap-2 px-4 py-3">
+          {canViewOverview && (
+            <button type="button" onClick={() => setActiveSection('overview')}
+              className={activeSection === 'overview' ? 'inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'inline-flex items-center gap-2 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              <LayoutDashboard size={16} aria-hidden="true" /> Overview
+            </button>
+          )}
           {canReadAgents && (
             <button type="button" onClick={() => setActiveSection('agents')}
               className={activeSection === 'agents' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
@@ -1135,7 +1288,9 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
         </div>
       </nav>
 
-      {activeSection === 'notifications' ? (
+      {activeSection === 'overview' ? (
+        <AdminOverview />
+      ) : activeSection === 'notifications' ? (
         <AdminNotificationsView />
       ) : activeSection === 'submissions' ? (
         <AdminSubmissionQueue admin={admin} />
