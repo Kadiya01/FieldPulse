@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Clock3, FileImage, LogOut, RefreshCw, Send, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
 import {
   fetchAbhAgentSubmissions,
   submitAbhEnrollment,
+  type AbhAgentMonthlySummary,
   type AbhAgentSubmissionItem,
   type SessionAgent
 } from '../api/client';
@@ -55,6 +56,16 @@ export default function AbhAgentPortalPage({
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [items, setItems] = useState<AbhAgentSubmissionItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<AbhAgentMonthlySummary>({
+    period_status: null,
+    submitted_count: 0,
+    approved_quantity: 0,
+    pending_count: 0,
+    rejected_count: 0,
+    target_quantity: null,
+    progress_percent: null,
+    leaderboard_rank: null
+  });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -68,6 +79,7 @@ export default function AbhAgentPortalPage({
       setError('');
       setItems(result.items);
       setTotal(result.total);
+      if (result.summary) setSummary(result.summary);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Submission history could not be loaded.');
     } finally {
@@ -76,17 +88,9 @@ export default function AbhAgentPortalPage({
   }, [month]);
 
   useEffect(() => {
-    void refreshHistory(false);
+    const timer = window.setTimeout(() => { void refreshHistory(false); }, 0);
+    return () => window.clearTimeout(timer);
   }, [refreshHistory]);
-
-  const summary = useMemo(() => {
-    const approved = items.filter(item => item.status === 'APPROVED');
-    return {
-      approvedQuantity: approved.reduce((sum, item) => sum + item.claimed_quantity, 0),
-      pending: items.filter(item => item.status === 'PENDING_REVIEW').length,
-      rejected: items.filter(item => item.status === 'REJECTED').length
-    };
-  }, [items]);
 
   const maximumDate = month === currentMonth() ? todayIso() : monthEnd(month);
   const minimumDate = `${month}-01`;
@@ -188,18 +192,37 @@ export default function AbhAgentPortalPage({
           </p>
         </section>
 
-        <section className="grid gap-3 sm:grid-cols-3" aria-label="Monthly submission summary">
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Monthly submission summary">
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Approved enrollments</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.approvedQuantity}</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.approved_quantity}</p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pending submissions</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.pending}</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.pending_count}</p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rejected submissions</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.rejected}</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.rejected_count}</p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Monthly target</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.target_quantity ?? 'Not set'}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {summary.progress_percent === null ? 'Target progress unavailable' : `${summary.progress_percent.toFixed(2)}% achieved`}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Leaderboard position</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.leaderboard_rank === null ? '—' : `#${summary.leaderboard_rank}`}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {summary.period_status === 'CLOSED' ? 'Final monthly position' : 'Live monthly position'}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Submissions this month</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{summary.submitted_count}</p>
+            <p className="mt-1 text-xs text-slate-500">{total} record(s) shown in history</p>
           </div>
         </section>
 
