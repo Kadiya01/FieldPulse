@@ -1,6 +1,11 @@
 name: ABH Preview FTPS Preflight (No Upload)
 
 on:
+  push:
+    branches:
+      - feature/abh-monthly-enrollment
+    paths:
+      - ".github/workflows/abh-preview-ftps-preflight.yml"
   workflow_dispatch:
 
 permissions:
@@ -83,7 +88,7 @@ jobs:
           test -s deploy/preview/public/.htaccess
           test -s deploy/preview/private/app/bootstrap.php
 
-          if find deploy/preview -type f \\( -name '.env' -o -name '.env.*' \\) | grep -q .; then
+          if find deploy/preview -type f \( -name '.env' -o -name '.env.*' \) | grep -q .; then
             echo "::error::A secret environment file was found in the preflight bundle."
             exit 1
           fi
