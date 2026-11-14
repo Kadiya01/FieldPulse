@@ -77,6 +77,18 @@ describe('ABH monthly enrollment submission contract', () => {
     expect(page).toContain('Pending review');
   });
 
+  it('calculates monthly performance beyond the paginated history list', () => {
+    expect(repository).toContain('summaryForAgent');
+    expect(repository).toContain('abh_monthly_targets');
+    expect(repository).toContain('abh_monthly_leaderboard_snapshots');
+    expect(repository).toContain('approved_quantity');
+    expect(repository).toContain('progress_percent');
+    expect(controller).toContain("'summary' => $summary");
+    expect(client).toContain('interface AbhAgentMonthlySummary');
+    expect(page).toContain('Monthly target');
+    expect(page).toContain('Leaderboard position');
+  });
+
   it('has the ABH revision and evidence schema required by the upload flow', () => {
     expect(migration).toContain('current_revision_id');
     expect(migration).toContain('claimed_quantity');
