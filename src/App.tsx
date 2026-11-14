@@ -7,7 +7,7 @@ import RegisterPage from './pages/RegisterPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ReviewsPage from './pages/ReviewsPage';
 import RewardsPage from './pages/RewardsPage';
-import AdminPage from './pages/AdminPage';
+import AdminPortalPage from './pages/AdminPortalPage';
 import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
 import Layout from './components/Layout';
@@ -37,6 +37,9 @@ export default function App() {
   const session = useSessionValue(agent);
 
   useEffect(() => {
+    if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) {
+      return;
+    }
     let live = true;
 
     // The access token is memory-only, so a reload always starts with none and
@@ -103,6 +106,10 @@ export default function App() {
       window.removeEventListener('auth_failure', onFailure);
     };
   }, []);
+
+  if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) {
+    return <AdminPortalPage />;
+  }
 
   if (gate === 'checking') {
     return (
@@ -239,34 +246,8 @@ export default function App() {
             administrator demoted server-side since this tab loaded must land on
             a "no longer admin" panel, not on stale controls.
           */}
-          <Route path="/admin" element={<AdminPage />} />
         </Route>
 
-        <Route
-          path="/admin/login"
-          element={
-            isReady() ? (
-              <Navigate to="/" replace />
-            ) : (
-              /*
-               * On success the page hands the agent back rather than leaving the
-               * gate to discover it on the next `restoreSession()`.
-               *
-               * It used to navigate to `/` and stop there, which could not work:
-               * the gate still said `login`, so `/` redirected straight back, and
-               * the agent was left looking at a "device registered" card with no
-               * way forward and no way to reach the app without a manual reload.
-               */
-              <LoginPage
-                admin
-                onAuthenticated={(authenticated) => {
-                  setAgent(authenticated);
-                  setGate('ready');
-                }}
-              />
-            )
-          }
-        />
 
         <Route
           path="/login"
