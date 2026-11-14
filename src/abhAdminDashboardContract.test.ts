@@ -18,7 +18,7 @@ describe('ABH administrator dashboard contract', () => {
     expect(kernel).toContain("'abh.admin.dashboard'");
     expect(kernel).toContain("'abh.admin.dashboard' => 'admin'");
     expect(controller).toContain('requireAbhAdminContext');
-    expect(controller).toContain('requirePermission');
+    expect(controller).toContain('array_intersect($allowed, $permissions)');
     expect(route).toContain("Kernel::handle('abh.admin.dashboard')");
   });
 
