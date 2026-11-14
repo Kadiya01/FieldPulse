@@ -59,7 +59,7 @@ final class AbhAdminAgentRepository
     }
 
     /** @return array{agent:array<string,mixed>,devices:list<array<string,mixed>>}|null */
-    public static function agentDetails(int $agentId): ?array
+    public static function agentDetails(int $agentId, bool $includeDevices = true): ?array
     {
         $agent = Connection::fetchOne(
             'SELECT id, agent_code, full_name, phone, email, location_text, status,
@@ -69,6 +69,10 @@ final class AbhAdminAgentRepository
         );
         if ($agent === null) {
             return null;
+        }
+
+        if (!$includeDevices) {
+            return ['agent' => $agent, 'devices' => []];
         }
 
         $devices = Connection::fetchAll(
