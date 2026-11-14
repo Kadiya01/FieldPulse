@@ -289,13 +289,10 @@ final class AbhSubmissionRepository
                                AND s.status = "APPROVED"
                              GROUP BY s.agent_id
                        ) ranked
-                      WHERE ranked.approved_quantity > :own_quantity
-                         OR (ranked.approved_quantity = :tie_quantity AND ranked.agent_id < :agent_id)',
+                      WHERE ranked.approved_quantity > :own_quantity',
                     [
                         'period_id' => $periodId,
                         'own_quantity' => $approvedQuantity,
-                        'tie_quantity' => $approvedQuantity,
-                        'agent_id' => $agentId,
                     ]
                 );
                 $rank = $ahead + 1;
