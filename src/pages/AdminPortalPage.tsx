@@ -648,7 +648,7 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredTargets.map(item => (
-                  <tr key={item.id}>
+                  <tr key={item.target_id}>
                     <td className="py-3 pr-4 font-medium text-slate-900">{item.full_name}</td>
                     <td className="py-3 pr-4 text-slate-600">{item.agent_code}</td>
                     <td className="py-3 pr-4 text-slate-600">{item.phone}</td>
