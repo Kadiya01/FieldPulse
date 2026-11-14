@@ -204,6 +204,116 @@ final class AbhSubmissionRepository
     }
 
     /**
+     * Calculate complete period totals independently of history pagination.
+     * Closed periods prefer frozen leaderboard snapshots; open periods rank
+     * directly from approved submissions.
+     *
+     * @return array{
+     *   period_status:?string,submitted_count:int,approved_quantity:int,
+     *   pending_count:int,rejected_count:int,target_quantity:?int,
+     *   progress_percent:?float,leaderboard_rank:?int
+     * }
+     */
+    public static function summaryForAgent(int $agentId, string $periodKey): array
+    {
+        $period = Connection::fetchOne(
+            'SELECT id, status FROM abh_reporting_periods
+              WHERE period_key = :period_key
+              LIMIT 1',
+            ['period_key' => $periodKey]
+        );
+
+        if ($period === null) {
+            return [
+                'period_status' => null,
+                'submitted_count' => 0,
+                'approved_quantity' => 0,
+                'pending_count' => 0,
+                'rejected_count' => 0,
+                'target_quantity' => null,
+                'progress_percent' => null,
+                'leaderboard_rank' => null,
+            ];
+        }
+
+        $periodId = (int) $period['id'];
+        $counts = Connection::fetchOne(
+            'SELECT
+                COUNT(*) AS submitted_count,
+                COALESCE(SUM(CASE WHEN s.status = "APPROVED" THEN r.claimed_quantity ELSE 0 END), 0) AS approved_quantity,
+                COALESCE(SUM(CASE WHEN s.status = "PENDING_REVIEW" THEN 1 ELSE 0 END), 0) AS pending_count,
+                COALESCE(SUM(CASE WHEN s.status = "REJECTED" THEN 1 ELSE 0 END), 0) AS rejected_count
+               FROM abh_enrollment_submissions s
+               LEFT JOIN abh_submission_revisions r ON r.id = s.current_revision_id
+              WHERE s.agent_id = :agent_id AND s.reporting_period_id = :period_id',
+            ['agent_id' => $agentId, 'period_id' => $periodId]
+        ) ?? [];
+
+        $approvedQuantity = (int) ($counts['approved_quantity'] ?? 0);
+        $targetRow = Connection::fetchOne(
+            'SELECT target_quantity
+               FROM abh_monthly_targets
+              WHERE reporting_period_id = :period_id
+                AND agent_id = :agent_id
+              LIMIT 1',
+            ['period_id' => $periodId, 'agent_id' => $agentId]
+        );
+        $targetQuantity = $targetRow === null ? null : (int) $targetRow['target_quantity'];
+
+        $rank = null;
+        if ($approvedQuantity > 0) {
+            if ((string) $period['status'] === 'CLOSED') {
+                $snapshot = Connection::fetchOne(
+                    'SELECT rank_position
+                       FROM abh_monthly_leaderboard_snapshots
+                      WHERE reporting_period_id = :period_id AND agent_id = :agent_id
+                      LIMIT 1',
+                    ['period_id' => $periodId, 'agent_id' => $agentId]
+                );
+                if ($snapshot !== null) {
+                    $rank = (int) $snapshot['rank_position'];
+                }
+            }
+
+            if ($rank === null) {
+                $ahead = (int) Connection::fetchValue(
+                    'SELECT COUNT(*)
+                       FROM (
+                            SELECT s.agent_id, SUM(r.claimed_quantity) AS approved_quantity
+                              FROM abh_enrollment_submissions s
+                              INNER JOIN abh_submission_revisions r ON r.id = s.current_revision_id
+                             WHERE s.reporting_period_id = :period_id
+                               AND s.status = "APPROVED"
+                             GROUP BY s.agent_id
+                       ) ranked
+                      WHERE ranked.approved_quantity > :own_quantity
+                         OR (ranked.approved_quantity = :tie_quantity AND ranked.agent_id < :agent_id)',
+                    [
+                        'period_id' => $periodId,
+                        'own_quantity' => $approvedQuantity,
+                        'tie_quantity' => $approvedQuantity,
+                        'agent_id' => $agentId,
+                    ]
+                );
+                $rank = $ahead + 1;
+            }
+        }
+
+        return [
+            'period_status' => (string) $period['status'],
+            'submitted_count' => (int) ($counts['submitted_count'] ?? 0),
+            'approved_quantity' => $approvedQuantity,
+            'pending_count' => (int) ($counts['pending_count'] ?? 0),
+            'rejected_count' => (int) ($counts['rejected_count'] ?? 0),
+            'target_quantity' => $targetQuantity,
+            'progress_percent' => $targetQuantity !== null && $targetQuantity > 0
+                ? round(($approvedQuantity / $targetQuantity) * 100, 2)
+                : null,
+            'leaderboard_rank' => $rank,
+        ];
+    }
+
+    /**
      * A caller's own submission history only. Ownership is always supplied by
      * the authenticated context, never by a query or payload field.
      *
