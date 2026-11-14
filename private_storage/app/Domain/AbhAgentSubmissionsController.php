@@ -68,6 +68,10 @@ final class AbhAgentSubmissionsController implements ActionInterface
 
         $result = AbhSubmissionRepository::listForAgent($context->agentId(), $periodKey, $limit, $offset);
 
+        $summary = $periodKey === null
+            ? null
+            : AbhSubmissionRepository::summaryForAgent($context->agentId(), $periodKey);
+
         return Response::json([
             'data' => $result['items'],
             'meta' => [
@@ -75,6 +79,7 @@ final class AbhAgentSubmissionsController implements ActionInterface
                 'limit' => $result['limit'],
                 'offset' => $result['offset'],
                 'month' => $periodKey,
+                'summary' => $summary,
             ],
         ]);
     }
