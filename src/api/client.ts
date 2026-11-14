@@ -2033,8 +2033,12 @@ export interface AbhAdminTargetAgent {
   location_text: string | null;
 }
 
-export interface AbhAdminAgentTarget extends AbhAdminTargetAgent {
-  id: number;
+export interface AbhAdminAgentTarget {
+  target_id: number;
+  agent_id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
   target_quantity: number;
   updated_at: string;
 }
