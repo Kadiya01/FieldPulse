@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ClipboardList, FileImage, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
 import {
   adminLogin,
@@ -8,11 +8,16 @@ import {
   bootstrapFirstAdmin,
   decideAbhAdminAgent,
   decideAbhAdminDevice,
+  decideAbhAdminSubmission,
+  fetchAbhAdminSubmissionEvidence,
+  fetchAbhAdminSubmissions,
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   restoreAdminSession,
   type AdminAgentDetails,
   type AdminAgentItem,
+  type AbhAdminSubmissionItem,
+  type AbhAdminSubmissionStatus,
   type SessionAdmin
 } from '../api/client';
 
@@ -133,7 +138,300 @@ function AdminSignIn({ onAuthenticated }: { onAuthenticated: (admin: SessionAdmi
   );
 }
 
+function AdminSubmissionQueue({ admin }: { admin: SessionAdmin }) {
+  const [status, setStatus] = useState<AbhAdminSubmissionStatus>('PENDING_REVIEW');
+  const [month, setMonth] = useState('');
+  const [items, setItems] = useState<AbhAdminSubmissionItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+
+  const canRead = admin.permissions.includes('submissions.read');
+  const canReview = admin.permissions.includes('submissions.review');
+  const selected = items.find(item => item.id === selectedId) ?? null;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchAbhAdminSubmissions(status, month || undefined, 100, 0);
+      setItems(result.items);
+      setTotal(result.total);
+      if (selectedId !== null && !result.items.some(item => item.id === selectedId)) {
+        setSelectedId(null);
+        setEvidenceUrl(null);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The submission queue could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, [status, month, selectedId]);
+
+  useEffect(() => {
+    if (!canRead) return;
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [canRead, load]);
+
+  useEffect(() => {
+    if (selectedId === null) return;
+    let active = true;
+    let objectUrl: string | null = null;
+    const timer = window.setTimeout(() => {
+      setEvidenceLoading(true);
+      void fetchAbhAdminSubmissionEvidence(selectedId)
+        .then(blob => {
+          if (!active) return;
+          objectUrl = URL.createObjectURL(blob);
+          setEvidenceUrl(objectUrl);
+        })
+        .catch(caught => {
+          if (active) setError(caught instanceof Error ? caught.message : 'Evidence could not be loaded.');
+        })
+        .finally(() => {
+          if (active) setEvidenceLoading(false);
+        });
+    }, 0);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [selectedId]);
+
+  const selectItem = (id: number) => {
+    setSelectedId(id);
+    setEvidenceUrl(null);
+    setReason('');
+    setError('');
+    setNotice('');
+  };
+
+  const decide = async (decision: 'APPROVE' | 'REJECT' | 'REQUEST_CORRECTION') => {
+    if (!selected) return;
+    const note = reason.trim();
+    if (decision !== 'APPROVE' && note.length < 2) {
+      setError('Add a clear reason before rejecting or requesting a correction.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await decideAbhAdminSubmission(
+        selected.id,
+        decision,
+        note || undefined,
+        idempotencyKey
+      );
+      setNotice(
+        result.idempotent_replay
+          ? `The earlier review of ${result.reference_no} was already recorded.`
+          : `${result.reference_no} is now ${result.status.replaceAll('_', ' ').toLowerCase()}.`
+      );
+      setIdempotencyKey(crypto.randomUUID());
+      setReason('');
+      await load();
+      if (decision !== 'APPROVE' || result.status !== 'APPROVED') {
+        setSelectedId(null);
+        setEvidenceUrl(null);
+      }
+    } catch (caught) {
+      // Keep this key on failure so a retry after a lost response is idempotent.
+      setError(caught instanceof Error ? caught.message : 'The review decision could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!canRead) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-8">
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          Your administrator role does not include permission to read enrollment submissions.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
+      <section className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Enrollment submissions</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Check the agent, reporting month, claimed quantity and evidence before recording a decision.
+          </p>
+        </div>
+        <button type="button" onClick={() => void load()} disabled={loading}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+          <RefreshCw size={15} aria-hidden="true" /> Refresh queue
+        </button>
+      </section>
+
+      <section className="flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap gap-2">
+          {(['PENDING_REVIEW', 'CORRECTION_REQUESTED', 'APPROVED', 'REJECTED', 'ALL'] as AbhAdminSubmissionStatus[]).map(value => (
+            <button key={value} type="button" onClick={() => setStatus(value)}
+              className={status === value
+                ? 'rounded-full bg-blue-700 px-3 py-2 text-xs font-semibold text-white'
+                : 'rounded-full border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700'}>
+              {value === 'PENDING_REVIEW' ? 'Pending review' : value === 'CORRECTION_REQUESTED' ? 'Correction requested' : value === 'ALL' ? 'All' : value}
+            </button>
+          ))}
+        </div>
+        <label className="block text-sm font-semibold text-slate-700">
+          Reporting month
+          <input type="month" value={month} onChange={event => setMonth(event.target.value)}
+            className="mt-1 block rounded-xl border border-slate-300 px-3 py-2 font-normal text-slate-900" />
+        </label>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <section className="min-w-0 space-y-3">
+          <p className="text-xs text-slate-500">{total} matching submission(s)</p>
+          {loading && <p role="status" className="rounded-xl bg-white p-5 text-sm text-slate-600">Loading submissions…</p>}
+          {!loading && items.length === 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
+              <ClipboardList size={26} className="mx-auto text-slate-400" aria-hidden="true" />
+              <p className="mt-3 text-sm font-semibold text-slate-800">No submissions in this view</p>
+              <p className="mt-1 text-xs text-slate-500">Try another status or reporting month.</p>
+            </div>
+          )}
+          {items.map(item => (
+            <button key={item.id} type="button" onClick={() => selectItem(item.id)}
+              className={selectedId === item.id
+                ? 'w-full rounded-2xl border-2 border-blue-600 bg-white p-4 text-left shadow-sm'
+                : 'w-full rounded-2xl border border-slate-200 bg-white p-4 text-left hover:border-slate-400'}>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-slate-900">{item.reference_no}</p>
+                  <p className="mt-1 text-xs text-slate-600">{item.full_name} · {item.agent_code}</p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                  {item.status.replaceAll('_', ' ')}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600">
+                <span>{item.period_key}</span>
+                <span>Activity {item.activity_date}</span>
+                <span><strong className="text-slate-900">{item.claimed_quantity}</strong> enrollments</span>
+              </div>
+            </button>
+          ))}
+        </section>
+
+        <aside className="min-w-0">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-900">Submission evidence and decision</h2>
+            {!selected ? (
+              <p className="mt-4 text-sm text-slate-500">Select a submission to inspect its details and evidence.</p>
+            ) : (
+              <>
+                <div className="mt-4 space-y-2 border-b border-slate-200 pb-4">
+                  <p className="font-semibold text-slate-900">{selected.reference_no}</p>
+                  <p className="text-sm text-slate-700">{selected.full_name} · {selected.agent_code}</p>
+                  <p className="text-xs text-slate-500">{selected.phone} · {selected.location_text || 'No location recorded'}</p>
+                  <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 text-sm">
+                    <div><p className="text-xs text-slate-500">Reporting month</p><p className="font-semibold">{selected.period_key}</p></div>
+                    <div><p className="text-xs text-slate-500">Activity date</p><p className="font-semibold">{selected.activity_date}</p></div>
+                    <div><p className="text-xs text-slate-500">Claimed quantity</p><p className="font-semibold tabular-nums">{selected.claimed_quantity}</p></div>
+                    <div><p className="text-xs text-slate-500">Revision / reviews</p><p className="font-semibold">{selected.revision_no} / {selected.review_count}</p></div>
+                  </div>
+                  {selected.agent_note && (
+                    <div><p className="text-xs font-semibold text-slate-500">Agent note</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{selected.agent_note}</p></div>
+                  )}
+                  <p className="text-xs text-slate-500">
+                    Submitted {new Date(selected.submitted_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()} · {selected.original_filename}
+                  </p>
+                </div>
+
+                <div className="py-4">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <FileImage size={16} aria-hidden="true" /> Evidence image
+                  </div>
+                  {evidenceLoading && <p role="status" className="text-sm text-slate-500">Loading private evidence…</p>}
+                  {!evidenceLoading && evidenceUrl && (
+                    <img src={evidenceUrl} alt={`Evidence for ${selected.reference_no}`}
+                      className="max-h-[440px] w-full rounded-xl border border-slate-200 bg-slate-50 object-contain" />
+                  )}
+                  {!evidenceLoading && !evidenceUrl && (
+                    <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">Evidence is not available. Do not approve this report until the evidence can be inspected.</p>
+                  )}
+                </div>
+
+                {canReview && selected.status === 'PENDING_REVIEW' && (
+                  <div className="space-y-3 border-t border-slate-200 pt-4">
+                    <label className="block text-sm font-semibold text-slate-700">
+                      Review note {selected.status === 'PENDING_REVIEW' ? '(required for rejection or correction)' : ''}
+                      <textarea value={reason} onChange={event => setReason(event.target.value)} rows={3} maxLength={2000}
+                        placeholder="Explain what was checked, or why correction/rejection is required."
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal" />
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={saving || !evidenceUrl}
+                        onClick={() => void decide('APPROVE')}
+                        className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                        Approve submission
+                      </button>
+                      <button type="button" disabled={saving || reason.trim().length < 2}
+                        onClick={() => void decide('REQUEST_CORRECTION')}
+                        className="rounded-xl border border-amber-400 px-4 py-2.5 text-sm font-semibold text-amber-800 disabled:opacity-50">
+                        Request correction
+                      </button>
+                      <button type="button" disabled={saving || reason.trim().length < 2}
+                        onClick={() => void decide('REJECT')}
+                        className="rounded-xl border border-red-300 px-4 py-2.5 text-sm font-semibold text-red-700 disabled:opacity-50">
+                        Reject
+                      </button>
+                    </div>
+                    <p className="text-xs leading-5 text-slate-500">
+                      Approval adds this revision's quantity to the agent's approved monthly total. A second approval is blocked.
+                    </p>
+                  </div>
+                )}
+                {canReview && selected.status !== 'PENDING_REVIEW' && (
+                  <p className="border-t border-slate-200 pt-4 text-sm text-slate-500">
+                    This submission already has a decision and cannot be reviewed again through this queue.
+                  </p>
+                )}
+                {!canReview && (
+                  <p className="border-t border-slate-200 pt-4 text-sm text-slate-500">
+                    Your role can inspect evidence but does not have permission to record a review decision.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+        </aside>
+      </div>
+      )}
+
+      {error && (
+        <div role="alert" className="fixed bottom-4 right-4 flex max-w-lg items-start gap-2 rounded-xl bg-red-50 p-4 text-sm text-red-800 shadow-lg">
+          <AlertCircle size={18} className="mt-0.5 shrink-0" /> {error}
+          <button type="button" onClick={() => setError('')} aria-label="Dismiss error"><XCircle size={18} /></button>
+        </div>
+      )}
+      {notice && <p role="status" className="mx-auto max-w-7xl px-4 text-sm font-medium text-emerald-800">{notice}</p>}
+    </div>
+  );
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
+  const [activeSection, setActiveSection] = useState<'agents' | 'submissions'>(
+    admin.permissions.includes('agents.read') ? 'agents' : 'submissions'
+  );
   const [status, setStatus] = useState<AgentStatus>('PENDING');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -246,6 +544,26 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
         </div>
       </header>
 
+      <nav aria-label="Administrator sections" className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl gap-2 px-4 py-3">
+          {canReadAgents && (
+            <button type="button" onClick={() => setActiveSection('agents')}
+              className={activeSection === 'agents' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              Agent applications
+            </button>
+          )}
+          {admin.permissions.includes('submissions.read') && (
+            <button type="button" onClick={() => setActiveSection('submissions')}
+              className={activeSection === 'submissions' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              Enrollment review
+            </button>
+          )}
+        </div>
+      </nav>
+
+      {activeSection === 'submissions' ? (
+        <AdminSubmissionQueue admin={admin} />
+      ) : (
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(350px,0.9fr)]">
         <section className="min-w-0">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
