@@ -43,8 +43,7 @@ final class AbhAdminPeriodCloseController implements ActionInterface
             throw new ApiException(
                 409,
                 ErrorCode::STATE_CONFLICT,
-                'Review all pending and correction-requested submissions before closing this month.',
-                ['pending_count' => (int) $result['pending_count']]
+                'Review all ' . (int) $result['pending_count'] . ' pending or correction-requested submission(s) before closing this month.'
             );
         }
         if ($error === 'totals_mismatch') {
