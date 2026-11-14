@@ -30,6 +30,7 @@ final class Kernel
         'auth.agent_login' => \FieldPulse\Domain\AgentLoginController::class,
         'auth.password'    => \FieldPulse\Domain\PasswordController::class,
         'agent.register'   => \FieldPulse\Domain\AgentRegistrationController::class,
+        'abh.agent.register' => \FieldPulse\Domain\AbhAgentRegistrationController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
@@ -89,6 +90,7 @@ final class Kernel
         'auth.agent_login' => 'public',
         'auth.password'    => 'signed',
         'agent.register'   => 'public',
+        'abh.agent.register' => 'public',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
         'device.register'  => 'bootstrap',
