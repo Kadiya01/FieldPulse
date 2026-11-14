@@ -382,12 +382,24 @@ export interface AbhAgentSubmissionItem {
   revision_no: number;
 }
 
+export interface AbhAgentMonthlySummary {
+  period_status: string | null;
+  submitted_count: number;
+  approved_quantity: number;
+  pending_count: number;
+  rejected_count: number;
+  target_quantity: number | null;
+  progress_percent: number | null;
+  leaderboard_rank: number | null;
+}
+
 export interface AbhAgentSubmissionList {
   items: AbhAgentSubmissionItem[];
   total: number;
   limit: number;
   offset: number;
   month: string | null;
+  summary: AbhAgentMonthlySummary | null;
 }
 
 type AbhSubmissionResponse = {
@@ -454,14 +466,21 @@ export async function fetchAbhAgentSubmissions(
   }
   const envelope = await response.json() as {
     data: AbhAgentSubmissionItem[];
-    meta: { total: number; limit: number; offset: number; month: string | null };
+    meta: {
+      total: number;
+      limit: number;
+      offset: number;
+      month: string | null;
+      summary: AbhAgentMonthlySummary | null;
+    };
   };
   return {
     items: envelope.data,
     total: envelope.meta.total,
     limit: envelope.meta.limit,
     offset: envelope.meta.offset,
-    month: envelope.meta.month
+    month: envelope.meta.month,
+    summary: envelope.meta.summary
   };
 }
 
