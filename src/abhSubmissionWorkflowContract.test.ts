@@ -7,6 +7,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const read = (path: string) => readFileSync(resolve(here, path), 'utf8');
 
 const agentController = read('../private_storage/app/Domain/AbhAgentSubmissionsController.php');
+const agentAuthenticator = read('../private_storage/app/Security/AbhAuthenticator.php');
 const agentRepository = read('../private_storage/app/Database/AbhSubmissionRepository.php');
 const agentPortal = read('pages/AbhAgentPortalPage.tsx');
 const client = read('api/client.ts');
@@ -17,14 +18,15 @@ const kernel = read('../private_storage/app/Http/Kernel.php');
 
 describe('ABH submission and evidence workflow', () => {
   it('accepts signed multipart submissions and validates evidence integrity', () => {
-    expect(agentController).toContain("method() !== 'POST'");
-    expect(agentController).toContain('signedBody()');
+    expect(agentController).toContain("method() === 'POST'");
+    expect(agentAuthenticator).toContain('signedBody()');
     expect(agentController).toContain('evidence_sha256');
     expect(agentController).toContain('ImageInspector::inspectUploaded');
     expect(agentController).toContain('ImageInspector::sha256');
-    expect(agentController).toContain('PENDING_REVIEW');
+    expect(agentRepository).toContain("'PENDING_REVIEW'");
     expect(agentController).toContain('StorageState::hardenFile');
-    expect(agentController).toContain('StorageState::fsyncFile');
+    expect(agentController).toContain('fsync($handle)');
+    expect(agentController).toContain('StorageState::fsyncDir');
     expect(agentController).toContain('abh_evidence/pending');
   });
 
@@ -57,7 +59,11 @@ describe('ABH submission and evidence workflow', () => {
     expect(adminRepository).toContain('abh_enrollment_submissions');
     expect(adminRepository).toContain('abh_submission_reviews');
     expect(adminRepository).toContain('original_filename');
-    expect(adminRepository).not.toContain('storage_key');
+    const listMethod = adminRepository.slice(
+      adminRepository.indexOf('public static function list'),
+      adminRepository.indexOf('public static function evidence')
+    );
+    expect(listMethod).not.toContain('storage_key');
     expect(adminPage).toContain('Enrollment submissions');
     expect(adminPage).toContain('Evidence image');
   });
