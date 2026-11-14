@@ -56,7 +56,7 @@ describe('ABH monthly leaderboard', () => {
 
   it('returns the authenticated agent position even when the agent is outside the first page', () => {
     expect(repository).toContain("'viewer' => $viewerResult");
-    expect(repository).toContain("'is_viewer' => $viewerAgentId !== null");
+    expect(repository).toContain("$item['is_viewer'] = $viewerAgentId !== null");
     expect(repository).toContain('LIMIT ' + "' . $limit . ' OFFSET ' . $offset");
     expect(agentController).toContain('$agent->agentId()');
   });
