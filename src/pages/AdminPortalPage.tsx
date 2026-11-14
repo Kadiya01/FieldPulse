@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, KeyRound, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, LogOut, RefreshCw, ShieldCheck, UserRound, Users, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
 import {
   adminLogin,
@@ -149,7 +149,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
   const canReadAgents = admin.permissions.includes('agents.read');
   const canReadDevices = admin.permissions.includes('devices.read');
 
-  const loadAgents = async () => {
+  const loadAgents = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -161,9 +161,9 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
     } finally {
       setLoading(false);
     }
-  };
+  }, [status, search]);
 
-  const loadDetails = async (id: number) => {
+  const loadDetails = useCallback(async (id: number) => {
     setSelectedId(id);
     setDetails(null);
     setReason('');
@@ -173,9 +173,9 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load agent details.');
     }
-  };
+  }, []);
 
-  useEffect(() => { void loadAgents(); }, [status, search]);
+  useEffect(() => { void loadAgents(); }, [loadAgents]);
 
   const agentAction = async (decision: 'APPROVE' | 'REJECT' | 'SUSPEND' | 'REACTIVATE') => {
     if (!selectedId) return;
@@ -335,7 +335,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
                   {(permission('agents.reject') && details.agent.status === 'PENDING')
                     || (permission('agents.suspend') && details.agent.status === 'ACTIVE') ? (
                       <div className="mt-4 space-y-2">
-                        <label className="block text-xs font-semibold text-slate-600">Reason for rejection or suspension</label>
+                        <label className="block text-xs font-semibold text-slate-600">Reason for rejection, suspension or device revocation</label>
                         <textarea value={reason} onChange={event => setReason(event.target.value)} rows={2}
                           className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                         <div className="flex gap-2">
