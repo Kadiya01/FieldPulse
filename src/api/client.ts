@@ -1764,7 +1764,7 @@ export async function bootstrapFirstAdmin(input: {
   return envelope.admin;
 }
 
-export async function fetchAdminAgents(
+export async function fetchAbhAdminAgents(
   status: AdminAgentItem['status'] | 'ALL' = 'PENDING',
   search = '',
   limit = 25,
@@ -1780,7 +1780,7 @@ export async function fetchAdminAgents(
   return await response.json() as { items: AdminAgentItem[]; total: number; limit: number; offset: number };
 }
 
-export async function decideAdminAgent(
+export async function decideAbhAdminAgent(
   agentId: number,
   decision: 'APPROVE' | 'REJECT' | 'SUSPEND' | 'REACTIVATE',
   reason?: string
@@ -1795,7 +1795,7 @@ export async function decideAdminAgent(
   }
 }
 
-export async function decideAdminDevice(
+export async function decideAbhAdminDevice(
   deviceId: number,
   decision: 'APPROVE' | 'REVOKE',
   reason?: string
@@ -1837,7 +1837,7 @@ export interface AdminAgentDetails {
   }>;
 }
 
-export async function fetchAdminAgentDetails(agentId: number): Promise<AdminAgentDetails> {
+export async function fetchAbhAdminAgentDetails(agentId: number): Promise<AdminAgentDetails> {
   const response = await adminAuthenticatedFetch('/abh/admin/agent.php?id=' + encodeURIComponent(String(agentId)));
   if (!response.ok) {
     throw await toApiError(response);
