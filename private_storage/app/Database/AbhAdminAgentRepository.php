@@ -28,8 +28,13 @@ final class AbhAdminAgentRepository
             $params['status'] = $status;
         }
         if ($search !== '') {
-            $where[] = '(a.full_name LIKE :search OR a.agent_code LIKE :search OR a.phone LIKE :search OR a.email LIKE :search OR a.location_text LIKE :search)';
-            $params['search'] = '%' . $search . '%';
+            $where[] = '(a.full_name LIKE :search_name OR a.agent_code LIKE :search_code OR a.phone LIKE :search_phone OR a.email LIKE :search_email OR a.location_text LIKE :search_location)';
+            $pattern = '%' . $search . '%';
+            $params['search_name'] = $pattern;
+            $params['search_code'] = $pattern;
+            $params['search_phone'] = $pattern;
+            $params['search_email'] = $pattern;
+            $params['search_location'] = $pattern;
         }
         $clause = $where === [] ? '' : 'WHERE ' . implode(' AND ', $where);
 
