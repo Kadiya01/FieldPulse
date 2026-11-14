@@ -200,7 +200,7 @@ describe('route table and navigation agree', () => {
 
     expect(occurrences(appSource, /path="\/register"/g)).toBe(1);
     expect(appSource).toMatch(/RegisterPage/);
-    expect(read('pages/RegisterPage.tsx')).toContain('registerAgent');
+    expect(read('pages/RegisterPage.tsx')).toContain('registerAbhAgent');
 
     // The agent sign-in page points new agents to registration.
     expect(read('pages/LoginPage.tsx')).toMatch(/to="\/register"/);
