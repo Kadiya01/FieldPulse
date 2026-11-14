@@ -6,7 +6,8 @@ namespace FieldPulse\Database;
 
 /**
  * Shared read model for ABH live and frozen monthly leaderboards.
- * Closed periods always read snapshot rows; open periods read approved totals.
+ * Closed periods always read immutable snapshots; open periods are calculated
+ * from approved revisions, the source of truth used by agent monthly summaries.
  */
 final class AbhLeaderboardRepository
 {
@@ -29,6 +30,7 @@ final class AbhLeaderboardRepository
             'target_quantity' => null,
             'progress_percent' => null,
         ];
+
         $period = Connection::fetchOne(
             'SELECT id, period_key, status
                FROM abh_reporting_periods
@@ -93,51 +95,82 @@ final class AbhLeaderboardRepository
         } else {
             $total = (int) Connection::fetchValue(
                 'SELECT COUNT(*)
-                   FROM abh_monthly_agent_totals
-                  WHERE reporting_period_id = :period_id
-                    AND approved_quantity > 0',
-                ['period_id' => $periodId]
+                   FROM (
+                        SELECT s.agent_id
+                          FROM abh_enrollment_submissions s
+                          INNER JOIN abh_submission_revisions r ON r.id = s.current_revision_id
+                         WHERE s.reporting_period_id = :period_count
+                           AND s.status = "APPROVED"
+                         GROUP BY s.agent_id
+                   ) ranked_agents',
+                ['period_count' => $periodId]
             );
 
             $items = Connection::fetchAll(
-                'SELECT RANK() OVER (ORDER BY mt.approved_quantity DESC) AS rank_position,
-                        mt.agent_id, mt.approved_quantity,
+                'SELECT RANK() OVER (ORDER BY ranked.approved_quantity DESC) AS rank_position,
+                        ranked.agent_id, ranked.approved_quantity,
                         a.agent_code, a.full_name AS display_name,
                         t.target_quantity,
-                        ROUND(mt.approved_quantity / NULLIF(t.target_quantity, 0) * 100, 2) AS progress_percent
-                   FROM abh_monthly_agent_totals mt
-                   INNER JOIN abh_agents a ON a.id = mt.agent_id
+                        ROUND(ranked.approved_quantity / NULLIF(t.target_quantity, 0) * 100, 2) AS progress_percent
+                   FROM (
+                        SELECT s.agent_id, SUM(r.claimed_quantity) AS approved_quantity
+                          FROM abh_enrollment_submissions s
+                          INNER JOIN abh_submission_revisions r ON r.id = s.current_revision_id
+                         WHERE s.reporting_period_id = :period_aggregate
+                           AND s.status = "APPROVED"
+                         GROUP BY s.agent_id
+                   ) ranked
+                   INNER JOIN abh_agents a ON a.id = ranked.agent_id
                    LEFT JOIN abh_monthly_targets t
-                     ON t.reporting_period_id = mt.reporting_period_id
+                     ON t.reporting_period_id = :period_target
                     AND t.scope_type = "AGENT"
-                    AND t.scope_owner_id = mt.agent_id
-                    AND t.agent_id = mt.agent_id
-                  WHERE mt.reporting_period_id = :period_id
-                    AND mt.approved_quantity > 0
-                  ORDER BY rank_position ASC, mt.agent_id ASC
+                    AND t.scope_owner_id = ranked.agent_id
+                    AND t.agent_id = ranked.agent_id
+                  ORDER BY rank_position ASC, ranked.agent_id ASC
                   LIMIT ' . $limit . ' OFFSET ' . $offset,
-                ['period_id' => $periodId]
+                [
+                    'period_aggregate' => $periodId,
+                    'period_target' => $periodId,
+                ]
             );
 
             $viewer = $viewerAgentId === null ? null : Connection::fetchOne(
-                'SELECT mt.approved_quantity,
-                        (SELECT COUNT(*) + 1
-                           FROM abh_monthly_agent_totals ahead
-                          WHERE ahead.reporting_period_id = mt.reporting_period_id
-                            AND ahead.approved_quantity > mt.approved_quantity) AS rank_position,
+                'SELECT own.approved_quantity,
+                        (
+                            SELECT COUNT(*) + 1
+                              FROM (
+                                    SELECT s2.agent_id, SUM(r2.claimed_quantity) AS approved_quantity
+                                      FROM abh_enrollment_submissions s2
+                                      INNER JOIN abh_submission_revisions r2 ON r2.id = s2.current_revision_id
+                                     WHERE s2.reporting_period_id = :period_ahead
+                                       AND s2.status = "APPROVED"
+                                     GROUP BY s2.agent_id
+                              ) ahead
+                             WHERE ahead.approved_quantity > own.approved_quantity
+                        ) AS rank_position,
                         t.target_quantity,
-                        ROUND(mt.approved_quantity / NULLIF(t.target_quantity, 0) * 100, 2) AS progress_percent
-                   FROM abh_monthly_agent_totals mt
+                        ROUND(own.approved_quantity / NULLIF(t.target_quantity, 0) * 100, 2) AS progress_percent
+                   FROM (
+                        SELECT s.agent_id, SUM(r.claimed_quantity) AS approved_quantity
+                          FROM abh_enrollment_submissions s
+                          INNER JOIN abh_submission_revisions r ON r.id = s.current_revision_id
+                         WHERE s.reporting_period_id = :period_own
+                           AND s.status = "APPROVED"
+                         GROUP BY s.agent_id
+                   ) own
                    LEFT JOIN abh_monthly_targets t
-                     ON t.reporting_period_id = mt.reporting_period_id
+                     ON t.reporting_period_id = :period_target
                     AND t.scope_type = "AGENT"
-                    AND t.scope_owner_id = mt.agent_id
-                    AND t.agent_id = mt.agent_id
-                  WHERE mt.reporting_period_id = :period_id
-                    AND mt.agent_id = :agent_id
-                    AND mt.approved_quantity > 0
+                    AND t.scope_owner_id = own.agent_id
+                    AND t.agent_id = own.agent_id
+                  WHERE own.agent_id = :agent_id
                   LIMIT 1',
-                ['period_id' => $periodId, 'agent_id' => $viewerAgentId]
+                [
+                    'period_ahead' => $periodId,
+                    'period_own' => $periodId,
+                    'period_target' => $periodId,
+                    'agent_id' => $viewerAgentId,
+                ]
             );
         }
 
