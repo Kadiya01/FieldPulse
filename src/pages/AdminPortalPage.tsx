@@ -14,6 +14,7 @@ import {
   fetchAbhAdminTargets,
   saveAbhAdminTarget,
   closeAbhReportingPeriod,
+  fetchAbhAdminLeaderboard,
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   restoreAdminSession,
@@ -22,6 +23,7 @@ import {
   type AbhAdminSubmissionItem,
   type AbhAdminSubmissionStatus,
   type AbhAdminTargetData,
+  type AbhLeaderboardData,
   type SessionAdmin
 } from '../api/client';
 
@@ -762,8 +764,119 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
   );
 }
 
+function AdminLeaderboardView() {
+  const [month, setMonth] = useState(currentAdminMonth);
+  const [data, setData] = useState<AbhLeaderboardData | null>(null);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setData(await fetchAbhAdminLeaderboard(month, 100, 0));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The monthly leaderboard could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, [month]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  const filtered = (data?.items ?? []).filter(item => {
+    const term = search.trim().toLowerCase();
+    return term === '' || item.display_name.toLowerCase().includes(term) || item.agent_code.toLowerCase().includes(term);
+  });
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
+      <section className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Monthly leaderboard</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            {data?.period_status === 'CLOSED'
+              ? 'Final ranking from immutable month-end snapshots.'
+              : 'Live ranking based on administrator-approved enrollment quantities.'}
+          </p>
+        </div>
+        <label className="block text-sm font-semibold text-slate-700">
+          Reporting month
+          <input type="month" value={month} onChange={event => setMonth(event.target.value)}
+            className="mt-1 block rounded-xl border border-slate-300 bg-white px-3 py-2 font-normal text-slate-900" />
+        </label>
+      </section>
+
+      <section className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reporting period</p>
+          <p className="mt-2 text-xl font-bold text-slate-900">{data?.period_status ?? 'Not created'}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ranked agents</p>
+          <p className="mt-2 text-3xl font-bold tabular-nums text-slate-900">{data?.total ?? 0}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ranking rule</p>
+          <p className="mt-2 text-sm font-semibold text-slate-900">Equal totals share the same rank</p>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-bold text-slate-900">Approved agent performance</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="search" value={search} onChange={event => setSearch(event.target.value)}
+              placeholder="Filter agent or code"
+              className="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+            <button type="button" onClick={() => void load()} disabled={loading}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+              <RefreshCw size={14} aria-hidden="true" /> Refresh
+            </button>
+          </div>
+        </div>
+
+        {loading ? (
+          <p role="status" className="py-8 text-center text-sm text-slate-500">Loading monthly results…</p>
+        ) : filtered.length === 0 ? (
+          <p className="mt-4 rounded-xl bg-slate-50 p-6 text-center text-sm text-slate-600">No approved enrollments are ranked for this month.</p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                <tr><th className="py-3 pr-4">Rank</th><th className="py-3 pr-4">Agent</th><th className="py-3 pr-4">Agent code</th><th className="py-3 pr-4 text-right">Approved enrollments</th><th className="py-3 text-right">Target progress</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map(item => (
+                  <tr key={item.agent_id}>
+                    <td className="py-3 pr-4 font-bold tabular-nums text-slate-900">#{item.rank_position}</td>
+                    <td className="py-3 pr-4 font-semibold text-slate-900">{item.display_name}</td>
+                    <td className="py-3 pr-4 text-slate-600">{item.agent_code}</td>
+                    <td className="py-3 pr-4 text-right font-semibold tabular-nums text-slate-900">{item.approved_quantity.toLocaleString()}</td>
+                    <td className="py-3 text-right tabular-nums text-slate-700">
+                      {item.progress_percent === null ? '—' : `${item.progress_percent}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+        {data && data.total > data.items.length && (
+          <p className="mt-3 text-xs text-slate-500">Showing {data.items.length} of {data.total} ranked agents.</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
-  const [activeSection, setActiveSection] = useState<'agents' | 'submissions' | 'targets'>(() =>
+  const [activeSection, setActiveSection] = useState<'agents' | 'submissions' | 'targets' | 'leaderboard'>(() =>
     admin.permissions.includes('agents.read')
       ? 'agents'
       : admin.permissions.includes('submissions.read')
@@ -896,6 +1009,12 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Enrollment review
             </button>
           )}
+          {admin.permissions.includes('submissions.read') && (
+            <button type="button" onClick={() => setActiveSection('leaderboard')}
+              className={activeSection === 'leaderboard' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              Leaderboard
+            </button>
+          )}
           {(admin.permissions.includes('targets.manage') || admin.permissions.includes('periods.close')) && (
             <button type="button" onClick={() => setActiveSection('targets')}
               className={activeSection === 'targets' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
@@ -907,6 +1026,8 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
 
       {activeSection === 'submissions' ? (
         <AdminSubmissionQueue admin={admin} />
+      ) : activeSection === 'leaderboard' ? (
+        <AdminLeaderboardView />
       ) : activeSection === 'targets' ? (
         <AdminTargetManagement admin={admin} />
       ) : (
