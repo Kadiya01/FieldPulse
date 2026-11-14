@@ -6,6 +6,7 @@ namespace FieldPulse\Domain;
 
 use FieldPulse\Config\Config;
 use FieldPulse\Database\AbhSubmissionRepository;
+use FieldPulse\Database\AbhSubmissionCorrectionRepository;
 use FieldPulse\Http\ApiException;
 use FieldPulse\Http\ErrorCode;
 use FieldPulse\Http\Request;
@@ -26,6 +27,7 @@ final class AbhAgentSubmissionsController implements ActionInterface
 {
     private const ALLOWED_PAYLOAD_KEYS = [
         'idempotency_key',
+        'submission_id',
         'reporting_month',
         'activity_date',
         'claimed_quantity',
@@ -96,6 +98,9 @@ final class AbhAgentSubmissionsController implements ActionInterface
 
         $payload = $this->readPayload($request);
         $idempotencyKey = Validator::uuid($payload['idempotency_key'] ?? null, 'idempotency_key');
+        $submissionId = array_key_exists('submission_id', $payload)
+            ? Validator::intRange($payload['submission_id'], 1, 2147483647, 'submission_id')
+            : null;
         $monthStart = Validator::periodMonth($payload['reporting_month'] ?? null, 'reporting_month', false);
         $periodKey = substr($monthStart, 0, 7);
 
@@ -143,7 +148,9 @@ final class AbhAgentSubmissionsController implements ActionInterface
         // A retry with the same key must be the same logical submission. This
         // avoids duplicate rows and prevents a changed payload being smuggled
         // under a reused idempotency key.
-        $existing = AbhSubmissionRepository::findByIdempotencyKey($context->agentId(), $idempotencyKey);
+        $existing = $submissionId === null
+            ? AbhSubmissionRepository::findByIdempotencyKey($context->agentId(), $idempotencyKey)
+            : AbhSubmissionCorrectionRepository::findByIdempotencyKey($context->agentId(), $submissionId, $idempotencyKey);
         if ($existing !== null) {
             return $this->existingResponse($existing, $periodKey, $activityDate, $quantity, $note, $actualHash);
         }
@@ -152,24 +159,41 @@ final class AbhAgentSubmissionsController implements ActionInterface
         $storageKey = $this->storeEvidence($inspection, $context->agentId(), $periodKey);
 
         try {
-            $created = AbhSubmissionRepository::create(
-                $context->agentId(),
-                $periodKey,
-                $idempotencyKey,
-                $activityDate,
-                $quantity,
-                $note,
-                $storageKey,
-                $originalFilename,
-                $inspection['mime'],
-                $inspection['size'],
-                $actualHash
-            );
+            $created = $submissionId === null
+                ? AbhSubmissionRepository::create(
+                    $context->agentId(),
+                    $periodKey,
+                    $idempotencyKey,
+                    $activityDate,
+                    $quantity,
+                    $note,
+                    $storageKey,
+                    $originalFilename,
+                    $inspection['mime'],
+                    $inspection['size'],
+                    $actualHash
+                )
+                : AbhSubmissionCorrectionRepository::create(
+                    $context->agentId(),
+                    $submissionId,
+                    $periodKey,
+                    $idempotencyKey,
+                    $activityDate,
+                    $quantity,
+                    $note,
+                    $storageKey,
+                    $originalFilename,
+                    $inspection['mime'],
+                    $inspection['size'],
+                    $actualHash
+                );
         } catch (\Throwable $error) {
             $this->removeEvidence($storageKey);
 
             if ($this->isDuplicateKey($error)) {
-                $winner = AbhSubmissionRepository::findByIdempotencyKey($context->agentId(), $idempotencyKey);
+                $winner = $submissionId === null
+                    ? AbhSubmissionRepository::findByIdempotencyKey($context->agentId(), $idempotencyKey)
+                    : AbhSubmissionCorrectionRepository::findByIdempotencyKey($context->agentId(), $submissionId, $idempotencyKey);
                 if ($winner !== null) {
                     return $this->existingResponse($winner, $periodKey, $activityDate, $quantity, $note, $actualHash);
                 }
@@ -180,10 +204,26 @@ final class AbhAgentSubmissionsController implements ActionInterface
 
         if (isset($created['error'])) {
             $this->removeEvidence($storageKey);
-            $message = $created['error'] === 'date_outside_period'
-                ? 'The activity date is outside the configured reporting period.'
+            if ($created['error'] === 'idempotency_conflict') {
+                throw new ApiException(409, ErrorCode::IDEMPOTENCY_CONFLICT, 'This revision key was already used for different correction data.');
+            }
+            if ($created['error'] === 'not_found') {
+                throw new ApiException(404, ErrorCode::NOT_FOUND, 'Enrollment submission not found.');
+            }
+            if ($created['error'] === 'state_conflict') {
+                throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'This submission is not awaiting a correction.');
+            }
+            $message = $created['error'] === 'date_outside_period' || $created['error'] === 'period_conflict'
+                ? 'The corrected activity must remain within the original reporting month.'
                 : 'This reporting month is not open for submissions.';
             throw new ApiException(409, ErrorCode::STATE_CONFLICT, $message);
+        }
+
+        // When two identical correction requests race, the loser finds the
+        // already committed revision inside the transaction and removes its
+        // unreferenced upload before returning the idempotent result.
+        if ($submissionId !== null && ($created['idempotent_replay'] ?? false)) {
+            $this->removeEvidence($storageKey);
         }
 
         return Response::json([
@@ -304,6 +344,7 @@ final class AbhAgentSubmissionsController implements ActionInterface
                 'activity_date' => (string) $existing['activity_date'],
                 'claimed_quantity' => (int) $existing['claimed_quantity'],
                 'submitted_at' => (string) $existing['submitted_at'],
+                'revision_no' => (int) ($existing['revision_no'] ?? 1),
                 'idempotent_replay' => true,
             ],
         ]);
