@@ -54,7 +54,7 @@ The dedicated migration runner is bound to:
 - Preview URL: `https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng`
 - Private root: `/home/abhgloba/abhpreview_private_storage`
 
-Migrations 001–006 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests (98 checks per engine before the authentication migration). Migration 007 adds ABH browser-key binding, opaque agent sessions, replay nonces and a dedicated login-attempt ledger; it is awaiting its next schema-compatibility run. These tests use disposable CI databases; they do not apply migrations to cPanel. No migration has been applied to the cPanel staging database.
+Migrations 001–007 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. Migration 007 passed 114 checks on each engine in GitHub Actions run #43622516500. These tests use disposable CI databases; they do not apply migrations to cPanel. No migration has been applied to the cPanel staging database.
 
 ## 4. Application readiness — remaining blocker
 
@@ -68,14 +68,15 @@ The first ABH application slice is now implemented and CI-verified:
 - `AbhAgentRegistrationController` and `AbhAgentRepository` write only to ABH-owned tables; the account, password hash, pending device key, audit event and admin notifications are created transactionally.
 - Migration 006 adds unique normalized phone and globally unique IMEI constraints plus hashed ABH registration throttling.
 - Migration 007 adds browser device UUID/JWK columns, ABH-only access/refresh session records, one-time nonces and a login-attempt ledger.
-- ABH agent login now uses phone/password plus proof of the registered browser key. Pending/rejected/suspended agents and non-active devices are denied. Refresh tokens rotate; reuse revokes the token family and device.
-- ABH requests are authenticated by a dedicated `AbhAuthenticator`; ABH tokens are not sent to legacy FieldPulse authentication tables.
+- ABH agent login uses phone/password plus proof of the registered browser key. Pending/rejected/suspended agents and non-active devices are denied. Refresh tokens rotate; reuse revokes the token family and device.
+- ABH requests use the dedicated `AbhAuthenticator`; ABH tokens are not sent to legacy FieldPulse authentication tables.
+- Session restoration uses a cross-tab Web Lock to prevent concurrent use of the same single-use refresh cookie; browser-key loss ends the server session and requires administrator device replacement.
 - The authenticated app temporarily blocks legacy FieldPulse screens until ABH dashboard, submission and admin APIs are implemented.
-- GitHub Actions run #62 is the last previously verified release run; Phase 2 commits and migration 007 still require a new successful CI run before this section can be marked verified.
+- GitHub Actions run #43622516500 passed: 117 frontend tests, PHP syntax/build, 5 bootstrap checks, 19 migration-planning checks, 114 MySQL 8.0 schema checks and 114 MariaDB 11.4 schema checks. The cPanel deployment job was skipped by the guard.
 
 The overall build is still **NOT READY** for deployment as the complete ABH Monthly Enrollment System:
 
-- ABH agent authentication code is implemented but migration 007 and the new contract tests are still awaiting CI verification.
+- Agent authentication is implemented and CI-verified, but no cPanel deployment or runtime browser/database integration test has been performed.
 - ABH admin authentication, agent approval/rejection/suspension, and device authorization are not yet connected to the new ABH tables.
 - The old capture/queue/review/rewards route tree still exists; the ABH enrollment reporting and management pages are not yet complete.
 - ABH submissions, evidence, reviews, target management, final monthly leaderboard, reward management and payment/delivery flows still need their ABH-specific controllers and end-to-end tests.
@@ -84,8 +85,8 @@ Do not upload this intermediate build as the completed ABH system. The registrat
 
 ## 5. Required work before application deployment
 
-1. Finish CI verification and runtime tests for ABH phone/password login, browser-key proof, revocable sessions and replay protection. Pending, rejected and suspended agents must be denied; IMEI remains device metadata, not a password.
-2. Implement ABH admin authentication, agent approval, suspension, device authorization and role separation against the ABH tables.
+1. Implement ABH admin authentication and role separation, then wire agent approval/rejection/suspension and independent device authorization against the ABH tables.
+2. Perform runtime browser/API tests for ABH phone/password login, browser-key proof, revocable sessions and replay protection in the isolated preview environment; pending, rejected and suspended agents must be denied, and IMEI remains device metadata, not a password.
 3. Implement ABH enrollment submission, private evidence storage, correction/resubmission and admin review against `abh_enrollment_submissions`, revisions, evidence and reviews.
 4. Implement monthly targets, approved totals, leaderboard finalization, reward eligibility, management award decisions, payment/delivery and audit records.
 5. Complete agent/admin browser end-to-end tests and the required PHP/database release gate.
