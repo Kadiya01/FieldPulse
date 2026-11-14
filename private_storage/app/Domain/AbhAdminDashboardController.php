@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace FieldPulse\\Domain;
+namespace FieldPulse\Domain;
 
-use FieldPulse\\Database\\AbhAdminDashboardRepository;
-use FieldPulse\\Http\\ApiException;
-use FieldPulse\\Http\\ErrorCode;
-use FieldPulse\\Http\\Request;
-use FieldPulse\\Http\\Response;
+use FieldPulse\Database\AbhAdminDashboardRepository;
+use FieldPulse\Http\ApiException;
+use FieldPulse\Http\ErrorCode;
+use FieldPulse\Http\Request;
+use FieldPulse\Http\Response;
 
 /** GET /api/v1/abh/admin/dashboard.php */
 final class AbhAdminDashboardController implements ActionInterface
@@ -34,7 +34,7 @@ final class AbhAdminDashboardController implements ActionInterface
         }
 
         $month = Validator::periodMonth(
-            $request->query('month') ?? (new \\DateTimeImmutable('now', new \\DateTimeZone('Africa/Lagos')))->format('Y-m'),
+            $request->query('month') ?? (new \DateTimeImmutable('now', new \DateTimeZone('Africa/Lagos')))->format('Y-m'),
             'month',
             true
         );
