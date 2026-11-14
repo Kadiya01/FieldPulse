@@ -47,7 +47,7 @@ The dedicated migration runner is bound to:
 - Preview URL: `https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng`
 - Private root: `/home/abhgloba/abhpreview_private_storage`
 
-Migrations 001–009 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. Migration 009 adds per-submission revision idempotency for correction resubmissions. The complete current schema suite passed **133 checks on each engine** in GitHub Actions run #43627583819. These checks ran against disposable CI databases; they did not apply migrations to cPanel. **No migration has been applied to the cPanel staging database.**
+Migrations 001–010 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. Migration 009 adds per-submission revision idempotency for correction resubmissions. Migration 010 seeds the separate `periods.close` permission and widens the frozen organisation progress percentage. The complete schema suite passed **135 checks on each engine** in GitHub Actions run #43628703261. These checks ran against disposable CI databases; they did not apply migrations to cPanel. **No migration has been applied to the cPanel staging database.**
 
 ## 4. Implemented application slices
 
@@ -96,33 +96,39 @@ The following ABH slices are implemented on the feature branch and passed the ap
 - Approval increments the agent’s approved monthly total exactly once. A second decision on an already reviewed submission is rejected; identical retries with the same review idempotency key return the existing result.
 - Review decisions are blocked once the reporting period is CLOSED.
 
+### Monthly target management and period finalisation
+
+- Administrators with `targets.manage` can set organisation-wide and individual monthly targets for active agents. Target changes are audited, serialized against period closure and blocked when a period is CLOSED.
+- Administrators with `periods.close` can read month-close readiness and finalize a completed reporting month. The month must have fully elapsed and there must be no PENDING_REVIEW or CORRECTION_REQUESTED submissions.
+- Closure recomputes approved quantities from the approved submission/revision ledger and compares them with `abh_monthly_agent_totals`. A mismatch blocks closure for reconciliation.
+- In one transaction, closure writes immutable per-agent leaderboard snapshots and an organisation snapshot, marks the period CLOSED, writes an audit event and notifies active agents. The frozen snapshot preserves the agent code and display name as they were at close time.
+- Closed periods cannot accept new submissions, corrected revisions, review decisions or target edits. The admin target page displays the frozen organisation quantity, target and progress.
+
 ## 5. Latest CI evidence
 
-GitHub Actions run #43627583819 passed:
+GitHub Actions run #43628703261 passed:
 
 - Frontend lint passed.
-- **15 frontend test files; 148 tests passed.**
+- **17 frontend test files; 159 tests passed.**
 - PHP syntax checks passed.
 - 5 preview bootstrap isolation checks passed.
 - 19 ABH migration-planning checks passed.
 - Frontend production build and build-output verification passed.
-- MySQL 8.0 ABH schema compatibility: **133 checks passed**.
-- MariaDB 11.4 ABH schema compatibility: **133 checks passed**.
+- MySQL 8.0 ABH schema compatibility: **135 checks passed**.
+- MariaDB 11.4 ABH schema compatibility: **135 checks passed**.
 - The separate **Deploy to ABH preview cPanel (FTPS)** job was **skipped** by the deployment safety guard.
 
-Run: https://github.com/Kadiya01/FieldPulse/actions/runs/43627583819
+Run: https://github.com/Kadiya01/FieldPulse/actions/runs/43628703261
 
 ## 6. Overall application readiness
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-The implemented registration, authentication, agent submissions, correction, administrator agent/device review and submission review slices are not yet the complete ABH Monthly Enrollment System. No live preview application deployment, cPanel migration, or browser-to-staging-database end-to-end runtime test has been performed.
+The implemented registration, authentication, agent submissions, correction, administrator agent/device review, submission review, monthly target management and period-finalisation slices are not yet the complete ABH Monthly Enrollment System. No live preview application deployment, cPanel migration, or browser-to-staging-database end-to-end runtime test has been performed.
 
 Remaining work includes:
 
-- Admin management of organisation, team and individual monthly targets, including target assignment and editing screens.
-- Period-close/finalization workflow, frozen organisation/agent leaderboard snapshots and admin controls for reopening or correcting closed periods with auditable safeguards.
-- A full agent leaderboard view with month filters and preserved prior-month rankings.
+- A full agent and administrator leaderboard view with month filters and preserved prior-month rankings using the frozen snapshots.
 - Agent/admin notification APIs, inbox screens, unread state and notification preferences.
 - Reward-programme management, rule configuration, automatic qualification previews, award approval, gift assignment, and separate payment/delivery recording and screens.
 - Admin dashboard summaries for agent counts, submissions, approved totals, targets and reward status using live database values.
