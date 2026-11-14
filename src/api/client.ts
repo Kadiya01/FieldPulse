@@ -1,4 +1,4 @@
-import { getDeviceIdentity, signPayload, hashRequestBody, generateNonce } from '../crypto/keys';
+import { getDeviceIdentity, signPayload, hashRequestBody, generateNonce, sha256Hex } from '../crypto/keys';
 import {
   getAccessToken,
   setAccessToken,
@@ -368,6 +368,101 @@ export async function registerAbhAgent(input: AbhAgentRegistrationInput): Promis
   }
 
   return await response.json() as AbhAgentRegistrationResult;
+}
+
+/** ABH monthly enrollment submission returned by the dedicated API. */
+export interface AbhAgentSubmissionItem {
+  id: number;
+  reference_no: string;
+  status: string;
+  period_key: string;
+  activity_date: string;
+  claimed_quantity: number;
+  submitted_at: string;
+  revision_no: number;
+}
+
+export interface AbhAgentSubmissionList {
+  items: AbhAgentSubmissionItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  month: string | null;
+}
+
+type AbhSubmissionResponse = {
+  id: number;
+  reference_no: string;
+  status: string;
+  period_key: string;
+  activity_date: string;
+  claimed_quantity: number;
+  submitted_at: string;
+  revision_no: number;
+  idempotent_replay: boolean;
+};
+
+/**
+ * Submit monthly enrollment activity with evidence. The exact JSON payload is
+ * signed and then placed unchanged into the multipart payload field.
+ */
+export async function submitAbhEnrollment(input: {
+  idempotency_key: string;
+  reporting_month: string;
+  activity_date: string;
+  claimed_quantity: number;
+  agent_note?: string;
+  evidence: File;
+}): Promise<AbhSubmissionResponse> {
+  const evidenceHash = await sha256Hex(input.evidence);
+  const payload = {
+    idempotency_key: input.idempotency_key,
+    reporting_month: input.reporting_month,
+    activity_date: input.activity_date,
+    claimed_quantity: input.claimed_quantity,
+    ...(input.agent_note?.trim() ? { agent_note: input.agent_note.trim() } : {}),
+    evidence_sha256: evidenceHash
+  };
+  const rawPayload = JSON.stringify(payload);
+  const form = new FormData();
+  form.append('payload', rawPayload);
+  form.append('evidence', input.evidence, input.evidence.name || 'evidence');
+
+  const response = await authenticatedFetch('/abh/agents/submissions.php', {
+    method: 'POST',
+    body: form,
+    signedBody: rawPayload
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhSubmissionResponse };
+  return envelope.data;
+}
+
+export async function fetchAbhAgentSubmissions(
+  month?: string,
+  limit = 25,
+  offset = 0
+): Promise<AbhAgentSubmissionList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (month) params.set('month', month);
+
+  const response = await authenticatedFetch('/abh/agents/submissions.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as {
+    data: AbhAgentSubmissionItem[];
+    meta: { total: number; limit: number; offset: number; month: string | null };
+  };
+  return {
+    items: envelope.data,
+    total: envelope.meta.total,
+    limit: envelope.meta.limit,
+    offset: envelope.meta.offset,
+    month: envelope.meta.month
+  };
 }
 
 export interface AgentRegistrationInput {
