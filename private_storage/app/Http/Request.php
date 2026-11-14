@@ -64,6 +64,29 @@ final class Request
      * receives none gets a 401, never an anonymous request.
      */
     private ?\FieldPulse\Security\AuthContext $authContext = null;
+    private ?\FieldPulse\Security\AbhAdminContext $abhAdminContext = null;
+
+    /** @internal Called only by Http\Kernel. */
+    public function setAbhAdminContext(\FieldPulse\Security\AbhAdminContext $context): void
+    {
+        $this->abhAdminContext = $context;
+    }
+
+    public function abhAdminContext(): ?\FieldPulse\Security\AbhAdminContext
+    {
+        return $this->abhAdminContext;
+    }
+
+    public function requireAbhAdminContext(): \FieldPulse\Security\AbhAdminContext
+    {
+        if ($this->abhAdminContext === null) {
+            throw new ApiException(401, ErrorCode::UNAUTHENTICATED, 'ABH administrator authentication is required.');
+        }
+
+        return $this->abhAdminContext;
+    }
+
+
 
     /** @internal Called only by Http\Kernel. */
     public function setAuthContext(\FieldPulse\Security\AuthContext $context): void
