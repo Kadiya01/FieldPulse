@@ -43,6 +43,9 @@ final class Kernel
         'abh.admin.agent.details' => \FieldPulse\Domain\AbhAdminAgentDetailsController::class,
         'abh.admin.agent.decision' => \FieldPulse\Domain\AbhAdminAgentDecisionController::class,
         'abh.admin.device.decision' => \FieldPulse\Domain\AbhAdminDeviceDecisionController::class,
+        'abh.admin.submissions' => \FieldPulse\Domain\AbhAdminSubmissionsController::class,
+        'abh.admin.submission.decision' => \FieldPulse\Domain\AbhAdminSubmissionDecisionController::class,
+        'abh.admin.submission.evidence' => \FieldPulse\Domain\AbhAdminSubmissionEvidenceController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
@@ -111,6 +114,9 @@ final class Kernel
         'abh.admin.auth.login' => 'public',
         'abh.admin.auth.refresh' => 'public',
         'abh.admin.auth.logout' => 'public',
+        'abh.admin.submissions' => 'admin',
+        'abh.admin.submission.decision' => 'admin',
+        'abh.admin.submission.evidence' => 'admin',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
         'device.register'  => 'bootstrap',
