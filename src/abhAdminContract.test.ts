@@ -89,6 +89,19 @@ describe('ABH administrator security and management contract', () => {
     expect(detailsController).toContain("$admin->hasPermission('devices.read')");
   });
 
+  it('keeps ABH admin browser calls namespaced away from legacy admin APIs', () => {
+    expect(api).toContain('fetchAbhAdminAgents');
+    expect(api).toContain('decideAbhAdminAgent');
+    expect(api).toContain('decideAbhAdminDevice');
+    expect(api).toContain('fetchAbhAdminAgentDetails');
+  });
+
+  it('uses distinct native-PDO placeholders for device approval fields', () => {
+    expect(agentRepository).toContain(':is_approved_at');
+    expect(agentRepository).toContain(':is_approved_by');
+    expect(agentRepository).not.toContain(':is_approved = 1');
+  });
+
   it('uses a separate administrator browser session and portal route', () => {
     expect(api).toContain('/abh/admin/auth/login.php');
     expect(api).toContain('/abh/admin/auth/refresh.php');
