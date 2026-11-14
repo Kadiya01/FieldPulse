@@ -60,7 +60,10 @@ final class AbhAgentLoginController implements ActionInterface
 
         // Unknown phone/device combinations perform the same password-hash
         // verification work as a real account, and share one generic response.
-        if ($identity === null || !Credentials::verify($password, $identity['password_hash'] ?? null)) {
+        // Do the bcrypt comparison even when the phone/device lookup misses.
+        // Credentials::verify() performs a decoy comparison for unknown users.
+        $passwordValid = Credentials::verify($password, $identity['password_hash'] ?? null);
+        if ($identity === null || !$passwordValid) {
             throw new ApiException(401, ErrorCode::UNAUTHENTICATED, 'Phone number, password or registered device is incorrect.');
         }
 
