@@ -102,7 +102,11 @@ describe('Session restore', () => {
     });
     expect(getAccessToken()).toBe('restored-token');
     // The token is memory-only; nothing may have written it anywhere durable.
-    expect(sessionState.announceAccessToken).toHaveBeenCalledWith('restored-token');
+    expect(sessionState.announceAccessToken).toHaveBeenCalledWith('restored-token', {
+      id: 1,
+      agent_code: 'AG-001',
+      full_name: 'Ada'
+    });
   });
 
   it('reports an anonymous visitor when the cookie is rejected', async () => {
