@@ -95,8 +95,8 @@ describe('ABH administrator security and management contract', () => {
     expect(api).toContain('/abh/admin/auth/logout.php');
     expect(api).toContain("'abh:admin:refresh'");
     expect(api).toContain("new BroadcastChannel('abh-admin-session')");
-    expect(api).toContain('fetchAdminAgents');
-    expect(api).toContain('decideAdminDevice');
+    expect(api).toContain('fetchAbhAdminAgents');
+    expect(api).toContain('decideAbhAdminDevice');
     expect(app).toContain('useLocation');
     expect(app).toContain('<AdminPortalPage />');
     expect(page).toContain('Administrator sign in');
