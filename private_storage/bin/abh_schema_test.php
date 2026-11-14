@@ -135,6 +135,9 @@ try {
         'abh_audit_events',
         'abh_notifications',
         'abh_registration_attempts',
+        'abh_agent_sessions',
+        'abh_auth_nonces',
+        'abh_auth_attempts',
     ];
 
     $tableRows = $pdo->query(
@@ -152,6 +155,22 @@ try {
         if (isset($engines[$table])) {
             abhSchemaAssert($table . ' uses InnoDB', strtoupper($engines[$table]) === 'INNODB');
         }
+    }
+
+    $deviceColumns = $pdo->query(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_agent_devices'"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    abhSchemaAssert('ABH devices store browser UUIDs', in_array('device_uuid', $deviceColumns, true));
+    abhSchemaAssert('ABH devices store public JWKs', in_array('public_key_jwk', $deviceColumns, true));
+    abhSchemaAssert('ABH devices store last-seen timestamps', in_array('last_seen_at', $deviceColumns, true));
+
+    $sessionColumns = $pdo->query(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_agent_sessions'"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    foreach (['access_token_hash', 'refresh_token_hash', 'token_family', 'access_expires_at', 'refresh_expires_at', 'revoked_at', 'rotated_to_session_id'] as $column) {
+        abhSchemaAssert('ABH session field exists: ' . $column, in_array($column, $sessionColumns, true));
     }
 
     $foreignKeyCount = (int) $pdo->query(
