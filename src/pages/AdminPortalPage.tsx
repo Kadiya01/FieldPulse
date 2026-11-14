@@ -11,6 +11,8 @@ import {
   decideAbhAdminSubmission,
   fetchAbhAdminSubmissionEvidence,
   fetchAbhAdminSubmissions,
+  fetchAbhAdminTargets,
+  saveAbhAdminTarget,
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   restoreAdminSession,
@@ -18,6 +20,7 @@ import {
   type AdminAgentItem,
   type AbhAdminSubmissionItem,
   type AbhAdminSubmissionStatus,
+  type AbhAdminTargetData,
   type SessionAdmin
 } from '../api/client';
 
@@ -427,9 +430,251 @@ function AdminSubmissionQueue({ admin }: { admin: SessionAdmin }) {
   );
 }
 
+function currentAdminMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
+  const [month, setMonth] = useState(currentAdminMonth);
+  const [data, setData] = useState<AbhAdminTargetData | null>(null);
+  const [organisationQuantity, setOrganisationQuantity] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [agentQuantity, setAgentQuantity] = useState('');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const isClosed = data?.period?.status === 'CLOSED';
+  const canManage = admin.permissions.includes('targets.manage');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchAbhAdminTargets(month);
+      setData(result);
+      setOrganisationQuantity(result.organisation_target === null ? '' : String(result.organisation_target));
+      setSelectedAgentId(current => {
+        const exists = current !== '' && result.agents.some(agent => agent.id === Number(current));
+        const next = exists ? current : String(result.agents[0]?.id ?? '');
+        const target = result.agent_targets.find(item => item.agent_id === Number(next));
+        setAgentQuantity(target ? String(target.target_quantity) : '');
+        return next;
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Monthly targets could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, [month]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  const saveOrganisation = async () => {
+    const quantity = Number(organisationQuantity);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1000000000) {
+      setError('Enter an organisation target between 1 and 1,000,000,000.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      await saveAbhAdminTarget({ period_key: month, scope_type: 'ORGANISATION', target_quantity: quantity });
+      setNotice(`Organisation target for ${month} saved.`);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The organisation target could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveAgent = async () => {
+    const quantity = Number(agentQuantity);
+    const agentId = Number(selectedAgentId);
+    if (!Number.isInteger(agentId) || agentId < 1) {
+      setError('Select an active agent.');
+      return;
+    }
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1000000000) {
+      setError('Enter an individual target between 1 and 1,000,000,000.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      await saveAbhAdminTarget({
+        period_key: month,
+        scope_type: 'AGENT',
+        agent_id: agentId,
+        target_quantity: quantity
+      });
+      setNotice('Individual target saved.');
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The individual target could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredTargets = (data?.agent_targets ?? []).filter(item => {
+    const term = search.trim().toLowerCase();
+    return term === '' || [item.full_name, item.agent_code, item.phone].some(value => value.toLowerCase().includes(term));
+  });
+
+  const chooseAgent = (id: string) => {
+    setSelectedAgentId(id);
+    const target = data?.agent_targets.find(item => item.agent_id === Number(id));
+    setAgentQuantity(target ? String(target.target_quantity) : '');
+  };
+
+  if (!canManage) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-8">
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          Your administrator role does not include permission to manage monthly targets.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
+      <section className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Monthly targets</h1>
+          <p className="mt-1 text-sm text-slate-600">Set the organisation goal and individual agent goals. Target changes are audited.</p>
+        </div>
+        <label className="block text-sm font-semibold text-slate-700">
+          Reporting month
+          <input type="month" value={month} onChange={event => setMonth(event.target.value)}
+            className="mt-1 block rounded-xl border border-slate-300 bg-white px-3 py-2 font-normal text-slate-900" />
+        </label>
+      </section>
+
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Period status</p>
+          <p className="mt-1 font-semibold text-slate-900">
+            {data?.period ? data.period.status : 'Not created'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {data?.period
+              ? `${data.period.starts_on} to ${data.period.ends_on} · ${data.period.timezone}`
+              : 'Saving the first target creates this month as an OPEN reporting period.'}
+          </p>
+        </div>
+        {isClosed && (
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            Closed periods cannot be edited
+          </span>
+        )}
+      </section>
+
+      {loading && <p role="status" className="rounded-xl bg-white p-4 text-sm text-slate-600">Loading targets…</p>}
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-900">Organisation target</h2>
+          <p className="mt-1 text-sm text-slate-600">One approved-enrollment goal for the whole organisation.</p>
+          <label className="mt-4 block text-sm font-semibold text-slate-700">
+            Monthly enrollment target
+            <input type="number" min={1} max={1000000000} step={1} value={organisationQuantity}
+              onChange={event => setOrganisationQuantity(event.target.value)}
+              disabled={isClosed || saving}
+              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3 text-slate-900 disabled:bg-slate-100" />
+          </label>
+          <button type="button" onClick={() => void saveOrganisation()}
+            disabled={loading || saving || isClosed || !organisationQuantity}
+            className="mt-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save organisation target'}
+          </button>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-900">Individual agent target</h2>
+          <p className="mt-1 text-sm text-slate-600">Set or update a monthly goal for an active approved agent.</p>
+          <label className="mt-4 block text-sm font-semibold text-slate-700">
+            Agent
+            <select value={selectedAgentId} onChange={event => chooseAgent(event.target.value)}
+              disabled={isClosed || saving || !data?.agents.length}
+              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3 text-slate-900 disabled:bg-slate-100">
+              <option value="">Select an active agent</option>
+              {(data?.agents ?? []).map(agent => (
+                <option key={agent.id} value={agent.id}>{agent.full_name} · {agent.agent_code}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-4 block text-sm font-semibold text-slate-700">
+            Monthly enrollment target
+            <input type="number" min={1} max={1000000000} step={1} value={agentQuantity}
+              onChange={event => setAgentQuantity(event.target.value)}
+              disabled={isClosed || saving || !selectedAgentId}
+              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-3 text-slate-900 disabled:bg-slate-100" />
+          </label>
+          <button type="button" onClick={() => void saveAgent()}
+            disabled={loading || saving || isClosed || !selectedAgentId || !agentQuantity}
+            className="mt-4 rounded-xl bg-blue-700 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save individual target'}
+          </button>
+        </section>
+      </div>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Assigned agent targets</h2>
+            <p className="mt-1 text-xs text-slate-500">{data?.agent_targets.length ?? 0} individual target(s) for {month}</p>
+          </div>
+          <input type="search" value={search} onChange={event => setSearch(event.target.value)}
+            placeholder="Filter by agent, code or phone"
+            className="w-full max-w-sm rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+        </div>
+        {filteredTargets.length === 0 ? (
+          <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-600">No individual targets have been assigned in this month.</p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                <tr><th className="py-3 pr-4">Agent</th><th className="py-3 pr-4">Code</th><th className="py-3 pr-4">Phone</th><th className="py-3 text-right">Target</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredTargets.map(item => (
+                  <tr key={item.id}>
+                    <td className="py-3 pr-4 font-medium text-slate-900">{item.full_name}</td>
+                    <td className="py-3 pr-4 text-slate-600">{item.agent_code}</td>
+                    <td className="py-3 pr-4 text-slate-600">{item.phone}</td>
+                    <td className="py-3 text-right font-semibold tabular-nums text-slate-900">{item.target_quantity.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+      {notice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
+    </div>
+  );
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
-  const [activeSection, setActiveSection] = useState<'agents' | 'submissions'>(
-    admin.permissions.includes('agents.read') ? 'agents' : 'submissions'
+  const [activeSection, setActiveSection] = useState<'agents' | 'submissions' | 'targets'>(() =>
+    admin.permissions.includes('agents.read')
+      ? 'agents'
+      : admin.permissions.includes('submissions.read')
+        ? 'submissions'
+        : 'targets'
   );
   const [status, setStatus] = useState<AgentStatus>('PENDING');
   const [search, setSearch] = useState('');
@@ -557,11 +802,19 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Enrollment review
             </button>
           )}
+          {admin.permissions.includes('targets.manage') && (
+            <button type="button" onClick={() => setActiveSection('targets')}
+              className={activeSection === 'targets' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              Monthly targets
+            </button>
+          )}
         </div>
       </nav>
 
       {activeSection === 'submissions' ? (
         <AdminSubmissionQueue admin={admin} />
+      ) : activeSection === 'targets' ? (
+        <AdminTargetManagement admin={admin} />
       ) : (
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(350px,0.9fr)]">
         <section className="min-w-0">
