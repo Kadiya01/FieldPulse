@@ -31,6 +31,8 @@ final class AbhAdminTargetRepository
 
         $organisationTarget = null;
         $agentTargets = [];
+        $pendingSubmissions = 0;
+        $organisationSnapshot = null;
         if ($period !== null) {
             $organisationTarget = Connection::fetchValue(
                 'SELECT target_quantity
@@ -41,6 +43,24 @@ final class AbhAdminTargetRepository
                   LIMIT 1',
                 ['period_id' => (int) $period['id']]
             );
+
+            $pendingSubmissions = (int) Connection::fetchValue(
+                'SELECT COUNT(*)
+                   FROM abh_enrollment_submissions
+                  WHERE reporting_period_id = :period_id
+                    AND status IN (\"PENDING_REVIEW\", \"CORRECTION_REQUESTED\")',
+                ['period_id' => (int) $period['id']]
+            );
+
+            if ((string) $period['status'] === 'CLOSED') {
+                $organisationSnapshot = Connection::fetchOne(
+                    'SELECT approved_quantity, target_quantity, progress_percent, agent_count, closed_at
+                       FROM abh_monthly_organisation_snapshots
+                      WHERE reporting_period_id = :period_id
+                      LIMIT 1',
+                    ['period_id' => (int) $period['id']]
+                );
+            }
 
             $agentTargets = Connection::fetchAll(
                 'SELECT t.id AS target_id, t.agent_id, t.target_quantity, t.updated_at,
@@ -67,6 +87,8 @@ final class AbhAdminTargetRepository
             'organisation_target' => $organisationTarget === null ? null : (int) $organisationTarget,
             'agent_targets' => $agentTargets,
             'agents' => $agents,
+            'pending_submissions_count' => $pendingSubmissions,
+            'organisation_snapshot' => $organisationSnapshot,
         ];
     }
 
