@@ -47,7 +47,7 @@ describe('ABH monthly enrollment submission contract', () => {
     expect(repository).toContain('abh_audit_events');
     expect(repository).toContain('abh_notifications');
     expect(repository).toContain('FOR UPDATE');
-    expect(repository).toContain("status = \"OPEN\"");
+    expect(repository).toContain("$period['status'] !== 'OPEN'");
     expect(repository).toContain('submissions.review');
     expect(repository).not.toMatch(/\b(?:FROM|JOIN|INTO|UPDATE)\s+(?:submissions|agents|devices|audit_logs|notifications)\b/i);
   });
