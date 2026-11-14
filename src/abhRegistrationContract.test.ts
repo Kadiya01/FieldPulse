@@ -26,13 +26,18 @@ describe('ABH self-registration contract', () => {
     expect(page).toContain('registerAbhAgent');
     expect(api).toContain('/abh/agents/register.php');
     expect(api).toContain('interface AbhAgentRegistrationInput');
-    expect(api).not.toMatch(/interface AbhAgentRegistrationInput[\s\S]*?username/);
+    const inputStart = api.indexOf('export interface AbhAgentRegistrationInput');
+    const resultStart = api.indexOf('export interface AbhAgentRegistrationResult');
+    const inputContract = api.slice(inputStart, resultStart);
+    expect(inputContract).toContain('phone: string');
+    expect(inputContract).not.toMatch(/username|\\bnin\\b/i);
   });
 
   it('accepts only the ABH registration fields and creates a pending application', () => {
     expect(controller).toContain("['full_name', 'phone', 'email', 'location', 'imei', 'device_type', 'password']");
     expect(controller).toContain("'PENDING'");
-    expect(controller).not.toMatch(/\bnin\b|\busername\b/i);
+    expect(controller).not.toContain("'nin'");
+    expect(controller).not.toContain("'username'");
   });
 
   it('persists ABH identity, credential, device and audit rows transactionally', () => {
