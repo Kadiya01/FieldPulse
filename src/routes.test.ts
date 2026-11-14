@@ -46,7 +46,7 @@ const all = (source: string, patterns: RegExp[]): string[] => {
 };
 
 const navTargets = all(navSource, [/to="([^"]*)"/g, /to:\s*'([^']*)'/g]);
-const routedPaths = all(appSource, [/path="([^"]*)"/g]);
+const routedPaths = all(appSource, [/path="([^"]*)"/g, /location\.pathname === '([^']*)'/g]);
 
 describe('offline and verification state wording', () => {
   /*
@@ -141,7 +141,7 @@ describe('route table and navigation agree', () => {
 
   it('links to every authenticated destination the app routes to', () => {
     // Login and registration routes render outside the authenticated layout.
-    const publicRoutes = ['/admin/login', '/login', '/register', '*'];
+    const publicRoutes = ['/login', '/register', '*'];
     const reachable = routedPaths.filter((p) => !publicRoutes.includes(p));
     const unlinked = reachable.filter((p) => !navTargets.includes(p));
 
@@ -150,12 +150,11 @@ describe('route table and navigation agree', () => {
 
   it('keeps agent and administrator sign-in on separate public routes', () => {
     expect(appSource).toMatch(/path="\/login"/);
-    expect(appSource).toMatch(/path="\/admin\/login"/);
-    expect(appSource).toMatch(/LoginPage/);
-    // IMEI-only sign-in was retired in Phase 5; both routes now use the
-    // username/password page, and only the copy changes.
-    expect(appSource).not.toMatch(/AgentLoginPage/);
-    expect(read('pages/LoginPage.tsx')).toContain('admin?: boolean');
+    expect(appSource).toContain("location.pathname === '/admin'");
+    expect(appSource).toContain('<AdminPortalPage />');
+    expect(appSource).toMatch(/path="\/login"/);
+    expect(appSource).not.toMatch(/path="\/admin\/login"/);
+    expect(read('pages/LoginPage.tsx')).not.toContain('admin?: boolean');
   });
 
   it('has exactly one review route, and it is operator-only', () => {
@@ -179,11 +178,11 @@ describe('route table and navigation agree', () => {
     const occurrences = (source: string, pattern: RegExp): number =>
       [...source.matchAll(pattern)].length;
 
-    expect(occurrences(appSource, /path="\/admin"/g)).toBe(1);
+    expect(occurrences(appSource, /location\.pathname === '\/admin'/g)).toBe(1);
     expect(occurrences(navSource, /to: '\/admin'/g)).toBe(1);
 
-    expect(appSource).toMatch(/AdminPage/);
-    expect(read('pages/AdminPage.tsx')).toContain('isAdmin');
+    expect(appSource).toMatch(/AdminPortalPage/);
+    expect(read('pages/AdminPortalPage.tsx')).toContain('admin.permissions.includes');
   });
 
   it('sends an unknown path to the capture screen rather than a blank page', () => {
