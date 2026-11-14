@@ -31,9 +31,9 @@ final class Kernel
         'auth.password'    => \FieldPulse\Domain\PasswordController::class,
         'agent.register'   => \FieldPulse\Domain\AgentRegistrationController::class,
         'abh.agent.register' => \FieldPulse\Domain\AbhAgentRegistrationController::class,
-        'abh.auth.login' => \\FieldPulse\\Domain\\AbhAgentLoginController::class,
-        'abh.auth.refresh' => \\FieldPulse\\Domain\\AbhAgentRefreshController::class,
-        'abh.auth.logout' => \\FieldPulse\\Domain\\AbhAgentLogoutController::class,
+        'abh.auth.login' => \FieldPulse\Domain\AbhAgentLoginController::class,
+        'abh.auth.refresh' => \FieldPulse\Domain\AbhAgentRefreshController::class,
+        'abh.auth.logout' => \FieldPulse\Domain\AbhAgentLogoutController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
@@ -369,7 +369,7 @@ final class Kernel
         // ABH requests use their own session/device tables. Never let an ABH
         // opaque access token fall through to the legacy FieldPulse authenticator.
         if (str_starts_with($route, 'abh.')) {
-            $context = \\FieldPulse\\Security\\AbhAuthenticator::i()->authenticateSignedRequest($request);
+            $context = \FieldPulse\Security\AbhAuthenticator::i()->authenticateSignedRequest($request);
             $request->setAuthContext($context);
 
             return;
