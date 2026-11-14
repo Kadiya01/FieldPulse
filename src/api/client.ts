@@ -499,6 +499,10 @@ export async function restoreSession(): Promise<RestoreResult> {
   announceAccessToken(data.access_token);
 
   if (!await getDeviceIdentity()) {
+    // A refresh cookie is not enough to prove device possession. End the
+    // rotated server session rather than leave a live cookie on a browser that
+    // no longer has its registered private key.
+    await logout().catch(() => undefined);
     return { status: 'unregistered' };
   }
 
