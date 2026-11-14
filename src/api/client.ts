@@ -226,7 +226,7 @@ async function refreshUnderLock(): Promise<boolean> {
       return getAccessToken() !== null;
     }
 
-    const response = await fetch(`${API_BASE}/auth/refresh.php`, {
+    const response = await fetch(`${API_BASE}/abh/auth/refresh.php`, {
       method: 'POST',
       // Cookies are automatically sent if withCredentials is true (or SameOrigin)
     });
@@ -248,7 +248,7 @@ async function refreshUnderLock(): Promise<boolean> {
   };
 
   if (typeof locks?.request === 'function') {
-    return locks.request('fieldpulse:refresh', work);
+    return locks.request('abh:refresh', work);
   }
 
   // No Web Locks: still single-flight within this tab, just not across tabs.
@@ -285,18 +285,32 @@ export interface LoginResult {
 }
 
 /**
- * Exchange a username and password for a bootstrap session.
- *
- * The result is a *bootstrap* session, not a usable one: it is bound to no
- * device, so the caller must follow it with registerDevice() before making any
- * signed request. `device_bound` is returned by the server precisely so this
- * client does not have to infer it.
+ * ABH agent sign-in. The password proves account knowledge and the private
+ * P-256 key stored by this browser proves device possession. The IMEI is never
+ * sent as a credential.
  */
-export async function login(username: string, password: string): Promise<LoginResult> {
-  const response = await fetch(`${API_BASE}/auth/login.php`, {
+export async function login(phone: string, password: string): Promise<LoginResult> {
+  const device = await getDeviceIdentity();
+  if (!device) {
+    throw new Error('This browser does not have the device key used during registration. Sign in on the registered browser.');
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = generateNonce();
+  const proof = ['ABH_LOGIN', phone.trim(), device.device_uuid, String(timestamp), nonce].join('\n');
+  const signature = await signPayload(proof, device.private_key);
+
+  const response = await fetch(`${API_BASE}/abh/auth/login.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({
+      phone: phone.trim(),
+      password,
+      device_uuid: device.device_uuid,
+      timestamp,
+      nonce,
+      signature
+    })
   });
 
   if (!response.ok) {
@@ -304,16 +318,10 @@ export async function login(username: string, password: string): Promise<LoginRe
   }
 
   const data = (await response.json()) as LoginResult;
-
-  // Held in memory for the registration call that follows. Never written to
-  // storage, so a reload in the middle of login resumes from the cookie rather
-  // than from a token left lying around in localStorage.
   setAccessToken(data.access_token);
   announceAccessToken(data.access_token);
-
   return data;
 }
-
 /** ABH Monthly Enrollment self-registration contract. */
 export interface AbhAgentRegistrationInput {
   full_name: string;
@@ -323,6 +331,9 @@ export interface AbhAgentRegistrationInput {
   device_type: string;
   email?: string;
   location?: string;
+  device_uuid: string;
+  public_key_jwk: JsonWebKey;
+  key_proof: string;
 }
 
 export interface AbhAgentRegistrationResult {
@@ -435,7 +446,7 @@ export async function registerDevice(pairingCode?: string): Promise<RegisterResu
 
 export async function logout(): Promise<void> {
   try {
-    await fetch(`${API_BASE}/auth/logout.php`, { method: 'POST' });
+    await fetch(`${API_BASE}/abh/auth/logout.php`, { method: 'POST' });
   } finally {
     setAccessToken(null);
   }
@@ -473,7 +484,7 @@ export async function restoreSession(): Promise<RestoreResult> {
   let response: Response;
 
   try {
-    response = await fetch(`${API_BASE}/auth/refresh.php`, { method: 'POST' });
+    response = await fetch(`${API_BASE}/abh/auth/refresh.php`, { method: 'POST' });
   } catch {
     setAccessToken(null);
     return { status: 'offline' };
