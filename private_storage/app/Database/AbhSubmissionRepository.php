@@ -23,7 +23,7 @@ final class AbhSubmissionRepository
     {
         return Connection::fetchOne(
             'SELECT s.id, s.reference_no, s.status, s.submitted_at,
-                    p.period_key, r.claimed_quantity, r.activity_date, r.agent_note,
+                    p.period_key, r.revision_no, r.claimed_quantity, r.activity_date, r.agent_note,
                     e.sha256 AS evidence_sha256
                FROM abh_enrollment_submissions s
                INNER JOIN abh_reporting_periods p ON p.id = s.reporting_period_id
@@ -108,14 +108,15 @@ final class AbhSubmissionRepository
 
                 $insertRevision = $pdo->prepare(
                     'INSERT INTO abh_submission_revisions
-                     (submission_id, revision_no, claimed_quantity, activity_date,
+                     (submission_id, revision_no, idempotency_key, claimed_quantity, activity_date,
                       agent_note, created_by_agent_id, created_at)
                      VALUES
-                     (:submission_id, 1, :quantity, :activity_date,
+                     (:submission_id, 1, :idempotency_key, :quantity, :activity_date,
                       :agent_note, :agent_id, UTC_TIMESTAMP(6))'
                 );
                 $insertRevision->execute([
                     'submission_id' => $submissionId,
+                    'idempotency_key' => $idempotencyKey,
                     'quantity' => $quantity,
                     'activity_date' => $activityDate,
                     'agent_note' => $note,
@@ -342,7 +343,12 @@ final class AbhSubmissionRepository
         // Both values are range-checked by the controller before interpolation.
         $items = Connection::fetchAll(
             'SELECT s.id, s.reference_no, s.status, s.submitted_at,
-                    p.period_key, r.activity_date, r.claimed_quantity, r.revision_no
+                    p.period_key, r.activity_date, r.claimed_quantity, r.revision_no,
+                    (SELECT rv.review_note
+                       FROM abh_submission_reviews rv
+                      WHERE rv.submission_id = s.id
+                      ORDER BY rv.created_at DESC, rv.id DESC
+                      LIMIT 1) AS review_note
                FROM abh_enrollment_submissions s
                INNER JOIN abh_reporting_periods p ON p.id = s.reporting_period_id
                LEFT JOIN abh_submission_revisions r ON r.id = s.current_revision_id
