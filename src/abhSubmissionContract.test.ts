@@ -34,7 +34,7 @@ describe('ABH monthly enrollment submission contract', () => {
     expect(controller).toContain("'claimed_quantity'");
     expect(controller).not.toContain("'agent_id'");
     expect(controller).toContain("Validator::periodMonth");
-    expect(controller).toContain("'PENDING_REVIEW'");
+    expect(repository).toContain("'PENDING_REVIEW'");
     expect(controller).toContain('Paths::storagePath');
     expect(controller).toContain('StorageState::hardenFile');
   });
@@ -53,7 +53,7 @@ describe('ABH monthly enrollment submission contract', () => {
   });
 
   it('keeps an idempotent retry bound to the same payload and agent', () => {
-    expect(repository).toContain('UNIQUE KEY uq_abh_enrollment_submissions_agent_idempotency');
+    expect(migration).toContain('UNIQUE KEY uq_abh_enrollment_submissions_agent_idempotency');
     expect(controller).toContain('findByIdempotencyKey');
     expect(controller).toContain('idempotent_replay');
     expect(controller).toContain('IDEMPOTENCY_CONFLICT');
