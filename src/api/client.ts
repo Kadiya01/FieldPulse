@@ -1878,6 +1878,111 @@ export async function bootstrapFirstAdmin(input: {
   return envelope.admin;
 }
 
+export type AbhAdminSubmissionStatus =
+  | 'PENDING_REVIEW'
+  | 'CORRECTION_REQUESTED'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'ALL';
+
+export interface AbhAdminSubmissionItem {
+  id: number;
+  reference_no: string;
+  status: string;
+  submitted_at: string;
+  period_key: string;
+  period_status: string;
+  agent_id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  location_text: string | null;
+  revision_id: number;
+  revision_no: number;
+  claimed_quantity: number;
+  activity_date: string;
+  agent_note: string | null;
+  original_filename: string;
+  mime_type: string;
+  byte_size: number;
+  sha256: string;
+  review_count: number;
+}
+
+export interface AbhAdminSubmissionList {
+  items: AbhAdminSubmissionItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function fetchAbhAdminSubmissions(
+  status: AbhAdminSubmissionStatus = 'PENDING_REVIEW',
+  month?: string,
+  limit = 50,
+  offset = 0
+): Promise<AbhAdminSubmissionList> {
+  const params = new URLSearchParams({
+    status,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  if (month) params.set('month', month);
+
+  const response = await adminAuthenticatedFetch('/abh/admin/submissions.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.json() as AbhAdminSubmissionList;
+}
+
+export async function fetchAbhAdminSubmissionEvidence(submissionId: number): Promise<Blob> {
+  const response = await adminAuthenticatedFetch(
+    '/abh/admin/submission-evidence.php?id=' + encodeURIComponent(String(submissionId))
+  );
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.blob();
+}
+
+export async function decideAbhAdminSubmission(
+  submissionId: number,
+  decision: 'APPROVE' | 'REJECT' | 'REQUEST_CORRECTION',
+  reason: string | undefined,
+  idempotencyKey: string
+): Promise<{
+  submission_id: number;
+  reference_no: string;
+  status: string;
+  decision: string;
+  idempotent_replay: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/submission-decision.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      submission_id: submissionId,
+      decision,
+      ...(reason ? { reason } : {}),
+      idempotency_key: idempotencyKey
+    })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as {
+    data: {
+      submission_id: number;
+      reference_no: string;
+      status: string;
+      decision: string;
+      idempotent_replay: boolean;
+    };
+  };
+  return envelope.data;
+}
+
 export async function fetchAbhAdminAgents(
   status: AdminAgentItem['status'] | 'ALL' = 'PENDING',
   search = '',
