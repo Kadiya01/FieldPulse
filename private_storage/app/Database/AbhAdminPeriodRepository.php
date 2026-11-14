@@ -38,7 +38,7 @@ final class AbhAdminPeriodRepository
                 }
 
                 $today = new \DateTimeImmutable('today', new \DateTimeZone('Africa/Lagos'));
-                if ((string) $period['ends_on'] > $today->format('Y-m-d')) {
+                if ((string) $period['ends_on'] >= $today->format('Y-m-d')) {
                     return ['error' => 'period_not_ended'];
                 }
 
