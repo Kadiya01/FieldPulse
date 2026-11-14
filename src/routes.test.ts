@@ -4,49 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 /**
- * Two lists that must agree: what the app routes to, and what the nav links to.
- *
- * These are asserted by reading both files as text rather than by rendering,
- * for one reason: a DOM environment on this machine costs ~45s of worker
- * start-up against a fixed 60s budget, and `App` cannot be imported at all
- * without dragging in Dexie, the crypto module and the camera. The rendering
- * half — that the entries appear as real links, that a click navigates, and
- * that Reviews is absent for an agent — is in `SiteNav.test.tsx`.
- *
- * What is left is the question no rendering test answers: *is there a route
- * behind this link?* A `NavLink` to a path nothing matches does not throw, does
- * not warn, and renders a link that silently does nothing. That is precisely how
- * `/queue` and `/leaderboard` were unreachable while every route existed.
+ * The ABH app has distinct administrator and agent entry points. The route
+ * contract is read as source so the test does not import camera, Dexie or crypto
+ * modules just to verify that an ABH token cannot reach legacy pages.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (name: string) => readFileSync(resolve(here, name), 'utf8');
 
 const appSource = read('App.tsx');
-const navSource = read('components/SiteNav.tsx');
-
-/**
- * `to: '/queue'` in the nav's item list, `path="/queue"` in the router table.
- *
- * Both spellings are accepted because the two files express these differently:
- * the nav builds an array of objects and the router writes JSX. Reading for one
- * spelling only would find nothing in the other file, and "found nothing" is the
- * condition these assertions cannot distinguish from "nothing to check".
- */
-const all = (source: string, patterns: RegExp[]): string[] => {
-  const found = new Set<string>();
-
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      found.add(match[1]);
-    }
-  }
-
-  return [...found];
-};
-
-const navTargets = all(navSource, [/to="([^"]*)"/g, /to:\s*'([^']*)'/g]);
-const routedPaths = all(appSource, [/path="([^"]*)"/g, /location\.pathname === '([^']*)'/g]);
 
 describe('offline and verification state wording', () => {
   /*
