@@ -28,6 +28,7 @@ final class Response
         private readonly array $payload,
         private readonly array $headers = [],
         private readonly array $cookies = [],
+        private readonly ?string $rawBody = null,
     ) {
     }
 
@@ -75,6 +76,32 @@ final class Response
             $this->payload,
             $this->headers,
             $this->cookies + [$cookie['name'] => $cookie],
+            $this->rawBody,
+        );
+    }
+
+    /**
+     * A private image response for authenticated evidence preview.
+     * The caller must establish authorisation and validate the bytes before
+     * constructing this response; no user-controlled headers are accepted.
+     */
+    public static function binary(string $body, string $contentType): self
+    {
+        if (!in_array($contentType, ['image/jpeg', 'image/png'], true)) {
+            throw new \InvalidArgumentException('Unsupported binary response content type.');
+        }
+
+        return new self(
+            200,
+            [],
+            [
+                'Content-Type' => $contentType,
+                'Content-Length' => (string) strlen($body),
+                'Content-Disposition' => 'inline',
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, private',
+            ],
+            [],
+            $body,
         );
     }
 
@@ -154,7 +181,7 @@ final class Response
             }
         }
 
-        echo Json::encode($this->payload);
+        echo $this->rawBody ?? Json::encode($this->payload);
     }
 
     public function status(): int
