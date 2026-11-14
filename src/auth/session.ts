@@ -17,7 +17,7 @@ let accessToken: string | null = null;
  * relies on, extended across tabs instead of across sessions.
  */
 const channel: BroadcastChannel | null = typeof BroadcastChannel === 'function'
-  ? new BroadcastChannel('fieldpulse:auth')
+  ? new BroadcastChannel('abh:auth')
   : null;
 
 interface TokenBroadcast {
