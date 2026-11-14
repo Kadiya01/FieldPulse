@@ -199,8 +199,9 @@ export default function App() {
     );
   }
 
+  const isReady = (): boolean => (gate as Gate) === 'ready';
   const requireReady = (element: React.ReactNode) =>
-    gate === 'ready' ? element : <Navigate to="/login" replace />;
+    isReady() ? element : <Navigate to="/login" replace />;
 
   return (
     <SessionContext.Provider value={session}>
@@ -244,7 +245,7 @@ export default function App() {
         <Route
           path="/admin/login"
           element={
-            gate === 'ready' ? (
+            isReady() ? (
               <Navigate to="/" replace />
             ) : (
               /*
@@ -270,7 +271,7 @@ export default function App() {
         <Route
           path="/login"
           element={
-            gate === 'ready' ? (
+            isReady() ? (
               <Navigate to="/" replace />
             ) : (
               <LoginPage
@@ -286,7 +287,7 @@ export default function App() {
         <Route
           path="/register"
           element={
-            gate === 'ready' ? (
+            isReady() ? (
               <Navigate to="/" replace />
             ) : (
               /*
