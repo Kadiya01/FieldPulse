@@ -2056,6 +2056,14 @@ export interface AbhAdminTargetData {
   organisation_target: number | null;
   agent_targets: AbhAdminAgentTarget[];
   agents: AbhAdminTargetAgent[];
+  pending_submissions_count: number;
+  organisation_snapshot: {
+    approved_quantity: number;
+    target_quantity: number | null;
+    progress_percent: string | null;
+    agent_count: number;
+    closed_at: string;
+  } | null;
 }
 
 export async function fetchAbhAdminTargets(month: string): Promise<AbhAdminTargetData> {
@@ -2096,6 +2104,37 @@ export async function saveAbhAdminTarget(input: {
     agent_id: number | null;
     target_quantity: number;
     created: boolean;
+  } };
+  return envelope.data;
+}
+
+export async function closeAbhReportingPeriod(periodKey: string): Promise<{
+  period_key: string;
+  status: 'CLOSED';
+  approved_quantity: number;
+  organisation_target: number | null;
+  progress_percent: string | null;
+  ranked_agent_count: number;
+  closed_by_admin_id: number;
+  idempotent_replay: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/period-close.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ period_key: periodKey })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: {
+    period_key: string;
+    status: 'CLOSED';
+    approved_quantity: number;
+    organisation_target: number | null;
+    progress_percent: string | null;
+    ranked_agent_count: number;
+    closed_by_admin_id: number;
+    idempotent_replay: boolean;
   } };
   return envelope.data;
 }
