@@ -39,7 +39,7 @@ final class AbhAdminAgentDecisionController implements ActionInterface
 
         $reason = null;
         if (isset($body['reason'])) {
-            $reason = trim(Validator::string($body['reason'], 2, 2000, 'reason'));
+            $reason = trim(Validator::string($body['reason'], 2, 500, 'reason'));
         }
         if (in_array($decision, ['REJECT', 'SUSPEND'], true) && ($reason === null || $reason === '')) {
             throw ApiException::validation('A reason is required for rejection or suspension.', ['field' => 'reason']);
