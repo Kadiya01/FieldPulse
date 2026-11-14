@@ -1809,3 +1809,38 @@ export async function decideAdminDevice(
     throw await toApiError(response);
   }
 }
+
+
+export interface AdminAgentDetails {
+  agent: {
+    id: number;
+    agent_code: string;
+    full_name: string;
+    phone: string;
+    email: string | null;
+    location_text: string | null;
+    status: string;
+    status_reason: string | null;
+    registered_at: string;
+    approved_at: string | null;
+    approved_by_admin_id: number | null;
+  };
+  devices: Array<{
+    id: number;
+    device_type: string | null;
+    imei_value: string;
+    status: 'PENDING' | 'ACTIVE' | 'REVOKED';
+    registered_at: string;
+    verified_at: string | null;
+    revoked_at: string | null;
+    last_seen_at: string | null;
+  }>;
+}
+
+export async function fetchAdminAgentDetails(agentId: number): Promise<AdminAgentDetails> {
+  const response = await adminAuthenticatedFetch('/abh/admin/agent.php?id=' + encodeURIComponent(String(agentId)));
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.json() as AdminAgentDetails;
+}
