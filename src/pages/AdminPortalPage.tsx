@@ -13,6 +13,7 @@ import {
   fetchAbhAdminSubmissions,
   fetchAbhAdminTargets,
   saveAbhAdminTarget,
+  closeAbhReportingPeriod,
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   restoreAdminSession,
@@ -446,9 +447,13 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [confirmClose, setConfirmClose] = useState(false);
 
   const isClosed = data?.period?.status === 'CLOSED';
   const canManage = admin.permissions.includes('targets.manage');
+  const canClose = admin.permissions.includes('periods.close');
+  const pendingCount = data?.pending_submissions_count ?? 0;
+  const monthHasEnded = data?.period ? data.period.ends_on < currentAdminDate() : false;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -525,6 +530,27 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
     }
   };
 
+  const closePeriod = async () => {
+    if (!canClose || !data?.period || data.period.status !== 'OPEN') return;
+    if (pendingCount > 0 || !monthHasEnded) return;
+
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await closeAbhReportingPeriod(month);
+      setConfirmClose(false);
+      setNotice(
+        `${result.period_key} is finalised. ${result.ranked_agent_count} agent(s) were included in the frozen leaderboard.`
+      );
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The reporting month could not be finalised.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const filteredTargets = (data?.agent_targets ?? []).filter(item => {
     const term = search.trim().toLowerCase();
     return term === '' || [item.full_name, item.agent_code, item.phone].some(value => value.toLowerCase().includes(term));
@@ -536,11 +562,11 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
     setAgentQuantity(target ? String(target.target_quantity) : '');
   };
 
-  if (!canManage) {
+  if (!canManage && !canClose) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-8">
         <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-          Your administrator role does not include permission to manage monthly targets.
+          Your administrator role does not include permission to manage targets or close reporting months.
         </p>
       </div>
     );
@@ -550,8 +576,8 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
     <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
       <section className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Monthly targets</h1>
-          <p className="mt-1 text-sm text-slate-600">Set the organisation goal and individual agent goals. Target changes are audited.</p>
+          <h1 className="text-2xl font-bold text-slate-900">Monthly targets and finalisation</h1>
+          <p className="mt-1 text-sm text-slate-600">{canManage ? 'Set organisation and individual goals.' : 'View period readiness and close completed reporting months.'} Target changes and finalisation are audited.</p>
         </div>
         <label className="block text-sm font-semibold text-slate-700">
           Reporting month
@@ -577,10 +603,20 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
             Closed periods cannot be edited
           </span>
         )}
+        {!isClosed && data?.period && (
+          <div className="text-right">
+            <p className="text-xs font-semibold text-slate-700">{pendingCount} submission(s) awaiting review or correction</p>
+            <p className="mt-1 text-xs text-slate-500">
+              A month cannot be finalised until all submissions are reviewed and the calendar month has ended.
+            </p>
+          </div>
+        )}
       </section>
 
       {loading && <p role="status" className="rounded-xl bg-white p-4 text-sm text-slate-600">Loading targets…</p>}
 
+      {canManage && (
+      <>
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-bold text-slate-900">Organisation target</h2>
@@ -660,6 +696,60 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
           </div>
         )}
       </section>
+      </>
+      )}
+
+      {canClose && !isClosed && data?.period?.status === 'OPEN' && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-900">Finalise reporting month</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Finalisation freezes approved totals, the organisation result and every agent's monthly rank.
+          </p>
+          <div className="mt-3 space-y-1 text-sm">
+            <p className="text-slate-700">Unreviewed submissions: <strong>{pendingCount}</strong></p>
+            <p className="text-slate-700">Calendar month ended: <strong>{monthHasEnded ? 'Yes' : 'No'}</strong></p>
+          </div>
+          {!confirmClose ? (
+            <button type="button" onClick={() => setConfirmClose(true)}
+              disabled={saving || loading || pendingCount > 0 || !monthHasEnded}
+              className="mt-4 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+              Finalise {month}
+            </button>
+          ) : (
+            <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <p className="font-semibold text-amber-950">Confirm monthly finalisation</p>
+              <p className="mt-2 text-sm leading-6 text-amber-900">
+                This action is permanent. Agents will no longer be able to submit or correct reports for {month}.
+                Review decisions and target changes will also be blocked. The approved results and rankings will be saved as final snapshots.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void closePeriod()} disabled={saving}
+                  className="rounded-xl bg-amber-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
+                  {saving ? 'Finalising…' : 'Yes, finalise month'}
+                </button>
+                <button type="button" onClick={() => setConfirmClose(false)} disabled={saving}
+                  className="rounded-xl border border-amber-500 px-4 py-2.5 text-sm font-semibold text-amber-950">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {isClosed && data?.organisation_snapshot && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-900">Frozen organisation result</h2>
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div><p className="text-xs text-slate-500">Approved enrollments</p><p className="mt-1 text-2xl font-bold tabular-nums">{data.organisation_snapshot.approved_quantity.toLocaleString()}</p></div>
+            <div><p className="text-xs text-slate-500">Organisation target</p><p className="mt-1 text-2xl font-bold tabular-nums">{data.organisation_snapshot.target_quantity?.toLocaleString() ?? 'Not set'}</p></div>
+            <div><p className="text-xs text-slate-500">Target progress</p><p className="mt-1 text-2xl font-bold tabular-nums">{data.organisation_snapshot.progress_percent === null ? '—' : `${data.organisation_snapshot.progress_percent}%`}</p></div>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            {data.organisation_snapshot.agent_count} agent(s) ranked · Finalised {new Date(data.organisation_snapshot.closed_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()}
+          </p>
+        </section>
+      )}
 
       {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
@@ -801,7 +891,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Enrollment review
             </button>
           )}
-          {admin.permissions.includes('targets.manage') && (
+          {(admin.permissions.includes('targets.manage') || admin.permissions.includes('periods.close')) && (
             <button type="button" onClick={() => setActiveSection('targets')}
               className={activeSection === 'targets' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
               Monthly targets
