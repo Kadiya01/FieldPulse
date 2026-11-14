@@ -10,8 +10,9 @@ ABH migration files must use the numbered filename form:
 - `003_targets_performance_snapshots.sql`
 - `004_reward_programmes_gifts_awards.sql`
 - `005_audit_notifications.sql`
+- `006_registration_uniqueness_and_throttling.sql`
 
-Migration 001 creates the identity, admin access and monthly reporting-period tables. Migration 002 creates independent enrollment reports, immutable revisions, evidence metadata, review events and adjustment records. Migration 003 creates organisation and individual monthly targets, agent totals and month-close snapshots. Migration 004 creates reward programmes, versioned eligibility rules, qualification results, the management gift catalogue, assigned awards and separate payment/delivery fulfilment events. Migrations 001–005 have passed the disposable CI schema suite on MySQL 8.0 and MariaDB 11.4. Additional changes use the next available three-digit number. Never edit a migration after it has been applied.
+Migration 001 creates the identity, admin access and monthly reporting-period tables. Migration 006 adds unique normalized-phone and global registered-device IMEI constraints, plus the ABH-only hashed registration-attempt ledger. Migration 002 creates independent enrollment reports, immutable revisions, evidence metadata, review events and adjustment records. Migration 003 creates organisation and individual monthly targets, agent totals and month-close snapshots. Migration 004 creates reward programmes, versioned eligibility rules, qualification results, the management gift catalogue, assigned awards and separate payment/delivery fulfilment events. Migrations 001–005 have passed the disposable CI schema suite on MySQL 8.0 and MariaDB 11.4. Additional changes use the next available three-digit number. Never edit a migration after it has been applied.
 
 The dedicated runner is `bin/abh_migrate.php`; its separate ledger is
 `abh_schema_migrations`. The runner is bound to the ABH preview private
