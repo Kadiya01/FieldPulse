@@ -1,0 +1,136 @@
+name: ABH Preview cPanel Webroot Probe
+
+on:
+  push:
+    branches:
+      - feature/abh-monthly-enrollment
+    paths:
+      - ".github/workflows/abh-preview-webroot-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abh-preview-webroot-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Verify preview FTP write access and HTTPS document root
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+
+    steps:
+      - name: Require deployment to remain disabled
+        shell: bash
+        env:
+          DEPLOY_ENABLED: ${{ vars.ABH_PREVIEW_DEPLOY_ENABLED }}
+          DRY_RUN: ${{ vars.ABH_PREVIEW_DRY_RUN }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_ENABLED" == "false" ]] || {
+            echo "::error::The application deployment switch must remain false during the webroot probe."
+            exit 1
+          }
+          [[ "$DRY_RUN" == "true" ]] || {
+            echo "::error::The application deployment dry-run variable must remain true during the webroot probe."
+            exit 1
+          }
+
+      - name: Verify both jailed FTP roots and public HTTPS serving
+        shell: bash
+        env:
+          FTP_HOST_PUBLIC: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          FTP_USER_PUBLIC: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          FTP_PASS_PUBLIC: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          FTP_HOST_PRIVATE: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          FTP_USER_PRIVATE: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          FTP_PASS_PRIVATE: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          FTP_PORT: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          PREVIEW_URL: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import ftplib
+          import io
+          import os
+          import secrets
+          import ssl
+          import urllib.request
+
+          EXPECTED_HOST = "nano.yahmis.com"
+          PREVIEW_URL = os.environ["PREVIEW_URL"].rstrip("/")
+          PORT = int(os.environ["FTP_PORT"])
+          RUN_LABEL = f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+
+          accounts = [
+              ("private", os.environ["FTP_HOST_PRIVATE"], os.environ["FTP_USER_PRIVATE"], os.environ["FTP_PASS_PRIVATE"]),
+              ("public", os.environ["FTP_HOST_PUBLIC"], os.environ["FTP_USER_PUBLIC"], os.environ["FTP_PASS_PUBLIC"]),
+          ]
+
+          for label, host, username, password in accounts:
+              if host != EXPECTED_HOST:
+                  raise SystemExit(f"Refusing {label} probe: FTP hostname is not the confirmed cPanel server.")
+              if not username or not password:
+                  raise SystemExit(f"Refusing {label} probe: FTP credentials are missing.")
+
+          def open_ftps(username: str, password: str) -> ftplib.FTP_TLS:
+              # Default SSL context performs normal CA and hostname verification.
+              ftp = ftplib.FTP_TLS(context=ssl.create_default_context())
+              ftp.connect(EXPECTED_HOST, PORT, timeout=30)
+              ftp.auth()
+              ftp.login(username, password)
+              ftp.prot_p()
+              return ftp
+
+          def ftp_round_trip(label: str, username: str, password: str, check_https: bool) -> None:
+              remote_name = f"abh-preview-probe-{label}-{RUN_LABEL}-{secrets.token_hex(8)}.txt"
+              marker = f"ABH preview {label} document-root probe {RUN_LABEL} {secrets.token_hex(16)}\n".encode("utf-8")
+              ftp = open_ftps(username, password)
+              uploaded = False
+              cleanup_error = None
+              try:
+                  ftp.storbinary(f"STOR {remote_name}", io.BytesIO(marker))
+                  uploaded = True
+                  print(f"PASS: {label} account can write to its restricted FTP root.")
+
+                  received = bytearray()
+                  ftp.retrbinary(f"RETR {remote_name}", received.extend)
+                  if bytes(received) != marker:
+                      raise RuntimeError(f"{label} FTP read-back did not match the temporary probe content.")
+                  print(f"PASS: {label} account can read back its temporary probe file.")
+
+                  if check_https:
+                      request = urllib.request.Request(
+                          f"{PREVIEW_URL}/{remote_name}",
+                          headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+                      )
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          served = response.read(4096)
+                          if response.status != 200 or served != marker:
+                              raise RuntimeError("The preview HTTPS URL did not serve the exact uploaded document-root probe.")
+                      print("PASS: the preview HTTPS hostname serves files from the public FTP document root.")
+              finally:
+                  if uploaded:
+                      try:
+                          ftp.delete(remote_name)
+                          print(f"PASS: temporary {label} probe file deleted from its FTP root.")
+                      except Exception as error:
+                          cleanup_error = error
+                  try:
+                      ftp.quit()
+                  except Exception:
+                      ftp.close()
+                  if cleanup_error is not None:
+                      raise RuntimeError(f"Could not remove the temporary {label} probe file; manual cleanup is required.") from cleanup_error
+
+          ftp_round_trip("private", os.environ["FTP_USER_PRIVATE"], os.environ["FTP_PASS_PRIVATE"], False)
+          ftp_round_trip("public", os.environ["FTP_USER_PUBLIC"], os.environ["FTP_PASS_PUBLIC"], True)
+          print("ABH preview webroot probe passed. No application files or database records were deployed.")
+          PY
