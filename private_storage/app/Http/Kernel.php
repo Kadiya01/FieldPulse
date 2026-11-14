@@ -34,6 +34,9 @@ final class Kernel
         'abh.auth.login' => \FieldPulse\Domain\AbhAgentLoginController::class,
         'abh.auth.refresh' => \FieldPulse\Domain\AbhAgentRefreshController::class,
         'abh.auth.logout' => \FieldPulse\Domain\AbhAgentLogoutController::class,
+        'abh.admin.auth.login' => \FieldPulse\Domain\AbhAdminLoginController::class,
+        'abh.admin.auth.refresh' => \FieldPulse\Domain\AbhAdminRefreshController::class,
+        'abh.admin.auth.logout' => \FieldPulse\Domain\AbhAdminLogoutController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
@@ -97,6 +100,9 @@ final class Kernel
         'abh.auth.login' => 'public',
         'abh.auth.refresh' => 'public',
         'abh.auth.logout' => 'public',
+        'abh.admin.auth.login' => 'public',
+        'abh.admin.auth.refresh' => 'public',
+        'abh.admin.auth.logout' => 'public',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
         'device.register'  => 'bootstrap',
@@ -368,6 +374,13 @@ final class Kernel
 
         // ABH requests use their own session/device tables. Never let an ABH
         // opaque access token fall through to the legacy FieldPulse authenticator.
+        if (str_starts_with($route, 'abh.admin.')) {
+            $context = \FieldPulse\Security\AbhAdminAuthenticator::authenticate($request);
+            $request->setAbhAdminContext($context);
+
+            return;
+        }
+
         if (str_starts_with($route, 'abh.')) {
             $context = \FieldPulse\Security\AbhAuthenticator::i()->authenticateSignedRequest($request);
             $request->setAuthContext($context);
