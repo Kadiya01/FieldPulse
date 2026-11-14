@@ -254,9 +254,11 @@ final class AbhSubmissionRepository
             'SELECT target_quantity
                FROM abh_monthly_targets
               WHERE reporting_period_id = :period_id
+                AND scope_type = "AGENT"
+                AND scope_owner_id = :target_owner_id
                 AND agent_id = :agent_id
               LIMIT 1',
-            ['period_id' => $periodId, 'agent_id' => $agentId]
+            ['period_id' => $periodId, 'target_owner_id' => $agentId, 'agent_id' => $agentId]
         );
         $targetQuantity = $targetRow === null ? null : (int) $targetRow['target_quantity'];
 
