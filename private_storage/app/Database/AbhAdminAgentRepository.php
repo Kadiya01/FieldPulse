@@ -58,6 +58,30 @@ final class AbhAdminAgentRepository
         return ['items' => $rows, 'total' => $total, 'limit' => $limit, 'offset' => $offset];
     }
 
+    /** @return array{agent:array<string,mixed>,devices:list<array<string,mixed>>}|null */
+    public static function agentDetails(int $agentId): ?array
+    {
+        $agent = Connection::fetchOne(
+            'SELECT id, agent_code, full_name, phone, email, location_text, status,
+                    status_reason, registered_at, approved_at, approved_by_admin_id
+               FROM abh_agents WHERE id = :id LIMIT 1',
+            ['id' => $agentId]
+        );
+        if ($agent === null) {
+            return null;
+        }
+
+        $devices = Connection::fetchAll(
+            'SELECT id, device_type, imei_value, status, registered_at, verified_at, revoked_at, last_seen_at
+               FROM abh_agent_devices
+              WHERE agent_id = :agent_id
+              ORDER BY registered_at DESC, id DESC',
+            ['agent_id' => $agentId]
+        );
+
+        return ['agent' => $agent, 'devices' => $devices];
+    }
+
     /**
      * @return array{agent_id:int,old_status:string,new_status:string}
      */
