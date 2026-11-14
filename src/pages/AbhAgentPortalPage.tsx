@@ -61,11 +61,11 @@ export default function AbhAgentPortalPage({
   const [notice, setNotice] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const refreshHistory = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const refreshHistory = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const result = await fetchAbhAgentSubmissions(month, 50, 0);
+      setError('');
       setItems(result.items);
       setTotal(result.total);
     } catch (caught) {
@@ -76,7 +76,7 @@ export default function AbhAgentPortalPage({
   }, [month]);
 
   useEffect(() => {
-    void refreshHistory();
+    void refreshHistory(false);
   }, [refreshHistory]);
 
   const summary = useMemo(() => {
