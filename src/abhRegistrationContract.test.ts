@@ -19,10 +19,12 @@ describe('ABH self-registration contract', () => {
     expect(page).toContain('Registered device IMEI');
     expect(page).toContain('Password');
     expect(page).toContain('Operating location / LGA');
+    expect(page).toContain('generateAndStoreDeviceIdentity');
+    expect(page).toContain('key_proof: keyProof');
     expect(page).not.toMatch(/username|\bNIN\b|\bnin\b/i);
   });
 
-  it('uses the dedicated ABH registration API, not the legacy FieldPulse route', () => {
+  it('uses the dedicated ABH registration API and declares device proof fields', () => {
     expect(page).toContain('registerAbhAgent');
     expect(api).toContain('/abh/agents/register.php');
     expect(api).toContain('interface AbhAgentRegistrationInput');
@@ -30,27 +32,34 @@ describe('ABH self-registration contract', () => {
     const resultStart = api.indexOf('export interface AbhAgentRegistrationResult');
     const inputContract = api.slice(inputStart, resultStart);
     expect(inputContract).toContain('phone: string');
-    expect(inputContract).not.toMatch(/username|\\bnin\\b/i);
+    expect(inputContract).toContain('device_uuid: string');
+    expect(inputContract).toContain('public_key_jwk: JsonWebKey');
+    expect(inputContract).toContain('key_proof: string');
+    expect(inputContract).not.toMatch(/username|\bnin\b/i);
   });
 
-  it('accepts only the ABH registration fields and creates a pending application', () => {
-    expect(controller).toContain("['full_name', 'phone', 'email', 'location', 'imei', 'device_type', 'password']");
+  it('requires a valid P-256 public key proof and creates a pending application', () => {
+    expect(controller).toContain("'device_uuid', 'public_key_jwk', 'key_proof'");
+    expect(controller).toContain('Jwk::validatePublicJwk');
+    expect(controller).toContain('SignatureVerifier::assertProofOfPossession');
     expect(controller).toContain("'PENDING'");
     expect(controller).not.toContain("'nin'");
     expect(controller).not.toContain("'username'");
   });
 
-  it('persists ABH identity, credential, device and audit rows transactionally', () => {
+  it('persists ABH identity, credential, device key and audit rows transactionally', () => {
     expect(repository).toContain('Connection::transaction');
     expect(repository).toContain('INSERT INTO abh_agents');
     expect(repository).toContain('INSERT INTO abh_agent_credentials');
     expect(repository).toContain('INSERT INTO abh_agent_devices');
+    expect(repository).toContain('device_uuid');
+    expect(repository).toContain('public_key_jwk');
     expect(repository).toContain('INSERT INTO abh_audit_events');
     expect(repository).toContain('INSERT INTO abh_notifications');
     expect(repository).not.toMatch(/INSERT INTO agents\b|INSERT INTO devices\b/i);
   });
 
-  it('registers the endpoint as a public route while preserving the legacy registration route', () => {
+  it('registers only the dedicated ABH public registration route and keeps legacy route intact', () => {
     expect(kernel).toContain("'abh.agent.register'");
     expect(kernel).toContain("'agent.register'");
     expect(route).toContain("Kernel::handle('abh.agent.register')");
