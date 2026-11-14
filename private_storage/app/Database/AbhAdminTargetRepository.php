@@ -48,7 +48,7 @@ final class AbhAdminTargetRepository
                 'SELECT COUNT(*)
                    FROM abh_enrollment_submissions
                   WHERE reporting_period_id = :period_id
-                    AND status IN (\"PENDING_REVIEW\", \"CORRECTION_REQUESTED\")',
+                    AND status IN ("PENDING_REVIEW", "CORRECTION_REQUESTED")',
                 ['period_id' => (int) $period['id']]
             );
 
