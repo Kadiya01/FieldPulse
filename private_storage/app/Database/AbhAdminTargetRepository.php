@@ -43,7 +43,7 @@ final class AbhAdminTargetRepository
             );
 
             $agentTargets = Connection::fetchAll(
-                'SELECT t.id, t.agent_id, t.target_quantity, t.updated_at,
+                'SELECT t.id AS target_id, t.agent_id, t.target_quantity, t.updated_at,
                         a.agent_code, a.full_name, a.phone
                    FROM abh_monthly_targets t
                    INNER JOIN abh_agents a ON a.id = t.agent_id
