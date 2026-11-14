@@ -44,6 +44,7 @@ final class Kernel
         'abh.admin.agent.decision' => \FieldPulse\Domain\AbhAdminAgentDecisionController::class,
         'abh.admin.device.decision' => \FieldPulse\Domain\AbhAdminDeviceDecisionController::class,
         'abh.admin.submissions' => \FieldPulse\Domain\AbhAdminSubmissionsController::class,
+        'abh.admin.targets' => \\FieldPulse\\Domain\\AbhAdminTargetsController::class,
         'abh.admin.submission.decision' => \FieldPulse\Domain\AbhAdminSubmissionDecisionController::class,
         'abh.admin.submission.evidence' => \FieldPulse\Domain\AbhAdminSubmissionEvidenceController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
@@ -115,6 +116,7 @@ final class Kernel
         'abh.admin.auth.refresh' => 'public',
         'abh.admin.auth.logout' => 'public',
         'abh.admin.submissions' => 'admin',
+        'abh.admin.targets' => 'admin',
         'abh.admin.submission.decision' => 'admin',
         'abh.admin.submission.evidence' => 'admin',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
