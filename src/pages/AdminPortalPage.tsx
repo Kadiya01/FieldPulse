@@ -457,19 +457,18 @@ function AdminTargetManagement({ admin }: { admin: SessionAdmin }) {
       const result = await fetchAbhAdminTargets(month);
       setData(result);
       setOrganisationQuantity(result.organisation_target === null ? '' : String(result.organisation_target));
-      setSelectedAgentId(current => {
-        const exists = current !== '' && result.agents.some(agent => agent.id === Number(current));
-        const next = exists ? current : String(result.agents[0]?.id ?? '');
-        const target = result.agent_targets.find(item => item.agent_id === Number(next));
-        setAgentQuantity(target ? String(target.target_quantity) : '');
-        return next;
-      });
+      const nextAgentId = selectedAgentId !== '' && result.agents.some(agent => agent.id === Number(selectedAgentId))
+        ? selectedAgentId
+        : String(result.agents[0]?.id ?? '');
+      setSelectedAgentId(nextAgentId);
+      const target = result.agent_targets.find(item => item.agent_id === Number(nextAgentId));
+      setAgentQuantity(target ? String(target.target_quantity) : '');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Monthly targets could not be loaded.');
     } finally {
       setLoading(false);
     }
-  }, [month]);
+  }, [month, selectedAgentId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
