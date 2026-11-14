@@ -176,6 +176,12 @@ try {
         abhSchemaAssert('ABH session field exists: ' . $column, in_array($column, $sessionColumns, true));
     }
 
+    $revisionColumns = $pdo->query(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_submission_revisions'"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    abhSchemaAssert('ABH submission revisions store correction idempotency keys', in_array('idempotency_key', $revisionColumns, true));
+
     $adminSessionColumns = $pdo->query(
         "SELECT COLUMN_NAME FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_admin_sessions'"
