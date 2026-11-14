@@ -1579,3 +1579,233 @@ export async function markNotificationRead(id?: number): Promise<{ unread_count:
   const envelope = (await response.json()) as { data: { unread_count: number } };
   return envelope.data;
 }
+
+
+// ---------------------------------------------------------------------------
+// ABH administrator API. It intentionally has a separate in-memory token,
+// refresh cookie, Web Lock and BroadcastChannel from agent authentication.
+// ---------------------------------------------------------------------------
+
+export interface SessionAdmin {
+  id: number;
+  full_name: string;
+  email: string;
+  roles: string[];
+  permissions: string[];
+}
+
+export interface AdminLoginResult {
+  access_token: string;
+  expires_in: number;
+  admin: SessionAdmin;
+}
+
+export interface AdminAgentItem {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  email: string | null;
+  location_text: string | null;
+  status: 'PENDING' | 'ACTIVE' | 'REJECTED' | 'SUSPENDED';
+  status_reason: string | null;
+  registered_at: string;
+  approved_at: string | null;
+  device_count: number;
+  pending_device_count: number;
+  active_device_count: number;
+}
+
+let adminAccessToken: string | null = null;
+let adminLastIdentity: SessionAdmin | null = null;
+let adminRemoteTokenSeen = false;
+let adminRefreshInFlight: Promise<boolean> | null = null;
+const adminChannel = typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('abh-admin-session')
+  : null;
+
+adminChannel?.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as { type?: string; access_token?: string; admin?: SessionAdmin };
+  if (data?.type === 'token' && typeof data.access_token === 'string') {
+    adminAccessToken = data.access_token;
+    adminLastIdentity = data.admin ?? null;
+    adminRemoteTokenSeen = true;
+  } else if (data?.type === 'logout') {
+    adminAccessToken = null;
+    adminLastIdentity = null;
+    adminRemoteTokenSeen = false;
+  }
+});
+
+function announceAdminToken(token: string, admin: SessionAdmin): void {
+  adminChannel?.postMessage({ type: 'token', access_token: token, admin });
+}
+
+async function refreshAdminUnderLock(): Promise<boolean> {
+  const locks = navigator.locks;
+  if (typeof locks?.request !== 'function') {
+    throw new Error('Secure administrator session restoration requires a browser with Web Locks support.');
+  }
+
+  const work = async (): Promise<boolean> => {
+    if (adminRemoteTokenSeen && adminAccessToken) {
+      adminRemoteTokenSeen = false;
+      return true;
+    }
+
+    const response = await fetch(`${API_BASE}/abh/admin/auth/refresh.php`, {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    if (!response.ok) {
+      adminAccessToken = null;
+      adminLastIdentity = null;
+      return false;
+    }
+
+    const data = await response.json() as AdminLoginResult;
+    adminAccessToken = data.access_token;
+    adminLastIdentity = data.admin;
+    announceAdminToken(data.access_token, data.admin);
+    return true;
+  };
+
+  return locks.request('abh:admin:refresh', work);
+}
+
+async function refreshAdmin(): Promise<boolean> {
+  if (adminRefreshInFlight) {
+    return adminRefreshInFlight;
+  }
+  adminRefreshInFlight = refreshAdminUnderLock()
+    .catch(() => false)
+    .finally(() => { adminRefreshInFlight = null; });
+  return adminRefreshInFlight;
+}
+
+export async function adminLogin(email: string, password: string): Promise<AdminLoginResult> {
+  const response = await fetch(`${API_BASE}/abh/admin/auth/login.php`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.trim(), password })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const data = await response.json() as AdminLoginResult;
+  adminAccessToken = data.access_token;
+  adminLastIdentity = data.admin;
+  adminRemoteTokenSeen = false;
+  announceAdminToken(data.access_token, data.admin);
+  return data;
+}
+
+export async function restoreAdminSession(): Promise<SessionAdmin | null> {
+  const restored = await refreshAdmin();
+  return restored ? adminLastIdentity : null;
+}
+
+export async function adminLogout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/abh/admin/auth/logout.php`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: adminAccessToken ? { Authorization: `Bearer ${adminAccessToken}` } : {}
+    });
+  } finally {
+    adminAccessToken = null;
+    adminLastIdentity = null;
+    adminRemoteTokenSeen = false;
+    adminChannel?.postMessage({ type: 'logout' });
+  }
+}
+
+export async function adminAuthenticatedFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const send = () => fetch(`${API_BASE}${path}`, {
+    ...options,
+    credentials: 'same-origin',
+    headers: {
+      ...(options.headers ?? {}),
+      ...(adminAccessToken ? { Authorization: `Bearer ${adminAccessToken}` } : {})
+    }
+  });
+
+  let response = await send();
+  if (response.status === 401) {
+    if (!await refreshAdmin()) {
+      adminAccessToken = null;
+      adminLastIdentity = null;
+      adminChannel?.postMessage({ type: 'logout' });
+      handleAuthFailure('SESSION_EXPIRED');
+      return response;
+    }
+    response = await send();
+  }
+  return response;
+}
+
+export async function bootstrapFirstAdmin(input: {
+  bootstrap_key: string;
+  full_name: string;
+  email: string;
+  password: string;
+}): Promise<{ id: number; full_name: string; email: string }> {
+  const response = await fetch(`${API_BASE}/abh/admin/auth/bootstrap.php`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { admin: { id: number; full_name: string; email: string } };
+  return envelope.admin;
+}
+
+export async function fetchAdminAgents(
+  status: AdminAgentItem['status'] | 'ALL' = 'PENDING',
+  search = '',
+  limit = 25,
+  offset = 0
+): Promise<{ items: AdminAgentItem[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams({
+    status, q: search, limit: String(limit), offset: String(offset)
+  });
+  const response = await adminAuthenticatedFetch('/abh/admin/agents.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.json() as { items: AdminAgentItem[]; total: number; limit: number; offset: number };
+}
+
+export async function decideAdminAgent(
+  agentId: number,
+  decision: 'APPROVE' | 'REJECT' | 'SUSPEND' | 'REACTIVATE',
+  reason?: string
+): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/agent-decision.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, decision, ...(reason ? { reason } : {}) })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
+
+export async function decideAdminDevice(
+  deviceId: number,
+  decision: 'APPROVE' | 'REVOKE',
+  reason?: string
+): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/device-decision.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id: deviceId, decision, ...(reason ? { reason } : {}) })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
