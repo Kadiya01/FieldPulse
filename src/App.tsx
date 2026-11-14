@@ -175,13 +175,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={
-        gate === 'ready'
-          ? <Navigate to="/" replace />
-          : <LoginPage onAuthenticated={authenticated => { setAgent(authenticated); setGate('ready'); }} />
+        <LoginPage onAuthenticated={authenticated => { setAgent(authenticated); setGate('ready'); }} />
       } />
-      <Route path="/register" element={
-        gate === 'ready' ? <Navigate to="/" replace /> : <RegisterPage />
-      } />
+      <Route path="/register" element={<RegisterPage />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );
