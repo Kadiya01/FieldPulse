@@ -1845,6 +1845,54 @@ export interface SessionAdmin {
   permissions: string[];
 }
 
+export interface AbhAdminDashboardData {
+  period: {
+    id: number;
+    period_key: string;
+    starts_on: string;
+    ends_on: string;
+    timezone: string;
+    status: 'OPEN' | 'CLOSED' | string;
+    closed_at: string | null;
+  } | null;
+  agents: {
+    total: number;
+    pending: number;
+    active: number;
+    rejected: number;
+    suspended: number;
+  } | null;
+  submissions: {
+    total: number;
+    pending_review: number;
+    correction_requested: number;
+    approved: number;
+    rejected: number;
+    claimed_quantity: number;
+  } | null;
+  performance: {
+    approved_quantity: number;
+    organisation_target: number | null;
+    progress_percent: string | null;
+    top_agents: Array<{
+      agent_id: number;
+      agent_code: string;
+      full_name: string;
+      approved_quantity: number;
+      target_quantity: number | null;
+      rank_position: number;
+      progress_percent: string | null;
+    }>;
+  } | null;
+  rewards: {
+    programs_by_status: Record<string, number>;
+    qualifications_by_status: Record<string, number>;
+    awards_by_status: Record<string, number>;
+    paid_events: number;
+    delivered_events: number;
+  } | null;
+};
+
 export interface AdminLoginResult {
   access_token: string;
   expires_in: number;
@@ -2302,6 +2350,16 @@ export async function fetchAbhAdminAgents(
     throw await toApiError(response);
   }
   return await response.json() as { items: AdminAgentItem[]; total: number; limit: number; offset: number };
+}
+
+export async function fetchAbhAdminDashboard(month: string): Promise<AbhAdminDashboardData> {
+  const params = new URLSearchParams({ month });
+  const response = await adminAuthenticatedFetch('/abh/admin/dashboard.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhAdminDashboardData };
+  return envelope.data;
 }
 
 export async function decideAbhAdminAgent(
