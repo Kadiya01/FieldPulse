@@ -135,7 +135,7 @@ final class AbhAdminSubmissionRepository
 
                 $stmt = $pdo->prepare(
                     'SELECT s.reference_no, s.agent_id, s.reporting_period_id,
-                            s.current_revision_id, s.status, p.period_key,
+                            s.current_revision_id, s.status, p.period_key, p.status AS period_status,
                             r.revision_no, r.claimed_quantity
                        FROM abh_enrollment_submissions s
                        INNER JOIN abh_reporting_periods p ON p.id = s.reporting_period_id
@@ -148,6 +148,48 @@ final class AbhAdminSubmissionRepository
 
                 if (!is_array($row)) {
                     return ['error' => 'not_found'];
+                }
+
+                // Re-check the idempotency key after obtaining the submission
+                // lock. A concurrent retry may have committed while this
+                // request waited for that lock.
+                $recheck = $pdo->prepare(
+                    'SELECT submission_id, decision, review_note
+                       FROM abh_submission_reviews
+                      WHERE idempotency_key = :idempotency_key
+                      LIMIT 1 FOR UPDATE'
+                );
+                $recheck->execute(['idempotency_key' => $idempotencyKey]);
+                $committed = $recheck->fetch(\PDO::FETCH_ASSOC);
+                if (is_array($committed)) {
+                    $same = (int) $committed['submission_id'] === $submissionId
+                        && (string) $committed['decision'] === $decision
+                        && (($committed['review_note'] ?? null) === $note);
+                    if (!$same) {
+                        return ['error' => 'idempotency_conflict'];
+                    }
+
+                    $current = $pdo->prepare(
+                        'SELECT reference_no, status FROM abh_enrollment_submissions WHERE id = :id'
+                    );
+                    $current->execute(['id' => $submissionId]);
+                    $latest = $current->fetch(\PDO::FETCH_ASSOC);
+
+                    if (!is_array($latest)) {
+                        return ['error' => 'not_found'];
+                    }
+
+                    return [
+                        'submission_id' => $submissionId,
+                        'reference_no' => (string) $latest['reference_no'],
+                        'status' => (string) $latest['status'],
+                        'decision' => $decision,
+                        'idempotent_replay' => true,
+                    ];
+                }
+
+                if ((string) $row['period_status'] !== 'OPEN') {
+                    return ['error' => 'period_closed'];
                 }
 
                 if ((string) $row['status'] !== 'PENDING_REVIEW') {
@@ -277,6 +319,9 @@ final class AbhAdminSubmissionRepository
 
         if (($result['error'] ?? null) === 'not_found') {
             throw new ApiException(404, ErrorCode::NOT_FOUND, 'Enrollment submission not found.');
+        }
+        if (($result['error'] ?? null) === 'period_closed') {
+            throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'The reporting period is closed; this submission cannot be changed.');
         }
         if (($result['error'] ?? null) === 'state_conflict') {
             throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'This submission has already been reviewed or is not awaiting review.');
