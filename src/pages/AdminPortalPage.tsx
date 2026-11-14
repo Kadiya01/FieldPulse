@@ -15,6 +15,9 @@ import {
   saveAbhAdminTarget,
   closeAbhReportingPeriod,
   fetchAbhAdminLeaderboard,
+  fetchAbhAdminNotifications,
+  markAbhAdminNotificationRead,
+  markAllAbhAdminNotificationsRead,
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   restoreAdminSession,
@@ -24,6 +27,7 @@ import {
   type AbhAdminSubmissionStatus,
   type AbhAdminTargetData,
   type AbhLeaderboardData,
+  type AbhNotificationItem,
   type SessionAdmin
 } from '../api/client';
 
@@ -875,8 +879,111 @@ function AdminLeaderboardView() {
   );
 }
 
+function AdminNotificationsView() {
+  const [items, setItems] = useState<AbhNotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchAbhAdminNotifications(50, 0);
+      setItems(result.items);
+      setUnreadCount(result.unread_count);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Administrator notifications could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  const markOne = async (id: number) => {
+    setBusy(true);
+    setError('');
+    try {
+      await markAbhAdminNotificationRead(id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The notification could not be marked as read.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const markAll = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await markAllAbhAdminNotificationsRead();
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Notifications could not be marked as read.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-5 px-4 py-6">
+      <section className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Administrator notifications</h1>
+          <p className="mt-1 text-sm text-slate-600">{unreadCount} unread notification(s)</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => void load()} disabled={loading || busy}
+            className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+            Refresh
+          </button>
+          {unreadCount > 0 && (
+            <button type="button" onClick={() => void markAll()} disabled={busy}
+              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              Mark all read
+            </button>
+          )}
+        </div>
+      </section>
+
+      {loading ? (
+        <p role="status" className="rounded-xl bg-white p-5 text-sm text-slate-600">Loading notifications…</p>
+      ) : items.length === 0 ? (
+        <p className="rounded-2xl border border-slate-200 bg-white p-8 text-sm text-slate-600">No administrator notifications yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {items.map(item => (
+            <article key={item.id} className={item.read_at ? 'rounded-2xl border border-slate-200 bg-white p-5' : 'rounded-2xl border border-blue-200 bg-blue-50 p-5'}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-slate-900">{item.title}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-700">{item.message}</p>
+                  <p className="mt-2 text-xs text-slate-500">{new Date(item.created_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()}</p>
+                </div>
+                {!item.read_at && (
+                  <button type="button" onClick={() => void markOne(item.id)} disabled={busy}
+                    className="rounded-xl border border-blue-300 px-3 py-2 text-xs font-semibold text-blue-800 disabled:opacity-50">
+                    Mark read
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+    </div>
+  );
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
-  const [activeSection, setActiveSection] = useState<'agents' | 'submissions' | 'targets' | 'leaderboard'>(() =>
+  const [activeSection, setActiveSection] = useState<'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications'>(() =>
     admin.permissions.includes('agents.read')
       ? 'agents'
       : admin.permissions.includes('submissions.read')
@@ -1003,6 +1110,10 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Agent applications
             </button>
           )}
+          <button type="button" onClick={() => setActiveSection('notifications')}
+            className={activeSection === 'notifications' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+            Notifications
+          </button>
           {admin.permissions.includes('submissions.read') && (
             <button type="button" onClick={() => setActiveSection('submissions')}
               className={activeSection === 'submissions' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
@@ -1024,7 +1135,9 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
         </div>
       </nav>
 
-      {activeSection === 'submissions' ? (
+      {activeSection === 'notifications' ? (
+        <AdminNotificationsView />
+      ) : activeSection === 'submissions' ? (
         <AdminSubmissionQueue admin={admin} />
       ) : activeSection === 'leaderboard' ? (
         <AdminLeaderboardView />
