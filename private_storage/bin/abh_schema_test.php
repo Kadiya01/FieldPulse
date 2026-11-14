@@ -182,6 +182,12 @@ try {
     )->fetchAll(PDO::FETCH_COLUMN);
     abhSchemaAssert('ABH submission revisions store correction idempotency keys', in_array('idempotency_key', $revisionColumns, true));
 
+    $fulfilmentColumns = $pdo->query(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_reward_fulfilment_events'"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    abhSchemaAssert('ABH reward fulfilment events store idempotency keys', in_array('idempotency_key', $fulfilmentColumns, true));
+
     $adminSessionColumns = $pdo->query(
         "SELECT COLUMN_NAME FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_admin_sessions'"
