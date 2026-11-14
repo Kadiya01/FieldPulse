@@ -34,7 +34,7 @@ describe('ABH immutable correction workflow', () => {
   });
 
   it('creates a new revision and evidence, then returns the same submission to review', () => {
-    expect(correctionRepository).toContain('revision_no + 1');
+    expect(correctionRepository).toContain("(int) $submission['revision_no'] + 1");
     expect(correctionRepository).toContain('INSERT INTO abh_submission_revisions');
     expect(correctionRepository).toContain('INSERT INTO abh_submission_evidence');
     expect(correctionRepository).toContain('SET current_revision_id = :revision_id');
