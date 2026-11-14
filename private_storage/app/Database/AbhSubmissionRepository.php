@@ -343,7 +343,7 @@ final class AbhSubmissionRepository
         // Both values are range-checked by the controller before interpolation.
         $items = Connection::fetchAll(
             'SELECT s.id, s.reference_no, s.status, s.submitted_at,
-                    p.period_key, r.activity_date, r.claimed_quantity, r.revision_no,
+                    p.period_key, r.activity_date, r.claimed_quantity, r.revision_no, r.agent_note,
                     (SELECT rv.review_note
                        FROM abh_submission_reviews rv
                       WHERE rv.submission_id = s.id
