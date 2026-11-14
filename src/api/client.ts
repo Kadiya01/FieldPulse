@@ -280,8 +280,7 @@ export interface LoginResult {
   access_token: string;
   expires_in: number;
   agent: SessionAgent;
-  device_bound: boolean;
-  next_step: string;
+  device_bound: true;
 }
 
 /**
