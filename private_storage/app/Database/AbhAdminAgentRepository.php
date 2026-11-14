@@ -234,14 +234,15 @@ final class AbhAdminAgentRepository
                 $pdo->prepare(
                     'UPDATE abh_agent_devices
                         SET status = :status,
-                            verified_at = CASE WHEN :is_approved = 1 THEN UTC_TIMESTAMP(6) ELSE verified_at END,
-                            verified_by_admin_id = CASE WHEN :is_approved = 1 THEN :admin_id ELSE verified_by_admin_id END,
+                            verified_at = CASE WHEN :is_approved_at = 1 THEN UTC_TIMESTAMP(6) ELSE verified_at END,
+                            verified_by_admin_id = CASE WHEN :is_approved_by = 1 THEN :admin_id ELSE verified_by_admin_id END,
                             revoked_at = CASE WHEN :is_revoked = 1 THEN UTC_TIMESTAMP(6) ELSE NULL END,
                             updated_at = UTC_TIMESTAMP(6)
                       WHERE id = :id'
                 )->execute([
                     'status' => $after,
-                    'is_approved' => $after === 'ACTIVE' ? 1 : 0,
+                    'is_approved_at' => $after === 'ACTIVE' ? 1 : 0,
+                    'is_approved_by' => $after === 'ACTIVE' ? 1 : 0,
                     'admin_id' => $adminId,
                     'is_revoked' => $after === 'REVOKED' ? 1 : 0,
                     'id' => $deviceId,
