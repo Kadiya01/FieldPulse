@@ -2025,6 +2025,77 @@ export async function decideAbhAdminSubmission(
   return envelope.data;
 }
 
+export interface AbhAdminTargetAgent {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  location_text: string | null;
+}
+
+export interface AbhAdminAgentTarget extends AbhAdminTargetAgent {
+  target_id: number;
+  target_quantity: number;
+  updated_at: string;
+}
+
+export interface AbhAdminTargetData {
+  period: {
+    id: number;
+    period_key: string;
+    starts_on: string;
+    ends_on: string;
+    timezone: string;
+    status: 'OPEN' | 'CLOSED' | string;
+    closed_at: string | null;
+  } | null;
+  organisation_target: number | null;
+  agent_targets: (AbhAdminAgentTarget & { id: number })[];
+  agents: AbhAdminTargetAgent[];
+}
+
+export async function fetchAbhAdminTargets(month: string): Promise<AbhAdminTargetData> {
+  const params = new URLSearchParams({ month });
+  const response = await adminAuthenticatedFetch('/abh/admin/targets.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhAdminTargetData };
+  return envelope.data;
+}
+
+export async function saveAbhAdminTarget(input: {
+  period_key: string;
+  scope_type: 'ORGANISATION' | 'AGENT';
+  agent_id?: number;
+  target_quantity: number;
+}): Promise<{
+  id: number;
+  period_key: string;
+  scope_type: 'ORGANISATION' | 'AGENT';
+  agent_id: number | null;
+  target_quantity: number;
+  created: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/targets.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: {
+    id: number;
+    period_key: string;
+    scope_type: 'ORGANISATION' | 'AGENT';
+    agent_id: number | null;
+    target_quantity: number;
+    created: boolean;
+  } };
+  return envelope.data;
+}
+
 export async function fetchAbhAdminAgents(
   status: AdminAgentItem['status'] | 'ALL' = 'PENDING',
   search = '',
