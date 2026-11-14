@@ -21,8 +21,8 @@ final class AbhAgentRefreshController implements ActionInterface
 
         $raw = $_COOKIE[AbhAgentAuthCookie::NAME] ?? null;
         if (!is_string($raw) || $raw === '') {
-            throw new ApiException(401, ErrorCode::REFRESH_INVALID, 'No ABH refresh session was presented.')
-                ->withCookie(AbhAgentAuthCookie::cleared());
+            $error = new ApiException(401, ErrorCode::REFRESH_INVALID, 'No ABH refresh session was presented.');
+            throw $error->withCookie(AbhAgentAuthCookie::cleared());
         }
 
         try {
