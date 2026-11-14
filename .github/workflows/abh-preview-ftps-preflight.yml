@@ -1,0 +1,161 @@
+name: ABH Preview FTPS Preflight (No Upload)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abh-preview-ftps-preflight
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Build and compare preview files over FTPS (dry-run only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up PHP 8.2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: '8.2'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: npm
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend checks
+        run: |
+          npm run lint
+          npm test
+          npm run build
+
+      - name: Validate PHP files and staging path safeguards
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+          done < <(find private_storage/app public_html/api -type f -name '*.php' -print0)
+          php -l private_storage/bin/bootstrap_path_test.php
+          php -l private_storage/bin/abh_migrate.php
+          php -l private_storage/bin/abh_migration_plan_test.php
+          php -l private_storage/bin/abh_schema_test.php
+          php private_storage/bin/bootstrap_path_test.php
+          php private_storage/bin/abh_migration_plan_test.php
+
+      - name: Prepare the exact preview bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -s public_html/.htaccess
+          test -s public_html/.user.ini
+          test -d public_html/api
+          test -s private_storage/app/bootstrap.php
+          test -d private_storage/bin
+          test -d private_storage/migrations
+          test -d private_storage/abh_migrations
+          test -d private_storage/workers
+
+          mkdir -p deploy/preview/public deploy/preview/private
+          cp -a dist/. deploy/preview/public/
+          cp -a public_html/.htaccess public_html/.user.ini deploy/preview/public/
+          mkdir -p deploy/preview/public/api
+          cp -a public_html/api/. deploy/preview/public/api/
+          cp -a private_storage/app private_storage/bin private_storage/migrations private_storage/abh_migrations private_storage/workers deploy/preview/private/
+
+          test -s deploy/preview/public/index.html
+          test -s deploy/preview/public/.htaccess
+          test -s deploy/preview/private/app/bootstrap.php
+
+          if find deploy/preview -type f \\( -name '.env' -o -name '.env.*' \\) | grep -q .; then
+            echo "::error::A secret environment file was found in the preflight bundle."
+            exit 1
+          fi
+
+      - name: Verify the two dedicated cPanel FTPS identities
+        shell: bash
+        env:
+          PUBLIC_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          PUBLIC_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          PUBLIC_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          PRIVATE_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          PRIVATE_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          PRIVATE_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in PUBLIC_FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_SERVER PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required ABH preview FTPS secret for $name."
+              exit 1
+            fi
+          done
+          [[ "$PUBLIC_FTP_SERVER" == "ftp.abhglobalinformationtechnologysolutions.com.ng" ]]
+          [[ "$PRIVATE_FTP_SERVER" == "ftp.abhglobalinformationtechnologysolutions.com.ng" ]]
+          [[ "$PUBLIC_FTP_USERNAME" == "abhpreview_public@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
+          [[ "$PRIVATE_FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
+
+      - name: Compare private bundle against the jailed private preview root (NO UPLOAD)
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview/private/
+          server-dir: ./
+          dangerous-clean-slate: false
+          dry-run: true
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env
+            **/.env.*
+            **/*.log
+            **/fieldpulse/**
+            **/uploads/**
+            **/quarantine/**
+            **/processed/**
+            **/tmp/**
+
+      - name: Compare public bundle against the jailed public document root (NO UPLOAD)
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview/public/
+          server-dir: ./
+          dangerous-clean-slate: false
+          dry-run: true
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env
+            **/.env.*
+            private_storage/**
+            **/private_storage/**
