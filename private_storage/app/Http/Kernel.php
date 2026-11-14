@@ -44,7 +44,7 @@ final class Kernel
         'abh.admin.agent.decision' => \FieldPulse\Domain\AbhAdminAgentDecisionController::class,
         'abh.admin.device.decision' => \FieldPulse\Domain\AbhAdminDeviceDecisionController::class,
         'abh.admin.submissions' => \FieldPulse\Domain\AbhAdminSubmissionsController::class,
-        'abh.admin.targets' => \\FieldPulse\\Domain\\AbhAdminTargetsController::class,
+        'abh.admin.targets' => \FieldPulse\Domain\AbhAdminTargetsController::class,
         'abh.admin.submission.decision' => \FieldPulse\Domain\AbhAdminSubmissionDecisionController::class,
         'abh.admin.submission.evidence' => \FieldPulse\Domain\AbhAdminSubmissionEvidenceController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
