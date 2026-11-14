@@ -47,7 +47,7 @@ The dedicated migration runner is bound to:
 - Preview URL: `https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng`
 - Private root: `/home/abhgloba/abhpreview_private_storage`
 
-Migrations 001–010 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. Migration 009 adds per-submission revision idempotency for correction resubmissions. Migration 010 seeds the separate `periods.close` permission and widens the frozen organisation progress percentage. The complete schema suite passed **135 checks on each engine** in GitHub Actions run #43628703261. These checks ran against disposable CI databases; they did not apply migrations to cPanel. **No migration has been applied to the cPanel staging database.**
+Migrations 001–011 passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. Migration 009 adds per-submission revision idempotency for correction resubmissions. Migration 010 seeds the separate `periods.close` permission and widens the frozen organisation progress percentage. Migration 011 adds idempotency keys to reward fulfilment events. The complete schema suite passed **136 checks on each engine** in GitHub Actions run [#292](https://github.com/Kadiya01/FieldPulse/actions/runs/43630400560). These checks ran against disposable CI databases; they did not apply migrations to cPanel. **No migration has been applied to the cPanel staging database.**
 
 ## 4. Implemented application slices
 
@@ -75,6 +75,8 @@ The following ABH slices are implemented on the feature branch and passed the ap
 - Agent approve/reject/suspend/reactivate decisions require the relevant permission and valid state transition. Rejection and suspension require a reason.
 - Device approval and revocation are independent of the agent account decision. Device approval requires the agent account to be ACTIVE. Revoking a device or suspending/rejecting an agent revokes active agent sessions.
 - Agent/device status changes, corresponding notifications and audit entries are committed together in database transactions. Administrator roles and permissions are read from the ABH database on every private admin request.
+- The administrator overview uses the selected reporting month and reads agent counts, submission states, approved enrollment totals, organisation and agent targets, top agents, reward programme/qualification/award states, and payment/delivery event counts from ABH tables. Sections are omitted unless the administrator has the matching read/management permission.
+- Dashboard performance is based on approved monthly totals; the sum of agent-claimed quantities is shown separately and is never presented as approved performance. The route is protected by ABH administrator authentication and its permission allowlist.
 
 ### Monthly enrollment, evidence and performance
 
@@ -106,35 +108,33 @@ The following ABH slices are implemented on the feature branch and passed the ap
 
 ## 5. Latest CI evidence
 
-GitHub Actions run #43628703261 passed:
+GitHub Actions run [#292](https://github.com/Kadiya01/FieldPulse/actions/runs/43630400560) passed on branch head `f06c1e80d22bfa431ba4d9c28486fcfe0706fab4`:
 
 - Frontend lint passed.
-- **17 frontend test files; 159 tests passed.**
+- **20 frontend test files; 175 tests passed.**
 - PHP syntax checks passed.
 - 5 preview bootstrap isolation checks passed.
 - 19 ABH migration-planning checks passed.
 - Frontend production build and build-output verification passed.
-- MySQL 8.0 ABH schema compatibility: **135 checks passed**.
-- MariaDB 11.4 ABH schema compatibility: **135 checks passed**.
+- MySQL 8.0 ABH schema compatibility: **136 checks passed**.
+- MariaDB 11.4 ABH schema compatibility: **136 checks passed**.
 - The separate **Deploy to ABH preview cPanel (FTPS)** job was **skipped** by the deployment safety guard.
 
-Run: https://github.com/Kadiya01/FieldPulse/actions/runs/43628703261
+The workflow uploaded a CI build artifact only. It did not deploy application files to cPanel.
 
 ## 6. Overall application readiness
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-The implemented registration, authentication, agent submissions, correction, administrator agent/device review, submission review, monthly target management and period-finalisation slices are not yet the complete ABH Monthly Enrollment System. No live preview application deployment, cPanel migration, or browser-to-staging-database end-to-end runtime test has been performed.
+The implemented registration, authentication, agent submissions, correction, administrator agent/device review, submission review, monthly target management, period finalisation and live administrator overview are not yet the complete ABH Monthly Enrollment System. No live preview application deployment, cPanel migration, or browser-to-staging-database end-to-end runtime test has been performed.
 
 Remaining work includes:
 
-- A full agent and administrator leaderboard view with month filters and preserved prior-month rankings using the frozen snapshots.
-- Agent/admin notification APIs, inbox screens, unread state and notification preferences.
-- Reward-programme management, rule configuration, automatic qualification previews, award approval, gift assignment, and separate payment/delivery recording and screens.
-- Admin dashboard summaries for agent counts, submissions, approved totals, targets and reward status using live database values.
+- Reward-programme management, rule configuration, automatic qualification previews, award selection/approval, gift assignment, and separate payment/delivery recording and screens. The ABH reward schema exists, but these workflows still need their dedicated API and user-interface implementation.
 - Administrator account/role management beyond first-admin provisioning.
-- End-to-end tests across agent and admin websites, then runtime checks against the isolated preview database.
-- A deployment readiness sign-off after preview configuration, bootstrap, migration status and the full application release gate are verified.
+- End-to-end checks for agent/admin leaderboard month selection and frozen prior-month snapshots.
+- End-to-end tests across both websites, then runtime checks against the isolated preview database.
+- Deployment readiness sign-off after preview configuration, one-time administrator bootstrap, staging migration status and the full application release gate are verified.
 
 Do not upload this intermediate build as the completed ABH system.
 
