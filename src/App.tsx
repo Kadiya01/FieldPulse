@@ -1,20 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import CapturePage from './pages/CapturePage';
-import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
-import LeaderboardPage from './pages/LeaderboardPage';
-import ReviewsPage from './pages/ReviewsPage';
-import RewardsPage from './pages/RewardsPage';
+import AbhAgentPortalPage from './pages/AbhAgentPortalPage';
 import AdminPortalPage from './pages/AdminPortalPage';
-import DashboardPage from './pages/DashboardPage';
-import ProfilePage from './pages/ProfilePage';
-import Layout from './components/Layout';
 import BrandHeader from './components/BrandHeader';
 import { restoreSession, logout, type RestoreResult, type SessionAgent } from './api/client';
-import { triggerSync } from './sync/coordinator';
-import { SessionContext, useSessionValue } from './auth/sessionContext';
 
 type Gate = 'checking' | 'ready' | 'login' | 'unregistered';
 
@@ -36,7 +27,6 @@ export default function App() {
   const isAdminPath = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
   const [gate, setGate] = useState<Gate>('checking');
   const [agent, setAgent] = useState<SessionAgent | null>(null);
-  const session = useSessionValue(agent);
 
   useEffect(() => {
     if (isAdminPath) {
@@ -68,7 +58,6 @@ export default function App() {
 
           // A no-op while the network is down, and the thing that starts the
           // queue moving again once it is not.
-          void triggerSync();
 
           return;
         }
@@ -83,9 +72,6 @@ export default function App() {
         // waiting for the connection it could not get. Opening the app is the
         // signal that it is worth trying again, and waiting for the agent to
         // notice a queue that is supposed to empty itself is not a design.
-        if (result.status === 'authenticated') {
-          void triggerSync();
-        }
       })
       .catch(() => {
         if (live) {
@@ -151,10 +137,8 @@ export default function App() {
     );
   }
 
-  // ABH authentication is now independent, but the legacy FieldPulse capture,
-  // queue, reward and admin pages still call legacy endpoints. Keep those screens
-  // unreachable until their ABH-specific APIs are implemented; an ABH token must
-  // never be sent to a legacy account or enrollment endpoint.
+  // Authenticated ABH agents use only the new monthly enrollment portal.
+  // Never run the legacy offline queue or expose FieldPulse APIs with ABH tokens.
   if (gate === 'ready') {
     const endSession = async () => {
       try {
@@ -168,125 +152,37 @@ export default function App() {
       }
     };
 
-    return (
-      <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-        <section className="w-full max-w-lg rounded-3xl bg-white p-8 text-center shadow-2xl sm:p-10">
-          <BrandHeader className="mb-5 flex justify-center" />
-          {agent ? (
-            <>
-              <h1 className="text-2xl font-bold text-slate-900">ABH account signed in</h1>
-              <p className="mt-3 text-sm text-slate-600">
-                Welcome, {agent.full_name}. Your account and approved browser device have been authenticated.
-              </p>
-              <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Agent reference</p>
-                <p className="mt-1 text-xl font-bold text-slate-900">{agent.agent_code}</p>
-              </div>
-              <p className="mt-5 text-sm leading-6 text-slate-600">
-                The ABH enrollment dashboard and monthly submission pages are the next development stage.
-                Legacy FieldPulse capture and reporting screens are disabled for ABH accounts.
-              </p>
-            </>
-          ) : (
-            <>
-              <h1 className="text-2xl font-bold text-slate-900">Connection unavailable</h1>
-              <p className="mt-3 text-sm leading-6 text-slate-600">
-                The system could not verify an ABH session. No enrollment access has been granted.
-                Reconnect and sign in again.
-              </p>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={endSession}
-            className="mt-7 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white hover:bg-slate-800"
-          >
-            {agent ? 'Sign out' : 'Return to sign in'}
-          </button>
-        </section>
-      </main>
-    );
+    return agent
+      ? <AbhAgentPortalPage agent={agent} onSignOut={endSession} />
+      : (
+        <main className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+          <section className="w-full max-w-lg rounded-3xl bg-white p-8 text-center shadow-2xl sm:p-10">
+            <BrandHeader className="mb-5 flex justify-center" />
+            <h1 className="text-2xl font-bold text-slate-900">Connection unavailable</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              The system could not verify an ABH session. No enrollment access has been granted.
+              Reconnect and sign in again.
+            </p>
+            <button type="button" onClick={() => { window.location.href = '/login'; }}
+              className="mt-7 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white hover:bg-slate-800">
+              Return to sign in
+            </button>
+          </section>
+        </main>
+      );
   }
 
-  const isReady = (): boolean => (gate as Gate) === 'ready';
-  const requireReady = (element: React.ReactNode) =>
-    isReady() ? element : <Navigate to="/login" replace />;
-
   return (
-    <SessionContext.Provider value={session}>
-      <Routes>
-        {/*
-          One layout for every authenticated screen, so navigation exists in one
-          place. Previously each page rendered its own header linking only to
-          Capture, which left `/queue` and `/leaderboard` reachable only by typing
-          the URL.
-        */}
-        <Route element={requireReady(<Layout />)}>
-          <Route path="/" element={<CapturePage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/queue" element={<QueuePage />} />
-          <Route path="/leaderboard" element={<LeaderboardPage />} />
-          {/*
-            Rewards is mounted for every authenticated session. /self is
-            `bearer`, so an agent sees only their own published entitlements, and
-            the operator half of the page is gated by the role the page reads —
-            with the server checking the same thing on every call.
-          */}
-          <Route path="/rewards" element={<RewardsPage />} />
-          {/*
-            The route is mounted for every authenticated session and the page
-            checks the role itself, rather than the route being conditionally
-            declared from `agent`. Both work, but only one of them still behaves
-            correctly when the agent changes underneath a mounted route — and a
-            role revoked server-side should not leave a stale screen.
-          */}
-          <Route path="/reviews" element={<ReviewsPage />} />
-          {/*
-            The account directory is mounted for every authenticated session and
-            the page checks `isAdmin` itself, exactly like Reviews. An
-            administrator demoted server-side since this tab loaded must land on
-            a "no longer admin" panel, not on stale controls.
-          */}
-        </Route>
-
-
-        <Route
-          path="/login"
-          element={
-            isReady() ? (
-              <Navigate to="/" replace />
-            ) : (
-              <LoginPage
-                onAuthenticated={(authenticated) => {
-                  setAgent(authenticated);
-                  setGate('ready');
-                }}
-              />
-            )
-          }
-        />
-
-        <Route
-          path="/register"
-          element={
-            isReady() ? (
-              <Navigate to="/" replace />
-            ) : (
-              /*
-               * Public self-registration remains pending until an admin
-               * approves the new agent in account management.
-               */
-              <RegisterPage />
-            )
-          }
-        />
-
-        {/* Without a catch-all an unknown URL renders an empty shell, since
-            Routes has nothing to match. Send it back to the capture screen
-            rather than leaving the user on a blank page. */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </SessionContext.Provider>
+    <Routes>
+      <Route path="/login" element={
+        gate === 'ready'
+          ? <Navigate to="/" replace />
+          : <LoginPage onAuthenticated={authenticated => { setAgent(authenticated); setGate('ready'); }} />
+      } />
+      <Route path="/register" element={
+        gate === 'ready' ? <Navigate to="/" replace /> : <RegisterPage />
+      } />
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
   );
 }
