@@ -371,6 +371,30 @@ export async function registerAbhAgent(input: AbhAgentRegistrationInput): Promis
 }
 
 /** ABH monthly enrollment submission returned by the dedicated API. */
+export interface AbhLeaderboardItem {
+  agent_id: number;
+  rank_position: number;
+  agent_code: string;
+  display_name: string;
+  approved_quantity: number;
+  target_quantity: number | null;
+  progress_percent: string | null;
+  is_viewer: boolean;
+}
+
+export interface AbhLeaderboardData {
+  period_key: string;
+  period_status: 'OPEN' | 'CLOSED' | string | null;
+  total: number;
+  items: AbhLeaderboardItem[];
+  viewer: {
+    rank_position: number | null;
+    approved_quantity: number;
+    target_quantity: number | null;
+    progress_percent: string | null;
+  };
+}
+
 export interface AbhAgentSubmissionItem {
   id: number;
   reference_no: string;
@@ -491,6 +515,24 @@ export async function submitAbhCorrection(input: {
     throw await toApiError(response);
   }
   const envelope = await response.json() as { data: AbhSubmissionResponse };
+  return envelope.data;
+}
+
+export async function fetchAbhAgentLeaderboard(
+  month: string,
+  limit = 25,
+  offset = 0
+): Promise<AbhLeaderboardData> {
+  const params = new URLSearchParams({
+    month,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  const response = await authenticatedFetch('/abh/agents/leaderboard.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhLeaderboardData };
   return envelope.data;
 }
 
@@ -1956,6 +1998,24 @@ export interface AbhAdminSubmissionList {
   total: number;
   limit: number;
   offset: number;
+}
+
+export async function fetchAbhAdminLeaderboard(
+  month: string,
+  limit = 50,
+  offset = 0
+): Promise<AbhLeaderboardData> {
+  const params = new URLSearchParams({
+    month,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  const response = await adminAuthenticatedFetch('/abh/admin/leaderboard.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhLeaderboardData };
+  return envelope.data;
 }
 
 export async function fetchAbhAdminSubmissions(
