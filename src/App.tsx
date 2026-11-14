@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import CapturePage from './pages/CapturePage';
 import QueuePage from './pages/QueuePage';
 import LoginPage from './pages/LoginPage';
@@ -32,12 +32,14 @@ type Gate = 'checking' | 'ready' | 'login' | 'unregistered';
  * trip for an answer already in hand.
  */
 export default function App() {
+  const location = useLocation();
+  const isAdminPath = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
   const [gate, setGate] = useState<Gate>('checking');
   const [agent, setAgent] = useState<SessionAgent | null>(null);
   const session = useSessionValue(agent);
 
   useEffect(() => {
-    if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) {
+    if (isAdminPath) {
       return;
     }
     let live = true;
@@ -105,9 +107,9 @@ export default function App() {
       live = false;
       window.removeEventListener('auth_failure', onFailure);
     };
-  }, []);
+  }, [isAdminPath]);
 
-  if (window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) {
+  if (isAdminPath) {
     return <AdminPortalPage />;
   }
 
