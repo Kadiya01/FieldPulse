@@ -2,6 +2,20 @@
 -- Migration 008: isolated administrator sessions and permission catalogue.
 -- No public administrator self-registration is introduced by this migration.
 
+-- A locked singleton prevents two concurrent first-admin setup requests.
+CREATE TABLE abh_admin_bootstrap_guard (
+    singleton_id TINYINT UNSIGNED NOT NULL,
+    initialized_at DATETIME(6) NULL,
+    admin_user_id BIGINT UNSIGNED NULL,
+    PRIMARY KEY (singleton_id),
+    CONSTRAINT chk_abh_admin_bootstrap_singleton CHECK (singleton_id = 1),
+    CONSTRAINT fk_abh_admin_bootstrap_admin
+        FOREIGN KEY (admin_user_id) REFERENCES abh_admin_users (id)
+        ON UPDATE RESTRICT ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO abh_admin_bootstrap_guard (singleton_id) VALUES (1);
+
 CREATE TABLE abh_admin_sessions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     admin_user_id BIGINT UNSIGNED NOT NULL,
