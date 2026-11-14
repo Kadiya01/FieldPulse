@@ -454,6 +454,8 @@ export async function logout(): Promise<void> {
     await fetch(`${API_BASE}/abh/auth/logout.php`, { method: 'POST' });
   } finally {
     setAccessToken(null);
+    lastRefreshedAgent = null;
+    remoteTokenSeen = false;
   }
 }
 
