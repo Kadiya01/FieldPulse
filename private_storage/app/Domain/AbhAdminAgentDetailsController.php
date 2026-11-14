@@ -21,14 +21,13 @@ final class AbhAdminAgentDetailsController implements ActionInterface
 
         $admin = $request->requireAbhAdminContext();
         $admin->requirePermission('agents.read');
-        $admin->requirePermission('devices.read');
 
         $agentId = $request->queryInt('id');
         if ($agentId === null || $agentId < 1) {
             throw ApiException::validation('A valid agent id is required.', ['field' => 'id']);
         }
 
-        $details = AbhAdminAgentRepository::agentDetails($agentId);
+        $details = AbhAdminAgentRepository::agentDetails($agentId, $admin->hasPermission('devices.read'));
         if ($details === null) {
             throw new ApiException(404, ErrorCode::NOT_FOUND, 'Agent not found.');
         }
