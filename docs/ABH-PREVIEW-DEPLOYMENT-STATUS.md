@@ -54,26 +54,34 @@ The dedicated migration runner is bound to:
 - Preview URL: `https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng`
 - Private root: `/home/abhgloba/abhpreview_private_storage`
 
-The five ABH migrations passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. Those tests did not apply migrations to cPanel. No migration has been applied to the cPanel staging database.
+The six ABH migrations passed disposable MySQL 8.0 and MariaDB 11.4 CI compatibility tests. The latest schema suite passed 98 checks on MySQL 8.0.46 and 98 checks on MariaDB 11.4.13. Those tests used disposable CI databases; they did not apply migrations to cPanel. No migration has been applied to the cPanel staging database.
 
 ## 4. Application readiness — remaining blocker
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-The current feature branch still contains the legacy FieldPulse application contract in important paths:
+The first ABH application slice is now implemented and CI-verified:
 
-- `src/pages/RegisterPage.tsx` still asks for a username and NIN.
-- `private_storage/app/Domain/AgentRegistrationController.php` still writes to the legacy `agents` table and requires username/NIN.
-- `src/pages/LoginPage.tsx` still authenticates through the legacy FieldPulse login flow.
-- The React route tree still exposes the legacy capture/queue/review/rewards experience.
-- The new `abh_*` tables exist only in the ABH migration set; no ABH-specific application controllers currently use them.
+- `src/pages/RegisterPage.tsx` now collects full name, Nigerian phone, password, IMEI, device type and optional email/location. It no longer asks for username or NIN.
+- The form calls the dedicated `/api/v1/abh/agents/register.php` endpoint. The legacy `/api/v1/agents/register.php` route remains unchanged.
+- `AbhAgentRegistrationController` validates the ABH contract and writes only to ABH-owned tables.
+- `AbhAgentRepository` creates the pending agent, password hash, pending device, audit event and active-admin notifications in one database transaction.
+- Migration 006 adds unique normalized phone and globally unique registered-device IMEI constraints, plus hashed ABH registration throttling.
+- GitHub Actions run #62 passed frontend lint and 110 tests, PHP syntax checks, bootstrap isolation, migration safety, build preparation, and all six migration compatibility checks: 98 MySQL 8.0.46 checks and 98 MariaDB 11.4.13 checks.
 
-Therefore the present build is not yet the ABH Monthly Enrollment Agent Website and Admin Website requested by the product requirements. Uploading it as if it were the completed ABH system would put the wrong application on the preview URL.
+The overall build is still **NOT READY** for deployment as the complete ABH Monthly Enrollment System:
+
+- `src/pages/LoginPage.tsx` still uses the legacy FieldPulse login flow; ABH phone/password authentication is the next implementation slice.
+- ABH admin authentication, approval, suspension and device authorization are not yet connected to the new ABH tables.
+- The old capture/queue/review/rewards route tree still exists; the ABH enrollment reporting and management pages are not yet complete.
+- ABH submissions, evidence, reviews, target management, final monthly leaderboard, reward management and payment/delivery flows still need their ABH-specific controllers and end-to-end tests.
+
+Do not upload this intermediate build as the completed ABH system. The registration foundation is ready for the next development phase, but the main deployment gate must remain locked.
 
 ## 5. Required work before application deployment
 
-1. Implement the ABH-specific phone/password registration and authentication flow against `abh_agents` and `abh_agent_credentials`; IMEI remains device metadata, not a password.
-2. Implement ABH agent approval, suspension, device authorization and role separation against the ABH tables.
+1. Implement ABH phone/password login and revocable sessions against `abh_agents` and `abh_agent_credentials`; pending, rejected and suspended agents must be denied. IMEI remains device metadata, not a password.
+2. Implement ABH admin authentication, agent approval, suspension, device authorization and role separation against the ABH tables.
 3. Implement ABH enrollment submission, private evidence storage, correction/resubmission and admin review against `abh_enrollment_submissions`, revisions, evidence and reviews.
 4. Implement monthly targets, approved totals, leaderboard finalization, reward eligibility, management award decisions, payment/delivery and audit records.
 5. Complete agent/admin browser end-to-end tests and the required PHP/database release gate.
