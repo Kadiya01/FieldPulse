@@ -11,6 +11,8 @@ use FieldPulse\Http\Request;
 use FieldPulse\Http\Response;
 use FieldPulse\Security\AbhRegistrationRateLimiter;
 use FieldPulse\Security\Credentials;
+use FieldPulse\Security\Jwk;
+use FieldPulse\Security\SignatureVerifier;
 use FieldPulse\Support\Logger;
 
 /**
@@ -36,7 +38,7 @@ final class AbhAgentRegistrationController implements ActionInterface
         $body = $request->json();
         Validator::assertNoUnknownKeys(
             $body,
-            ['full_name', 'phone', 'email', 'location', 'imei', 'device_type', 'password'],
+            ['full_name', 'phone', 'email', 'location', 'imei', 'device_type', 'password', 'device_uuid', 'public_key_jwk', 'key_proof'],
             'ABH agent registration'
         );
 
@@ -51,6 +53,23 @@ final class AbhAgentRegistrationController implements ActionInterface
         $imei = Validator::imei($body['imei'] ?? null);
         $deviceType = Validator::deviceType($body['device_type'] ?? null);
         $password = Validator::password($body['password'] ?? null);
+
+        $deviceUuid = Validator::string($body['device_uuid'] ?? null, 36, 36, 'device_uuid');
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $deviceUuid) !== 1) {
+            throw ApiException::validation('This browser device identity is invalid.', ['field' => 'device_uuid']);
+        }
+
+        $submittedJwk = $body['public_key_jwk'] ?? null;
+        if (!is_array($submittedJwk)) {
+            throw ApiException::validation('A public device key is required.', ['field' => 'public_key_jwk']);
+        }
+        $publicKeyJwk = Jwk::validatePublicJwk($submittedJwk);
+        $keyProof = Validator::string($body['key_proof'] ?? null, 80, 180, 'key_proof');
+        SignatureVerifier::assertProofOfPossession(
+            $publicKeyJwk,
+            "ABH_REGISTRATION\\n" . $deviceUuid . "\\n" . $imei,
+            $keyProof
+        );
 
         // Credentials uses bcrypt, whose input is limited to 72 bytes. Reject
         // longer UTF-8 passwords instead of silently hashing a truncated value.
@@ -72,7 +91,9 @@ final class AbhAgentRegistrationController implements ActionInterface
                 $location,
                 $imei,
                 $deviceType,
-                $passwordHash
+                $passwordHash,
+                $deviceUuid,
+                $publicKeyJwk
             );
         } catch (\PDOException $error) {
             if ((string) $error->getCode() === '23000' || (int) ($error->errorInfo[1] ?? 0) === 1062) {
