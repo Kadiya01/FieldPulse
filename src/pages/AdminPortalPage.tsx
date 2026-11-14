@@ -152,6 +152,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
   const loadAgents = useCallback(async () => {
     setLoading(true);
     setError('');
+    setError('');
     try {
       const result = await fetchAbhAdminAgents(status, search);
       setItems(result.items);
