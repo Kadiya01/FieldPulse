@@ -92,7 +92,6 @@ final class AbhAgentLoginController implements ActionInterface
 
         $jwk = Jwk::validatePublicJwk($jwk);
 
-        Clock::assertFreshTimestamp;
         \FieldPulse\Security\CanonicalPayload::assertFreshTimestamp(
             $timestamp,
             Clock::timestamp(),
