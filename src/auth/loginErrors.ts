@@ -10,7 +10,7 @@ export function loginErrorMessage(error: unknown): string {
   }
 
   if (error.status === 401) {
-    return 'Sign in failed. Check your username and password.';
+    return 'Sign in failed. Check your phone number and password, and use the browser registered to your account.';
   }
 
   return error.message;
