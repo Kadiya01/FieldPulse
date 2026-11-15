@@ -132,6 +132,7 @@ describe('ABH reward programme configuration contract', () => {
     expect(kernel).toContain("'abh.admin.reward.lifecycle' => 'admin'");
     expect(lifecycleController).toContain("requirePermission('rewards.manage')");
     expect(lifecycleController).toContain("requirePermission('rewards.approve')");
+    expect(lifecycleController).toContain("hasPermission('rewards.approve')");
     expect(lifecycleController).toContain("CREATE_GIFT");
     expect(lifecycleController).toContain("ASSIGN_GIFT");
     expect(lifecycleController).toContain("APPROVE_AWARD");
@@ -181,6 +182,9 @@ describe('ABH reward programme configuration contract', () => {
     expect(adminUi).toContain('Record payment');
     expect(adminUi).toContain('Record delivery');
     expect(adminUi).toContain('Append-only fulfilment history');
+    expect(adminUi).toContain('const canRead = canManage || canApprove');
+    expect(adminUi).toContain('const key = paymentKeys[a.id] || crypto.randomUUID()');
+    expect(adminUi).toContain('const key = deliveryKeys[a.id] || crypto.randomUUID()');
   });
 
 });
