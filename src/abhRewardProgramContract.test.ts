@@ -11,6 +11,8 @@ describe('ABH reward programme configuration contract', () => {
   const programs = read('../private_storage/app/Domain/AbhAdminRewardProgramsController.php');
   const rules = read('../private_storage/app/Domain/AbhAdminRewardRulesController.php');
   const repository = read('../private_storage/app/Database/AbhAdminRewardProgramRepository.php');
+  const qualificationRepository = read('../private_storage/app/Database/AbhAdminRewardQualificationRepository.php');
+  const qualificationController = read('../private_storage/app/Domain/AbhAdminRewardQualificationController.php');
   const client = read('api/client.ts');
   const adminUi = read('pages/AdminPortalPage.tsx');
 
@@ -79,6 +81,41 @@ describe('ABH reward programme configuration contract', () => {
     expect(programs).toContain("($body['action'] ?? null) === 'ACTIVATE'");
     expect(adminUi).toContain('activateAbhRewardProgram');
     expect(client).toContain('activateAbhRewardProgram');
+  });
+
+
+  it('previews only closed-period frozen leaderboard snapshots without writing qualifications', () => {
+    expect(kernel).toContain("'abh.admin.reward.qualifications' => \\FieldPulse\\Domain\\AbhAdminRewardQualificationController::class");
+    expect(kernel).toContain("'abh.admin.reward.qualifications' => 'admin'");
+    expect(qualificationController).toContain("$admin->requirePermission('rewards.manage')");
+    expect(qualificationController).toContain("AbhAdminRewardQualificationRepository::preview");
+    expect(qualificationRepository).toContain("period_status'] !== 'CLOSED'");
+    expect(qualificationRepository).toContain('abh_monthly_leaderboard_snapshots');
+    expect(qualificationRepository).toContain("'read_only' => true");
+    expect(qualificationRepository).toContain('private static function buildPreview');
+    expect(qualificationRepository.split('public static function preview')[1].split('public static function evaluate')[0]).not.toContain('INSERT INTO abh_reward_qualifications');
+  });
+
+  it('evaluates once from frozen snapshots, stores rule versions and audits the result', () => {
+    expect(qualificationController).toContain("($body['action'] ?? null) !== 'EVALUATE'");
+    expect(qualificationRepository).toContain('INSERT INTO abh_reward_qualifications');
+    expect(qualificationRepository).toContain("'INELIGIBLE'");
+    expect(qualificationRepository).toContain("'ELIGIBLE'");
+    expect(qualificationRepository).toContain("'evaluated_rules'");
+    expect(qualificationRepository).toContain("'matched_rule_id'");
+    expect(qualificationRepository).toContain('qualification_snapshot_incomplete');
+    expect(qualificationRepository).toContain('reward.qualification.evaluated');
+    expect(qualificationRepository).toContain('abh_notifications');
+    expect(qualificationRepository).toContain("'idempotent_replay' => true");
+  });
+
+  it('exposes the preview and explicit evaluation to reward managers', () => {
+    expect(client).toContain('fetchAbhRewardQualificationPreview');
+    expect(client).toContain('evaluateAbhRewardQualifications');
+    expect(adminUi).toContain('Qualification preview');
+    expect(adminUi).toContain('Preview qualification');
+    expect(adminUi).toContain('Save qualification evaluation');
+    expect(adminUi).toContain('qualificationPreview.items.map');
   });
 
   it('exposes typed frontend methods for programme and rule management', () => {
