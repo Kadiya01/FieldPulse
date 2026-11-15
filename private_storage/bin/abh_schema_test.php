@@ -887,6 +887,56 @@ try {
     $giftTwoId = (int) $pdo->lastInsertId();
     abhSchemaAssert('management gift catalogue stores multiple gift choices', true);
 
+    // Exercise InnoDB row-lock contention with two independent connections.
+    // This is a disposable CI-only stock race; no production or preview DB is used.
+    $pdo->prepare('UPDATE abh_reward_gifts SET available_quantity = 1 WHERE id = ?')
+        ->execute([$giftOneId]);
+    $concurrentPdo = new PDO($dsn, $user, $password, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
+    $pdo->beginTransaction();
+    $firstStockLock = $pdo->prepare('SELECT available_quantity FROM abh_reward_gifts WHERE id = ? FOR UPDATE');
+    $firstStockLock->execute([$giftOneId]);
+    $firstStock = (int) $firstStockLock->fetchColumn();
+
+    $concurrentPdo->beginTransaction();
+    $secondLockRejected = false;
+    try {
+        $secondStockLock = $concurrentPdo->prepare(
+            'SELECT available_quantity FROM abh_reward_gifts WHERE id = ? FOR UPDATE NOWAIT'
+        );
+        $secondStockLock->execute([$giftOneId]);
+    } catch (PDOException $lockError) {
+        $driverCode = (int) ($lockError->errorInfo[1] ?? 0);
+        $secondLockRejected = in_array($driverCode, [1205, 3572], true);
+    } finally {
+        if ($concurrentPdo->inTransaction()) $concurrentPdo->rollBack();
+    }
+
+    $stockUpdate = $pdo->prepare(
+        'UPDATE abh_reward_gifts
+            SET available_quantity = available_quantity - 1
+          WHERE id = ? AND available_quantity >= 1'
+    );
+    $stockUpdate->execute([$giftOneId]);
+    $firstReservationSucceeded = $stockUpdate->rowCount() === 1 && $firstStock === 1;
+    $pdo->commit();
+
+    $concurrentPdo->beginTransaction();
+    $secondStockRead = $concurrentPdo->prepare(
+        'SELECT available_quantity FROM abh_reward_gifts WHERE id = ? FOR UPDATE NOWAIT'
+    );
+    $secondStockRead->execute([$giftOneId]);
+    $remainingStock = (int) $secondStockRead->fetchColumn();
+    $secondReservationSucceeded = $remainingStock >= 1;
+    $concurrentPdo->rollBack();
+
+    abhSchemaAssert('concurrent stock allocator is blocked by the first InnoDB row lock', $secondLockRejected);
+    abhSchemaAssert('only one allocator can reserve the final stock unit', $firstReservationSucceeded && !$secondReservationSucceeded && $remainingStock === 0);
+
+
     $awardInsert = $pdo->prepare(
         'INSERT INTO abh_reward_awards
          (qualification_id, program_id, gift_id, agent_id, reporting_period_id,
