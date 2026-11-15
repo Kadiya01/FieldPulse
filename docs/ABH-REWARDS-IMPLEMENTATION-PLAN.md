@@ -75,7 +75,8 @@ Rule selection is deterministic: the first matching active rule ordered by `rule
 - [x] Show payment and delivery progress independently, including partial payment and partial delivery; expose no administrator controls in the agent portal.
 - [x] Add typed client methods, agent portal loading/error/empty states, refresh control and contract tests for route authentication, agent scoping, status derivation, closed-period assignment guard, row locks and idempotent replay/conflict behavior.
 - [x] Extend disposable database checks for reward permission grants, separate PAYMENT/DELIVERY totals and duplicate fulfilment idempotency-key rejection. MySQL 8.0 and MariaDB 11.4 both passed 139 schema checks in GitHub Actions run #43770806923.
-- [ ] Complete true concurrent multi-connection stock-allocation and application-level lifecycle integration tests on both database engines; current contract tests verify row-lock code paths and database tests verify the schema/idempotency constraint.
+- [x] Exercise concurrent stock allocation using two independent database connections and InnoDB row locks on both MySQL 8.0 and MariaDB 11.4; both engines confirmed only one allocator can reserve the final stock unit.
+- [ ] Complete application-level lifecycle integration tests (calling the PHP repositories/controllers against disposable databases) on both engines.
 - [ ] Complete browser-to-preview-database runtime verification, administrator account/role management, and leaderboard month-selection/frozen-history checks before signing off the full release gate.
 - [ ] Keep cPanel deployment disabled until all remaining release-gate checks and isolated staging runtime verification pass.
 
