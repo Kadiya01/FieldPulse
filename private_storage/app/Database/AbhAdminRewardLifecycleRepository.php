@@ -29,6 +29,19 @@ final class AbhAdminRewardLifecycleRepository
               ORDER BY g.created_at DESC, g.id DESC',
             ['program_id' => $programId]
         );
+        $qualifications = Connection::fetchAll(
+            'SELECT q.id, q.agent_id, q.qualification_status, q.frozen_rank, q.frozen_approved_quantity,
+                    ag.agent_code, ag.full_name AS display_name
+               FROM abh_reward_qualifications q
+               INNER JOIN abh_agents ag ON ag.id = q.agent_id
+              WHERE q.program_id = :program_id AND q.qualification_status = "ELIGIBLE"
+                AND NOT EXISTS (
+                    SELECT 1 FROM abh_reward_awards a
+                     WHERE a.qualification_id = q.id AND a.award_status <> "REJECTED"
+                )
+              ORDER BY q.frozen_rank ASC, q.agent_id ASC',
+            ['program_id' => $programId]
+        );
         $awards = Connection::fetchAll(
             'SELECT a.id, a.qualification_id, a.program_id, a.gift_id, a.agent_id,
                     a.gift_title_snapshot, a.gift_description_snapshot, a.gift_quantity,
@@ -58,7 +71,7 @@ final class AbhAdminRewardLifecycleRepository
               ORDER BY e.created_at DESC, e.id DESC',
             ['program_id' => $programId]
         );
-        return ['gifts' => $gifts, 'awards' => $awards, 'events' => $events];
+        return ['gifts' => $gifts, 'qualifications' => $qualifications, 'awards' => $awards, 'events' => $events];
     }
 
     /** @return array<string,mixed> */
