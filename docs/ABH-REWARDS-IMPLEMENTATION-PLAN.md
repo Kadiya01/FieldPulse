@@ -40,11 +40,16 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 - Require `rewards.manage`; audit every create/update/version operation.
 
 ### R2 — Qualification preview and evaluation
-- Preview eligibility against frozen leaderboard snapshots only.
-- Show eligible and ineligible agents with rank, approved quantity and the exact rule version/conditions.
-- Evaluation is explicit and idempotent. Persist an immutable qualification snapshot per programme/agent.
-- Do not permit evaluation until the reporting period is CLOSED and the programme/rules are valid.
-- Require `rewards.manage`; separate preview from persisted evaluation.
+- [x] Preview eligibility against frozen leaderboard snapshots only (read-only GET endpoint).
+- [x] Show eligible and ineligible agents with frozen rank, approved quantity and matched rule version.
+- [x] Add explicit evaluation and immutable per-programme/agent qualification snapshots, including the tested rule versions and source values.
+- [x] Restrict preview/evaluation to ACTIVE programmes in CLOSED periods with active rules.
+- [x] Make evaluation idempotent; duplicate requests do not insert duplicate qualifications.
+- [x] Write qualification audit and agent notifications in the evaluation transaction.
+- [x] Add reward-manager UI, typed client methods and contract tests.
+- [ ] Run full CI and resolve any failures.
+
+Rule selection is deterministic: the first matching active rule ordered by `rule_key` ascending is recorded as the qualification's selected rule. All active rule versions tested are retained in the qualification snapshot.
 
 ### R3 — Gift catalogue, award assignment and approval
 - Create and maintain programme-specific gifts, stock and estimated values.
