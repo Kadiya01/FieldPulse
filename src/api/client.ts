@@ -2408,6 +2408,57 @@ export async function createAbhRewardRule(input: {
   return envelope.data;
 }
 
+export interface AbhRewardQualificationItem {
+  agent_id: number;
+  agent_code: string;
+  display_name: string;
+  rank_position: number;
+  approved_quantity: number;
+  qualification_status: 'ELIGIBLE' | 'INELIGIBLE';
+  matched_rule: { id: number; rule_key: string; rule_version: number } | null;
+}
+
+export interface AbhRewardQualificationPreview {
+  program_id: number;
+  period_key: string;
+  period_status: 'CLOSED';
+  program_status: 'ACTIVE';
+  snapshot_count: number;
+  eligible_count: number;
+  ineligible_count: number;
+  items: AbhRewardQualificationItem[];
+  read_only: true;
+}
+
+export async function fetchAbhRewardQualificationPreview(programId: number): Promise<AbhRewardQualificationPreview> {
+  const params = new URLSearchParams({ program_id: String(programId) });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-qualifications.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhRewardQualificationPreview };
+  return envelope.data;
+}
+
+export async function evaluateAbhRewardQualifications(programId: number): Promise<{
+  program_id: number;
+  period_key: string;
+  evaluated_count: number;
+  eligible_count?: number;
+  ineligible_count?: number;
+  idempotent_replay: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-qualifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'EVALUATE', program_id: programId })
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: {
+    program_id: number; period_key: string; evaluated_count: number;
+    eligible_count?: number; ineligible_count?: number; idempotent_replay: boolean;
+  } };
+  return envelope.data;
+}
+
 export async function closeAbhReportingPeriod(periodKey: string): Promise<{
   period_key: string;
   status: 'CLOSED';
