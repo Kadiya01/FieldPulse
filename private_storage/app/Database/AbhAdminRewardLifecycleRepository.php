@@ -35,10 +35,6 @@ final class AbhAdminRewardLifecycleRepository
                FROM abh_reward_qualifications q
                INNER JOIN abh_agents ag ON ag.id = q.agent_id
               WHERE q.program_id = :program_id AND q.qualification_status = "ELIGIBLE"
-                AND NOT EXISTS (
-                    SELECT 1 FROM abh_reward_awards a
-                     WHERE a.qualification_id = q.id AND a.award_status <> "REJECTED"
-                )
               ORDER BY q.frozen_rank ASC, q.agent_id ASC',
             ['program_id' => $programId]
         );
