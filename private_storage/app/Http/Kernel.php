@@ -26,6 +26,7 @@ final class Kernel
 {
     /** @var array<string,class-string> */
     private const ROUTES = [
+        'abh.health' => \\FieldPulse\\Domain\\AbhHealthController::class,
         'auth.login'       => \FieldPulse\Domain\LoginController::class,
         'auth.agent_login' => \FieldPulse\Domain\AgentLoginController::class,
         'auth.password'    => \FieldPulse\Domain\PasswordController::class,
@@ -113,6 +114,7 @@ final class Kernel
      * device out of band.
      */
     private const AUTH = [
+        'abh.health' => 'public',
         'auth.login'       => 'public',
         'auth.agent_login' => 'public',
         'auth.password'    => 'signed',
