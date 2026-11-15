@@ -1408,7 +1408,11 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
   const [data, setData] = useState<AbhRewardLifecycleData | null>(null);
   const [giftCode, setGiftCode] = useState('');
   const [giftTitle, setGiftTitle] = useState('');
+  const [giftDescription, setGiftDescription] = useState('');
   const [stock, setStock] = useState('');
+  const [giftValue, setGiftValue] = useState('');
+  const [giftCurrency, setGiftCurrency] = useState('NGN');
+  const [giftEdits, setGiftEdits] = useState<Record<number, {title:string;stock:string;value:string;currency:string}>>({});
   const [qualificationId, setQualificationId] = useState('');
   const [giftId, setGiftId] = useState('');
   const [giftQuantity, setGiftQuantity] = useState('1');
@@ -1444,8 +1448,10 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
     event.preventDefault();
     if (!programId) return;
     void act(() => createAbhRewardGift({ program_id: programId, gift_code: giftCode, gift_title: giftTitle,
-      ...(stock ? { available_quantity: Number(stock) } : {}) }), 'Gift added.');
-    setGiftCode(''); setGiftTitle(''); setStock('');
+      ...(giftDescription ? { gift_description: giftDescription } : {}),
+      ...(stock ? { available_quantity: Number(stock) } : {}),
+      ...(giftValue ? { estimated_value: giftValue, currency_code: giftCurrency } : {}) }), 'Gift added.');
+    setGiftCode(''); setGiftTitle(''); setGiftDescription(''); setStock(''); setGiftValue('');
   };
   const assign = (event: FormEvent) => {
     event.preventDefault();
@@ -1468,7 +1474,12 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
           <h3 className="font-semibold">Add gift</h3>
           <input required value={giftCode} onChange={e => setGiftCode(e.target.value)} placeholder="Gift code" className="w-full rounded border p-2" />
           <input required value={giftTitle} onChange={e => setGiftTitle(e.target.value)} placeholder="Gift title" className="w-full rounded border p-2" />
+          <input value={giftDescription} onChange={e => setGiftDescription(e.target.value)} placeholder="Description (optional)" className="w-full rounded border p-2" />
           <input type="number" min="0" value={stock} onChange={e => setStock(e.target.value)} placeholder="Stock (blank = unlimited)" className="w-full rounded border p-2" />
+          <div className="grid grid-cols-2 gap-2">
+            <input type="number" min="0" step="0.01" value={giftValue} onChange={e => setGiftValue(e.target.value)} placeholder="Estimated value" className="rounded border p-2" />
+            <input aria-label="Gift currency" maxLength={3} value={giftCurrency} onChange={e => setGiftCurrency(e.target.value.toUpperCase())} className="rounded border p-2" />
+          </div>
           <button disabled={busy || !programs.some(p => p.id === programId && p.status === 'ACTIVE')} className="rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">Add gift</button>
         </form>
         <form onSubmit={assign} className="space-y-2 rounded-xl border bg-white p-4">
@@ -1488,18 +1499,40 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
       <div className="rounded-xl border bg-white p-4">
         <h3 className="mb-3 font-semibold">Gift catalogue</h3>
         <div className="space-y-2">
-          {data.gifts.map(g => <div key={g.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 text-sm">
-            <span><strong>{g.gift_title}</strong> · {g.gift_code} · {g.available_quantity === null ? 'Unlimited stock' : 'Remaining ' + g.available_quantity} · {g.status}</span>
-            {canManage && <button disabled={busy} onClick={() => void act(() => updateAbhRewardGift({
-              program_id: g.program_id, gift_id: g.id, gift_title: g.gift_title,
-              ...(g.gift_description ? { gift_description: g.gift_description } : {}),
-              available_quantity: g.available_quantity,
-              ...(g.estimated_value !== null && g.currency_code ? { estimated_value: g.estimated_value, currency_code: g.currency_code } : {}),
-              status: g.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
-            }), 'Gift catalogue status updated and audited.')} className="rounded border px-3 py-1 text-xs">
-              {g.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
-            </button>}
-          </div>)}
+          {data.gifts.map(g => {
+            const edit = giftEdits[g.id] || {
+              title: g.gift_title, stock: g.available_quantity === null ? '' : String(g.available_quantity),
+              value: g.estimated_value || '', currency: g.currency_code || 'NGN'
+            };
+            return <div key={g.id} className="space-y-2 border-b py-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2"><strong>{g.gift_code} · {g.status}</strong>
+                <span>{g.available_quantity === null ? 'Unlimited stock' : 'Remaining ' + g.available_quantity}</span></div>
+              {canManage && <div className="grid gap-2 md:grid-cols-4">
+                <input aria-label="Gift title" value={edit.title} onChange={e => setGiftEdits(v => ({...v,[g.id]:{...edit,title:e.target.value}}))} className="rounded border p-2" />
+                <input aria-label="Remaining gift stock" type="number" min="0" value={edit.stock} onChange={e => setGiftEdits(v => ({...v,[g.id]:{...edit,stock:e.target.value}}))} placeholder="Unlimited" className="rounded border p-2" />
+                <input aria-label="Estimated gift value" type="number" min="0" step="0.01" value={edit.value} onChange={e => setGiftEdits(v => ({...v,[g.id]:{...edit,value:e.target.value}}))} placeholder="Value" className="rounded border p-2" />
+                <input aria-label="Gift currency" maxLength={3} value={edit.currency} onChange={e => setGiftEdits(v => ({...v,[g.id]:{...edit,currency:e.target.value.toUpperCase()}}))} className="rounded border p-2" />
+              </div>}
+              {canManage && <div className="flex gap-2">
+                <button disabled={busy} onClick={() => void act(() => updateAbhRewardGift({
+                  program_id: g.program_id, gift_id: g.id, gift_title: edit.title,
+                  ...(g.gift_description ? { gift_description: g.gift_description } : {}),
+                  available_quantity: edit.stock.trim() ? Number(edit.stock) : null,
+                  ...(edit.value.trim() ? { estimated_value: edit.value, currency_code: edit.currency } : {}),
+                  status: g.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE'
+                }), 'Gift details updated and audited.')} className="rounded border px-3 py-1 text-xs">Save details</button>
+                <button disabled={busy} onClick={() => void act(() => updateAbhRewardGift({
+                  program_id: g.program_id, gift_id: g.id, gift_title: edit.title,
+                  ...(g.gift_description ? { gift_description: g.gift_description } : {}),
+                  available_quantity: edit.stock.trim() ? Number(edit.stock) : null,
+                  ...(edit.value.trim() ? { estimated_value: edit.value, currency_code: edit.currency } : {}),
+                  status: g.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
+                }), 'Gift status updated and audited.')} className="rounded border px-3 py-1 text-xs">
+                  {g.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
+                </button>
+              </div>}
+            </div>;
+          })}
           {data.gifts.length === 0 && <p className="text-sm text-slate-500">No gifts configured yet.</p>}
         </div>
       </div>
