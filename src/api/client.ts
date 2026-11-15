@@ -2508,6 +2508,13 @@ export function createAbhRewardGift(input: {
   return postAbhRewardLifecycle({ action: 'CREATE_GIFT', ...input });
 }
 
+export function updateAbhRewardGift(input: {
+  program_id: number; gift_id: number; gift_title: string; gift_description?: string;
+  available_quantity?: number | null; estimated_value?: string; currency_code?: string; status: 'ACTIVE' | 'INACTIVE';
+}): Promise<{ id: number; status: 'ACTIVE' | 'INACTIVE' }> {
+  return postAbhRewardLifecycle({ action: 'UPDATE_GIFT', ...input });
+}
+
 export function assignAbhRewardGift(input: {
   program_id: number; qualification_id: number; gift_id: number; quantity: number;
 }): Promise<{ id: number; award_status: 'PENDING_APPROVAL' }> {
