@@ -54,7 +54,7 @@ final class AbhAdminRewardLifecycleRepository
                        a.gift_title_snapshot, a.gift_description_snapshot, a.gift_quantity,
                        a.estimated_value_snapshot, a.currency_code_snapshot, a.award_status,
                        a.assigned_by_admin_id, a.approved_by_admin_id, a.assigned_at, a.approved_at,
-                       ag.agent_code, ag.full_name AS display_name
+                       ag.agent_code, ag.full_name
               ORDER BY a.assigned_at DESC, a.id DESC',
             ['program_id' => $programId]
         );
