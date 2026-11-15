@@ -1202,6 +1202,26 @@ try {
               WHERE id = :period_id'
         )->execute(['admin_id' => $adminId, 'period_id' => $periodId]);
 
+        $closedBoard = \FieldPulse\Database\AbhLeaderboardRepository::getForMonth('2026-11', $agentId, 50, 0);
+        $otherMonthBoard = \FieldPulse\Database\AbhLeaderboardRepository::getForMonth('2026-10', $agentId, 50, 0);
+        abhSchemaAssert(
+            'PHP leaderboard repository selects the requested reporting month',
+            ($closedBoard['period_key'] ?? '') === '2026-11'
+                && ($otherMonthBoard['period_key'] ?? '') === '2026-10'
+                && ($otherMonthBoard['total'] ?? -1) === 0
+        );
+        $pdo->prepare('UPDATE abh_agents SET full_name = "Changed Live Agent Name" WHERE id = ?')->execute([$agentId]);
+        $frozenBoardAfterProfileChange = \FieldPulse\Database\AbhLeaderboardRepository::getForMonth('2026-11', $agentId, 50, 0);
+        $frozenAgent = array_values(array_filter(
+            $frozenBoardAfterProfileChange['items'] ?? [],
+            static fn(array $row): bool => (int) $row['agent_id'] === $agentId
+        ))[0] ?? null;
+        abhSchemaAssert(
+            'PHP leaderboard repository preserves frozen display names after live profile changes',
+            is_array($frozenAgent) && (string) $frozenAgent['display_name'] === 'CI Test Agent'
+        );
+        $pdo->prepare('UPDATE abh_agents SET full_name = "CI Test Agent" WHERE id = ?')->execute([$agentId]);
+
         $secondAdminInsert = $pdo->prepare(
             'INSERT INTO abh_admin_users (full_name, email, email_normalized, password_hash, status)
              VALUES (?, ?, ?, ?, "ACTIVE")'
