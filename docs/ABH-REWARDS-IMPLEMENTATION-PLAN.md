@@ -58,7 +58,7 @@ Rule selection is deterministic: the first matching active rule ordered by `rule
 - [x] Enforce separation of duties between assigning and approving administrators.
 - [x] Check and decrement finite stock while locking the award and gift rows in one transaction.
 - [x] Notify the agent and audit assignment/approval in the same transaction.
-- [ ] Run CI and resolve all failures; staging runtime verification remains outstanding.
+- [x] Run CI and resolve all failures (GitHub Actions run #43764701273 passed frontend lint/tests, PHP lint, migration safety/planning, MySQL 8.0 and MariaDB 11.4 checks; cPanel deployment remained skipped).
 
 ### R4 — Payment and delivery fulfilment
 - [x] Record payment and delivery as distinct append-only event types; neither implies the other.
@@ -67,7 +67,7 @@ Rule selection is deterministic: the first matching active rule ordered by `rule
 - [x] Add per-award UUID idempotency keys and reject key reuse with changed event data.
 - [x] Write audit and agent notification records in the same transaction as each event.
 - [x] Expose the immutable event history in the administrator reward interface.
-- [ ] Run CI and resolve all failures; staging runtime verification remains outstanding.
+- [x] Run CI and resolve all failures (GitHub Actions run #43764701273 passed frontend lint/tests, PHP lint, migration safety/planning, MySQL 8.0 and MariaDB 11.4 checks; cPanel deployment remained skipped).
 
 ### R5 — Agent reward view and release gate
 - Show an agent only their own programmes, qualification outcomes and awards.
