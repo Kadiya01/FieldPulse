@@ -229,4 +229,20 @@ describe('ABH reward programme configuration contract', () => {
     expect(status).toContain('NOT READY FOR APPLICATION DEPLOYMENT');
   });
 
+
+  it('guards closed-period assignment and serializes gift stock approval', () => {
+    expect(lifecycleRepository).toContain("period_status'] !== 'CLOSED'");
+    expect(lifecycleRepository).toContain('LIMIT 1 FOR UPDATE');
+    expect(lifecycleRepository).toContain('available_quantity = available_quantity - :quantity');
+    expect(lifecycleRepository).toContain("award_status'] !== 'PENDING_APPROVAL'");
+    expect(repository).toContain("before['period_status'] !== 'OPEN'");
+  });
+
+  it('replays identical fulfilment requests and rejects changed payload reuse', () => {
+    expect(lifecycleRepository).toContain('idempotency_key = :key');
+    expect(lifecycleRepository).toContain("'idempotent_replay' => true");
+    expect(lifecycleRepository).toContain("'error' => 'idempotency_conflict'");
+    expect(lifecycleRepository).toContain('LIMIT 1 FOR UPDATE');
+  });
+
 });
