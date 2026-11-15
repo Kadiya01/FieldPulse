@@ -46,7 +46,14 @@ final class AbhAdminRewardProgramsController implements ActionInterface
             $description = Validator::string($body['description'], 1, 2000, 'description');
         }
 
-        $result = AbhAdminRewardProgramRepository::createProgram($admin->id(), $month, $code, $name, $description);
+        try {
+            $result = AbhAdminRewardProgramRepository::createProgram($admin->id(), $month, $code, $name, $description);
+        } catch (\\\\PDOException $error) {
+            if ((string) $error->getCode() === '23000') {
+                throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'A programme with this code already exists for the selected month.');
+            }
+            throw $error;
+        }
         if (($result['error'] ?? null) === 'period_not_found') {
             throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'Create the monthly reporting period and target before configuring its rewards.');
         }
