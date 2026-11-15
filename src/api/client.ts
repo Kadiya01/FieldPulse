@@ -2459,6 +2459,78 @@ export async function evaluateAbhRewardQualifications(programId: number): Promis
   return envelope.data;
 }
 
+export interface AbhRewardLifecycleData {
+  gifts: Array<{
+    id: number; program_id: number; gift_code: string; gift_title: string;
+    gift_description: string | null; available_quantity: number | null;
+    estimated_value: string | null; currency_code: string | null; status: string;
+    assigned_quantity: number;
+  }>;
+  qualifications: Array<{
+    id: number; agent_id: number; qualification_status: 'ELIGIBLE';
+    frozen_rank: number; frozen_approved_quantity: number; agent_code: string; display_name: string;
+  }>;
+  awards: Array<{
+    id: number; qualification_id: number; gift_id: number; agent_id: number;
+    gift_title_snapshot: string; gift_quantity: number; award_status: string;
+    assigned_by_admin_id: number; approved_by_admin_id: number | null;
+    agent_code: string; display_name: string; paid_amount: string; delivered_quantity: number;
+    estimated_value_snapshot: string | null; currency_code_snapshot: string | null;
+  }>;
+  events: Array<{
+    id: number; award_id: number; event_type: 'PAYMENT' | 'DELIVERY';
+    quantity: number | null; amount: string | null; currency_code: string | null;
+    reference_no: string | null; note: string | null; recorded_by_admin_id: number; created_at: string;
+  }>;
+}
+
+async function postAbhRewardLifecycle<T>(input: Record<string, unknown>): Promise<T> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-lifecycle.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input)
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: T };
+  return envelope.data;
+}
+
+export async function fetchAbhRewardLifecycle(programId: number): Promise<AbhRewardLifecycleData> {
+  const params = new URLSearchParams({ program_id: String(programId) });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-lifecycle.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhRewardLifecycleData };
+  return envelope.data;
+}
+
+export function createAbhRewardGift(input: {
+  program_id: number; gift_code: string; gift_title: string; gift_description?: string;
+  available_quantity?: number | null; estimated_value?: string; currency_code?: string;
+}): Promise<{ id: number; gift_code: string; gift_title: string; status: 'ACTIVE' }> {
+  return postAbhRewardLifecycle({ action: 'CREATE_GIFT', ...input });
+}
+
+export function assignAbhRewardGift(input: {
+  program_id: number; qualification_id: number; gift_id: number; quantity: number;
+}): Promise<{ id: number; award_status: 'PENDING_APPROVAL' }> {
+  return postAbhRewardLifecycle({ action: 'ASSIGN_GIFT', ...input });
+}
+
+export function approveAbhRewardAward(awardId: number): Promise<{ id: number; award_status: 'APPROVED' }> {
+  return postAbhRewardLifecycle({ action: 'APPROVE_AWARD', award_id: awardId });
+}
+
+export function recordAbhRewardPayment(input: {
+  award_id: number; amount: string; currency_code: string; reference_no?: string; note?: string;
+  idempotency_key: string;
+}): Promise<{ id: number; idempotent_replay: boolean }> {
+  return postAbhRewardLifecycle({ action: 'RECORD_PAYMENT', ...input });
+}
+
+export function recordAbhRewardDelivery(input: {
+  award_id: number; quantity: number; reference_no?: string; note?: string; idempotency_key: string;
+}): Promise<{ id: number; idempotent_replay: boolean }> {
+  return postAbhRewardLifecycle({ action: 'RECORD_DELIVERY', ...input });
+}
+
 export async function closeAbhReportingPeriod(periodKey: string): Promise<{
   period_key: string;
   status: 'CLOSED';
