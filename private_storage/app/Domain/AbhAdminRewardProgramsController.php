@@ -18,7 +18,9 @@ final class AbhAdminRewardProgramsController implements ActionInterface
         $admin = $request->requireAbhAdminContext();
 
         if ($request->method() === 'GET') {
-            $admin->requirePermission('rewards.manage');
+            if (!$admin->hasPermission('rewards.manage') && !$admin->hasPermission('rewards.approve')) {
+                $admin->requirePermission('rewards.manage');
+            }
             $month = Validator::periodMonth(
                 $request->query('month') ?? (new \DateTimeImmutable('now', new \DateTimeZone('Africa/Lagos')))->format('Y-m'),
                 'month',
