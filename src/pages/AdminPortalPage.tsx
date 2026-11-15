@@ -29,7 +29,7 @@ import {
   createAbhRewardRule,
   fetchAbhRewardQualificationPreview,
   evaluateAbhRewardQualifications,
-  fetchAbhRewardLifecycle, createAbhRewardGift, assignAbhRewardGift,
+  fetchAbhRewardLifecycle, createAbhRewardGift, updateAbhRewardGift, assignAbhRewardGift,
   approveAbhRewardAward, recordAbhRewardPayment, recordAbhRewardDelivery,
   type AbhRewardProgram,
   type AbhRewardRule,
@@ -1479,6 +1479,24 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
           <input type="number" min="1" value={giftQuantity} onChange={e => setGiftQuantity(e.target.value)} className="w-full rounded border p-2" />
           <button disabled={busy || !qualificationId || !giftId} className="rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-50">Assign for approval</button>
         </form>
+      </div>
+      <div className="rounded-xl border bg-white p-4">
+        <h3 className="mb-3 font-semibold">Gift catalogue</h3>
+        <div className="space-y-2">
+          {data.gifts.map(g => <div key={g.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 text-sm">
+            <span><strong>{g.gift_title}</strong> · {g.gift_code} · {g.available_quantity === null ? 'Unlimited stock' : 'Remaining ' + g.available_quantity} · {g.status}</span>
+            <button disabled={busy} onClick={() => void act(() => updateAbhRewardGift({
+              program_id: g.program_id, gift_id: g.id, gift_title: g.gift_title,
+              ...(g.gift_description ? { gift_description: g.gift_description } : {}),
+              available_quantity: g.available_quantity,
+              ...(g.estimated_value !== null && g.currency_code ? { estimated_value: g.estimated_value, currency_code: g.currency_code } : {}),
+              status: g.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
+            }), 'Gift catalogue status updated and audited.')} className="rounded border px-3 py-1 text-xs">
+              {g.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
+            </button>
+          </div>)}
+          {data.gifts.length === 0 && <p className="text-sm text-slate-500">No gifts configured yet.</p>}
+        </div>
       </div>
       <div className="rounded-xl border bg-white p-4">
         <h3 className="mb-3 font-semibold">Award register</h3>
