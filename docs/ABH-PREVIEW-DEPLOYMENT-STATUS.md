@@ -125,8 +125,8 @@ The workflow uploaded a deployment artifact only. It did not upload application 
 
 - R1: programme and versioned eligibility-rule management implemented.
 - R2: read-only qualification preview and explicit, idempotent evaluation from frozen leaderboard snapshots implemented.
-- R3: gift catalogue, gift assignment and independent award approval remain to be implemented.
-- R4: separate append-only payment and delivery workflows remain to be implemented.
+- R3: gift catalogue create/update/deactivate, eligible-agent gift assignment, independent award approval, stock locking, notifications and audit events are implemented in code; CI verification is pending.
+- R4: separate append-only payment and delivery events, value/quantity/currency checks, UUID idempotency, notifications, audit events and administrator history UI are implemented in code; CI verification is pending.
 - R5: agent reward views, end-to-end tests and full release gate remain to be implemented.
 
 The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1 and R2 have passing CI evidence; this is not evidence of staging runtime verification.
@@ -135,7 +135,7 @@ The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-No live preview application deployment, cPanel database migration, or browser-to-staging-database end-to-end runtime test has been performed. The reward lifecycle is incomplete. Administrator account/role management beyond first-admin provisioning and remaining leaderboard month-selection/frozen-history end-to-end checks also require completion.
+No live preview application deployment, cPanel database migration, or browser-to-staging-database end-to-end runtime test has been performed. R3/R4 code has been added but is not yet CI-verified; R5 agent reward views and end-to-end coverage remain incomplete. Administrator account/role management beyond first-admin provisioning and remaining leaderboard month-selection/frozen-history end-to-end checks also require completion.
 
 Keep both controls unchanged:
 
