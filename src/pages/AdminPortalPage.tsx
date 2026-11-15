@@ -23,6 +23,7 @@ import {
   fetchAbhAdminDashboard,
   fetchAbhRewardPrograms,
   createAbhRewardProgram,
+  activateAbhRewardProgram,
   fetchAbhRewardRules,
   createAbhRewardRule,
   type AbhRewardProgram,
@@ -1193,6 +1194,17 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
     } finally { setBusy(false); }
   };
 
+  const activateProgram = async (programId: number) => {
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await activateAbhRewardProgram(programId);
+      setNotice('Programme activated. Its rules are now ready for the qualification workflow.');
+      await loadPrograms();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Programme could not be activated.');
+    } finally { setBusy(false); }
+  };
+
   const addRule = async (event: FormEvent) => {
     event.preventDefault();
     if (selected === null) return;
@@ -1231,10 +1243,20 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
         <div className="space-y-2">
           {programs.length === 0 && <p className="rounded-xl bg-white p-4 text-sm text-slate-500">No programmes configured for this month.</p>}
           {programs.map(program => (
-            <button key={program.id} type="button" onClick={() => setSelected(program.id)} className={selected === program.id ? 'w-full rounded-xl border-2 border-blue-600 bg-white p-4 text-left' : 'w-full rounded-xl border border-slate-200 bg-white p-4 text-left'}>
-              <div className="flex justify-between gap-3"><strong>{program.name}</strong><span className="text-xs font-semibold text-slate-500">{program.status}</span></div>
-              <p className="mt-1 text-xs text-slate-500">{program.program_code} · {program.active_rule_count} active rule(s)</p>
-            </button>
+            <div key={program.id} className={selected === program.id ? 'rounded-xl border-2 border-blue-600 bg-white p-4' : 'rounded-xl border border-slate-200 bg-white p-4'}>
+              <button type="button" onClick={() => setSelected(program.id)} className="w-full text-left">
+                <div className="flex justify-between gap-3"><strong>{program.name}</strong><span className="text-xs font-semibold text-slate-500">{program.status}</span></div>
+                <p className="mt-1 text-xs text-slate-500">{program.program_code} · {program.active_rule_count} active rule(s)</p>
+              </button>
+              {program.status === 'DRAFT' && (
+                <button type="button" onClick={() => void activateProgram(program.id)}
+                  disabled={busy || program.active_rule_count < 1}
+                  title={program.active_rule_count < 1 ? 'Add at least one active rule first' : 'Activate this programme'}
+                  className="mt-3 rounded-lg border border-emerald-700 px-3 py-2 text-xs font-semibold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-40">
+                  Activate programme
+                </button>
+              )}
+            </div>
           ))}
         </div>
       </section>
