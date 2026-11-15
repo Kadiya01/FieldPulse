@@ -211,9 +211,22 @@ try {
 
     $requiredPermissions = $pdo->query(
         "SELECT permission_key FROM abh_admin_permissions
-          WHERE permission_key IN ('agents.read','agents.approve','agents.reject','agents.suspend','devices.read','devices.approve','devices.revoke','admin.users.manage','targets.manage','submissions.read','submissions.review','periods.close')"
+          WHERE permission_key IN ('agents.read','agents.approve','agents.reject','agents.suspend','devices.read','devices.approve','devices.revoke','admin.users.manage','targets.manage','submissions.read','submissions.review','periods.close','rewards.manage','rewards.approve')"
     )->fetchAll(PDO::FETCH_COLUMN);
-    abhSchemaAssert('ABH agent, device, submission, target and period permissions are seeded', count($requiredPermissions) === 12);
+    abhSchemaAssert('ABH agent, device, submission, target, period and reward permissions are seeded', count($requiredPermissions) === 14);
+
+    $rewardManagerPermissions = $pdo->query(
+        "SELECT p.permission_key
+           FROM abh_admin_role_permissions rp
+           INNER JOIN abh_admin_roles r ON r.id = rp.role_id
+           INNER JOIN abh_admin_permissions p ON p.id = rp.permission_id
+          WHERE r.role_key = 'REWARD_MANAGER'"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    sort($rewardManagerPermissions);
+    abhSchemaAssert(
+        'REWARD_MANAGER has both reward permissions and no unrelated administrator-user permission',
+        $rewardManagerPermissions === ['rewards.approve', 'rewards.manage']
+    );
 
     $periodCloseGranted = (int) $pdo->query(
         "SELECT COUNT(*)
@@ -964,36 +977,47 @@ try {
     )->execute(['APPROVED', $adminId, $awardOneId]);
     abhSchemaAssert('award approval is recorded separately from assignment', true);
 
+    $paymentKey = '00000000-0000-4000-8000-000000000031';
+    $deliveryKey = '00000000-0000-4000-8000-000000000032';
     $fulfilmentInsert = $pdo->prepare(
         'INSERT INTO abh_reward_fulfilment_events
-         (award_id, event_type, quantity, amount, currency_code, reference_no, note, recorded_by_admin_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+         (award_id, idempotency_key, event_type, quantity, amount, currency_code, reference_no, note, recorded_by_admin_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     $fulfilmentInsert->execute([
-        $awardOneId,
-        'PAID',
-        null,
-        '25000.00',
-        'NGN',
-        'CI-PAYMENT-001',
-        'Disposable payment record.',
-        $adminId,
+        $awardOneId, $paymentKey, 'PAYMENT', null, '12500.00', 'NGN',
+        'CI-PAYMENT-001', 'Disposable partial payment record.', $adminId,
     ]);
     $fulfilmentInsert->execute([
-        $awardOneId,
-        'DELIVERED',
-        1,
-        null,
-        'NGN',
-        'CI-DELIVERY-001',
-        'Disposable delivery record.',
-        $adminId,
+        $awardOneId, $deliveryKey, 'DELIVERY', 1, null, null,
+        'CI-DELIVERY-001', 'Disposable partial delivery record.', $adminId,
     ]);
     abhSchemaAssert(
-        'payment and delivery are separate fulfilment events',
+        'payment and delivery remain distinct append-only event types',
         (int) $pdo->query(
             'SELECT COUNT(*) FROM abh_reward_fulfilment_events WHERE award_id = ' . $awardOneId
+            . ' AND event_type IN ("PAYMENT", "DELIVERY")'
         )->fetchColumn() === 2
+    );
+    abhSchemaAssert(
+        'duplicate fulfilment idempotency key is rejected for the same award',
+        abhSchemaExpectFailure(static function () use ($fulfilmentInsert, $awardOneId, $paymentKey, $adminId): void {
+            $fulfilmentInsert->execute([
+                $awardOneId, $paymentKey, 'PAYMENT', null, '12500.00', 'NGN',
+                'CI-PAYMENT-REPLAY', 'Duplicate retry must not create a second event.', $adminId,
+            ]);
+        })
+    );
+    $fulfilmentTotals = $pdo->query(
+        'SELECT SUM(CASE WHEN event_type = "PAYMENT" THEN amount ELSE 0 END) AS paid,
+                SUM(CASE WHEN event_type = "DELIVERY" THEN quantity ELSE 0 END) AS delivered
+           FROM abh_reward_fulfilment_events WHERE award_id = ' . $awardOneId
+    )->fetch(PDO::FETCH_ASSOC);
+    abhSchemaAssert(
+        'partial payment and delivery totals are tracked independently',
+        is_array($fulfilmentTotals)
+            && (string) $fulfilmentTotals['paid'] === '12500.00'
+            && (int) $fulfilmentTotals['delivered'] === 1
     );
 
 
