@@ -1166,7 +1166,7 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
 
   const canManage = admin.permissions.includes('rewards.manage');
   const loadPrograms = useCallback(async () => {
-    if (!canRead) return;
+    if (!canManage) return;
     try {
       const result = await fetchAbhRewardPrograms(month);
       setPrograms(result);
@@ -1425,14 +1425,14 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
   const canApprove = admin.permissions.includes('rewards.approve');
   const canRead = canManage || canApprove;
   const refresh = useCallback(async () => {
-    if (!canManage) return;
+    if (!canRead) return;
     const list = await fetchAbhRewardPrograms(month);
     setPrograms(list);
     const chosen = programId && list.some(item => item.id === programId)
       ? programId : (list.find(item => item.status === 'ACTIVE')?.id ?? list[0]?.id ?? null);
     setProgramId(chosen);
     setData(chosen ? await fetchAbhRewardLifecycle(chosen) : null);
-  }, [canRead, canManage, month, programId]);
+  }, [canRead, month, programId]);
   useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Could not load rewards.')); }, [refresh]);
   const act = async (fn: () => Promise<unknown>, message: string): Promise<boolean> => {
     setBusy(true); setError(''); setNotice('');
