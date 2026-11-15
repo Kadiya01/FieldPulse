@@ -128,6 +128,8 @@ final class Kernel
         'abh.admin.leaderboard' => 'admin',
         'abh.admin.notifications' => 'admin',
         'abh.admin.targets' => 'admin',
+        'abh.admin.reward.programs' => 'admin',
+        'abh.admin.reward.rules' => 'admin',
         'abh.admin.period.close' => 'admin',
         'abh.admin.submission.decision' => 'admin',
         'abh.admin.submission.evidence' => 'admin',
