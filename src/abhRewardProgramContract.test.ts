@@ -21,6 +21,15 @@ describe('ABH reward programme configuration contract', () => {
     expect(kernel).toContain("'abh.admin.reward.rules' => 'admin'");
   });
 
+  it('registers reward endpoints in both the controller and authentication maps', () => {
+    const routes = kernel.split('private const ROUTES = [')[1]?.split('];')[0] ?? '';
+    const auth = kernel.split('private const AUTH = [')[1]?.split('];')[0] ?? '';
+    expect(routes).toContain("'abh.admin.reward.programs' =>");
+    expect(routes).toContain("'abh.admin.reward.rules' =>");
+    expect(auth).toContain("'abh.admin.reward.programs' => 'admin'");
+    expect(auth).toContain("'abh.admin.reward.rules' => 'admin'");
+  });
+
   it('requires rewards.manage and rejects unknown programme or rule fields', () => {
     expect(programs).toContain("$admin->requirePermission('rewards.manage')");
     expect(programs).toContain("['period_key', 'program_code', 'name', 'description']");
@@ -49,6 +58,16 @@ describe('ABH reward programme configuration contract', () => {
     expect(adminUi).toContain('<AdminRewardProgramManagement admin={admin} />');
     expect(adminUi).toContain('Create draft programme');
     expect(adminUi).toContain('Add rule version');
+  });
+
+  it('only activates a draft programme with active rules in an open period and audits it', () => {
+    expect(repository).toContain("program['status'] !== 'DRAFT'");
+    expect(repository).toContain("program['period_status'] !== 'OPEN'");
+    expect(repository).toContain("'rules_required'");
+    expect(repository).toContain("'reward.program.activated'");
+    expect(programs).toContain("($body['action'] ?? null) === 'ACTIVATE'");
+    expect(adminUi).toContain('activateAbhRewardProgram');
+    expect(client).toContain('activateAbhRewardProgram');
   });
 
   it('exposes typed frontend methods for programme and rule management', () => {
