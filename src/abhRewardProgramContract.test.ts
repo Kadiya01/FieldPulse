@@ -60,6 +60,17 @@ describe('ABH reward programme configuration contract', () => {
     expect(adminUi).toContain('Add rule version');
   });
 
+  it('edits only draft programmes in open periods and records before/after audit data', () => {
+    expect(repository).toContain('updateDraftProgram');
+    expect(repository).toContain("'reward.program.updated'");
+    expect(repository).toContain("before['status'] !== 'DRAFT'");
+    expect(repository).toContain("before['period_status'] !== 'OPEN'");
+    expect(programs).toContain("($body['action'] ?? null) === 'UPDATE'");
+    expect(client).toContain('updateAbhRewardProgram');
+    expect(adminUi).toContain('saveProgramEdits');
+    expect(adminUi).toContain('Save programme changes');
+  });
+
   it('only activates a draft programme with active rules in an open period and audits it', () => {
     expect(repository).toContain("program['status'] !== 'DRAFT'");
     expect(repository).toContain("program['period_status'] !== 'OPEN'");
