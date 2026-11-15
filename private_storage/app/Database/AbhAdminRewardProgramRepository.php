@@ -73,7 +73,7 @@ final class AbhAdminRewardProgramRepository
     public static function activateProgram(int $adminId, int $programId): array
     {
         return Connection::transaction(
-            static function (\\PDO $pdo) use ($adminId, $programId): array {
+            static function (\PDO $pdo) use ($adminId, $programId): array {
                 $stmt = $pdo->prepare(
                     'SELECT p.id, p.status, rp.status AS period_status
                        FROM abh_reward_programs p
@@ -81,7 +81,7 @@ final class AbhAdminRewardProgramRepository
                       WHERE p.id = :id LIMIT 1 FOR UPDATE'
                 );
                 $stmt->execute(['id' => $programId]);
-                $program = $stmt->fetch(\\PDO::FETCH_ASSOC);
+                $program = $stmt->fetch(\PDO::FETCH_ASSOC);
                 if (!is_array($program)) return ['error' => 'program_not_found'];
                 if ((string) $program['status'] !== 'DRAFT' || (string) $program['period_status'] !== 'OPEN') {
                     return ['error' => 'program_locked'];
