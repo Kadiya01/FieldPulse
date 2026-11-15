@@ -48,7 +48,7 @@ final class AbhAdminRewardProgramsController implements ActionInterface
 
         try {
             $result = AbhAdminRewardProgramRepository::createProgram($admin->id(), $month, $code, $name, $description);
-        } catch (\\\\PDOException $error) {
+        } catch (\\PDOException $error) {
             if ((string) $error->getCode() === '23000') {
                 throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'A programme with this code already exists for the selected month.');
             }
