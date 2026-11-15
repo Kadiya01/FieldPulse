@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Clock3, FileImage, LogOut, RefreshCw, Send, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, FileImage, Gift, LogOut, RefreshCw, Send, XCircle } from 'lucide-react';
 import BrandHeader from '../components/BrandHeader';
 import {
   fetchAbhAgentLeaderboard,
+  fetchAbhAgentRewards,
   fetchAbhAgentNotifications,
   markAbhAgentNotificationRead,
   markAllAbhAgentNotificationsRead,
@@ -10,6 +11,7 @@ import {
   submitAbhEnrollment,
   submitAbhCorrection,
   type AbhAgentMonthlySummary,
+  type AbhAgentRewardItem,
   type AbhLeaderboardData,
   type AbhNotificationItem,
   type AbhAgentSubmissionItem,
@@ -41,6 +43,10 @@ function statusLabel(status: string): string {
   }
 }
 
+function rewardStatusLabel(status: string): string {
+  return status.replaceAll('_', ' ').toLowerCase().replace(/\\b\\w/g, letter => letter.toUpperCase());
+}
+
 function statusClass(status: string): string {
   if (status === 'APPROVED') return 'bg-emerald-50 text-emerald-800';
   if (status === 'REJECTED') return 'bg-red-50 text-red-800';
@@ -65,6 +71,9 @@ export default function AbhAgentPortalPage({
   const [items, setItems] = useState<AbhAgentSubmissionItem[]>([]);
   const [leaderboard, setLeaderboard] = useState<AbhLeaderboardData | null>(null);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [rewardItems, setRewardItems] = useState<AbhAgentRewardItem[]>([]);
+  const [rewardsLoading, setRewardsLoading] = useState(true);
+  const [rewardsError, setRewardsError] = useState('');
   const [notifications, setNotifications] = useState<AbhNotificationItem[]>([]);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notificationsLoading, setNotificationsLoading] = useState(true);
@@ -167,6 +176,23 @@ export default function AbhAgentPortalPage({
       window.clearTimeout(timer);
     };
   }, [refreshNotifications]);
+
+  const refreshRewards = useCallback(async () => {
+    setRewardsLoading(true);
+    try {
+      const result = await fetchAbhAgentRewards();
+      setRewardItems(result.items);
+      setRewardsError('');
+    } catch (caught) {
+      setRewardsError(caught instanceof Error ? caught.message : 'Your reward information could not be loaded.');
+    } finally {
+      setRewardsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRewards();
+  }, [refreshRewards]);
 
   const markNotificationRead = async (id: number) => {
     setNotificationsBusy(true);
@@ -390,6 +416,94 @@ export default function AbhAgentPortalPage({
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="abh-agent-rewards-title">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 id="abh-agent-rewards-title" className="text-lg font-bold text-slate-900">My rewards</h2>
+              <p className="mt-1 text-xs text-slate-500">Your reward programme results, approved awards and fulfilment progress</p>
+            </div>
+            <button type="button" onClick={() => void refreshRewards()} disabled={rewardsLoading}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">
+              <RefreshCw size={14} aria-hidden="true" /> Refresh
+            </button>
+          </div>
+          {rewardsLoading ? (
+            <p role="status" className="mt-4 py-5 text-center text-sm text-slate-500">Loading your rewards…</p>
+          ) : rewardsError ? (
+            <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{rewardsError}</div>
+          ) : rewardItems.length === 0 ? (
+            <div className="mt-4 rounded-xl bg-slate-50 px-4 py-7 text-center">
+              <Gift className="mx-auto text-slate-400" size={25} aria-hidden="true" />
+              <p className="mt-2 text-sm font-semibold text-slate-700">No reward programmes are available yet.</p>
+              <p className="mt-1 text-xs text-slate-500">When a programme is configured, your own progress and results will appear here.</p>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {rewardItems.map(item => (
+                <article key={item.program_id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold text-slate-900">{item.program_name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{item.program_code} · {item.period_key}</p>
+                    </div>
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
+                      {rewardStatusLabel(item.display_status)}
+                    </span>
+                  </div>
+                  {item.program_description && <p className="mt-2 text-sm text-slate-600">{item.program_description}</p>}
+                  {item.qualification_id !== null && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-xs text-slate-500">Qualification</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{rewardStatusLabel(item.qualification_status ?? 'UNKNOWN')}</p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-xs text-slate-500">Frozen monthly rank</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{item.frozen_rank === null ? '—' : '#' + item.frozen_rank}</p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-xs text-slate-500">Approved enrollments</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{item.frozen_approved_quantity?.toLocaleString() ?? '—'}</p>
+                      </div>
+                    </div>
+                  )}
+                  {item.award_id !== null && (
+                    <div className="mt-3 rounded-lg border border-slate-200 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-semibold text-slate-900">{item.gift_title_snapshot}</p>
+                          {item.gift_description_snapshot && <p className="mt-1 text-sm text-slate-600">{item.gift_description_snapshot}</p>}
+                          <p className="mt-1 text-xs text-slate-500">Quantity awarded: {item.gift_quantity}</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{rewardStatusLabel(item.award_status ?? 'UNKNOWN')}</span>
+                      </div>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Payment progress</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">{rewardStatusLabel(item.payment_status)}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {item.currency_code_snapshot ? item.currency_code_snapshot + ' ' : ''}{Number(item.paid_total).toLocaleString()}
+                            {item.estimated_value_snapshot ? ' / ' + item.estimated_value_snapshot : ''}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Delivery progress</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">{rewardStatusLabel(item.delivery_status)}</p>
+                          <p className="mt-1 text-xs text-slate-500">{item.delivered_total} of {item.gift_quantity} delivered</p>
+                        </div>
+                      </div>
+                      {item.last_event_at && <p className="mt-2 text-xs text-slate-500">Last fulfilment update: {new Date(item.last_event_at.replace(' ', 'T').slice(0, 19) + 'Z').toLocaleString()}</p>}
+                    </div>
+                  )}
+                  {item.qualification_id === null && (
+                    <p className="mt-3 text-xs text-slate-500">{item.period_status === 'OPEN' ? 'Your monthly performance is still being recorded. Eligibility is determined after the reporting period is closed and evaluated.' : 'Your programme outcome will appear after the administrator completes qualification evaluation.'}</p>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
               <h2 className="text-lg font-bold text-slate-900">Monthly leaderboard</h2>
               <p className="mt-1 text-xs text-slate-500">
                 {leaderboard?.period_status === 'CLOSED' ? 'Final frozen ranking' : 'Live ranking based on approved enrollments only'}
