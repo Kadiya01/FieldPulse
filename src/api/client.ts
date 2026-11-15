@@ -2305,6 +2305,80 @@ export async function saveAbhAdminTarget(input: {
   return envelope.data;
 }
 
+export interface AbhRewardProgram {
+  id: number;
+  program_code: string;
+  name: string;
+  description: string | null;
+  status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'CLOSED';
+  period_key: string;
+  active_rule_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AbhRewardRule {
+  id: number;
+  program_id: number;
+  rule_key: string;
+  rule_version: number;
+  rank_from: number | null;
+  rank_to: number | null;
+  minimum_approved_quantity: number | null;
+  eligibility_conditions_json: string;
+  is_active: boolean | number;
+  created_at: string;
+}
+
+export async function fetchAbhRewardPrograms(month: string): Promise<AbhRewardProgram[]> {
+  const params = new URLSearchParams({ month });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { items: AbhRewardProgram[] } };
+  return envelope.data.items;
+}
+
+export async function createAbhRewardProgram(input: {
+  period_key: string;
+  program_code: string;
+  name: string;
+  description?: string;
+}): Promise<{ id: number; program_code: string; name: string; status: 'DRAFT' }> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { id: number; program_code: string; name: string; status: 'DRAFT' } };
+  return envelope.data;
+}
+
+export async function fetchAbhRewardRules(programId: number): Promise<AbhRewardRule[]> {
+  const params = new URLSearchParams({ program_id: String(programId) });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-rules.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { items: AbhRewardRule[] } };
+  return envelope.data.items;
+}
+
+export async function createAbhRewardRule(input: {
+  program_id: number;
+  rule_key: string;
+  rank_from?: number | null;
+  rank_to?: number | null;
+  minimum_approved_quantity?: number | null;
+}): Promise<AbhRewardRule> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-rules.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhRewardRule };
+  return envelope.data;
+}
+
 export async function closeAbhReportingPeriod(periodKey: string): Promise<{
   period_key: string;
   status: 'CLOSED';
