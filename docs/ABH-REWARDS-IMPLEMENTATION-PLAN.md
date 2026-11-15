@@ -30,7 +30,8 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 - [x] Add typed frontend API methods and contract tests.
 - [x] Add the administrator programme/rule management screen.
 - [x] Add explicit activation; require at least one active rule and an OPEN reporting period, with an audit event.
-- [ ] Add programme editing and run full CI.
+- [x] Add audited programme editing, restricted to DRAFT programmes in OPEN periods.
+- [ ] Run full CI and resolve any failures.
 
 - List programmes by month and status.
 - Create/update a programme and its description for an existing reporting period.
