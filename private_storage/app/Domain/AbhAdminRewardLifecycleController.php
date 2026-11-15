@@ -18,7 +18,9 @@ final class AbhAdminRewardLifecycleController implements ActionInterface
         $admin = $request->requireAbhAdminContext();
         $method = $request->method();
         if ($method === 'GET') {
-            $admin->requirePermission('rewards.manage');
+            if (!$admin->hasPermission('rewards.manage') && !$admin->hasPermission('rewards.approve')) {
+                $admin->requirePermission('rewards.manage');
+            }
             $programId = Validator::intRange($request->query('program_id'), 1, 2147483647, 'program_id');
             return Response::json(['data' => AbhAdminRewardLifecycleRepository::list($programId)]);
         }
