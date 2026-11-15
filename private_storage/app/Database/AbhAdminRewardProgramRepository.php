@@ -69,6 +69,39 @@ final class AbhAdminRewardProgramRepository
         );
     }
 
+    /** @return array<string,mixed> */
+    public static function activateProgram(int $adminId, int $programId): array
+    {
+        return Connection::transaction(
+            static function (\\PDO $pdo) use ($adminId, $programId): array {
+                $stmt = $pdo->prepare(
+                    'SELECT p.id, p.status, rp.status AS period_status
+                       FROM abh_reward_programs p
+                       INNER JOIN abh_reporting_periods rp ON rp.id = p.reporting_period_id
+                      WHERE p.id = :id LIMIT 1 FOR UPDATE'
+                );
+                $stmt->execute(['id' => $programId]);
+                $program = $stmt->fetch(\\PDO::FETCH_ASSOC);
+                if (!is_array($program)) return ['error' => 'program_not_found'];
+                if ((string) $program['status'] !== 'DRAFT' || (string) $program['period_status'] !== 'OPEN') {
+                    return ['error' => 'program_locked'];
+                }
+
+                $rules = $pdo->prepare(
+                    'SELECT COUNT(*) FROM abh_reward_rules WHERE program_id = :id AND is_active = 1'
+                );
+                $rules->execute(['id' => $programId]);
+                if ((int) $rules->fetchColumn() < 1) return ['error' => 'rules_required'];
+
+                $pdo->prepare('UPDATE abh_reward_programs SET status = "ACTIVE" WHERE id = :id')
+                    ->execute(['id' => $programId]);
+                self::audit($pdo, $adminId, 'reward.program.activated', 'reward_program', $programId,
+                    ['status' => 'DRAFT'], ['status' => 'ACTIVE']);
+                return ['id' => $programId, 'status' => 'ACTIVE'];
+            }
+        );
+    }
+
     /** @return array{items:list<array<string,mixed>>} */
     public static function listRules(int $programId): array
     {
