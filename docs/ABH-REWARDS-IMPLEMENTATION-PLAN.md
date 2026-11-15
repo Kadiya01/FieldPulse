@@ -70,10 +70,14 @@ Rule selection is deterministic: the first matching active rule ordered by `rule
 - [x] Run CI and resolve all failures (GitHub Actions run #43764701273 passed frontend lint/tests, PHP lint, migration safety/planning, MySQL 8.0 and MariaDB 11.4 checks; cPanel deployment remained skipped).
 
 ### R5 — Agent reward view and release gate
-- Show an agent only their own programmes, qualification outcomes and awards.
-- Distinguish upcoming, in progress, eligible, pending approval, approved, partially paid, paid, partially delivered and delivered.
-- Test role permissions, closed-period immutability, duplicate requests, concurrent stock allocation and payment/delivery idempotency on MySQL and MariaDB.
-- Keep cPanel deployment disabled until the complete reward lifecycle passes CI and staging runtime verification.
+- [x] Add a signed-in-agent-only reward endpoint. The server derives the agent ID from the authenticated ABH session; callers cannot request another agent's records.
+- [x] Show available programme status, the agent's own frozen qualification outcome/rank/approved quantity, assigned gift snapshots and award approval state.
+- [x] Show payment and delivery progress independently, including partial payment and partial delivery; expose no administrator controls in the agent portal.
+- [x] Add typed client methods, agent portal loading/error/empty states, refresh control and contract tests for route authentication, agent scoping, status derivation, closed-period assignment guard, row locks and idempotent replay/conflict behavior.
+- [x] Extend disposable database checks for reward permission grants, separate PAYMENT/DELIVERY totals and duplicate fulfilment idempotency-key rejection. MySQL 8.0 and MariaDB 11.4 both passed 139 schema checks in GitHub Actions run #43770806923.
+- [ ] Complete true concurrent multi-connection stock-allocation and application-level lifecycle integration tests on both database engines; current contract tests verify row-lock code paths and database tests verify the schema/idempotency constraint.
+- [ ] Complete browser-to-preview-database runtime verification, administrator account/role management, and leaderboard month-selection/frozen-history checks before signing off the full release gate.
+- [ ] Keep cPanel deployment disabled until all remaining release-gate checks and isolated staging runtime verification pass.
 
 ## Acceptance gate
 
