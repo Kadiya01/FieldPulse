@@ -20,6 +20,9 @@ const request = read('../private_storage/app/Http/Request.php');
 const api = read('api/client.ts');
 const app = read('App.tsx');
 const page = read('pages/AdminPortalPage.tsx');
+const adminUsersRepository = read('../private_storage/app/Database/AbhAdminUserRepository.php');
+const adminUsersController = read('../private_storage/app/Domain/AbhAdminUsersController.php');
+const adminUsersShim = read('../public_html/api/v1/abh/admin/users.php');
 
 describe('ABH administrator security and management contract', () => {
   it('creates independent administrator sessions and attempt throttling', () => {
@@ -115,4 +118,27 @@ describe('ABH administrator security and management contract', () => {
     expect(page).toContain('Administrator sign in');
     expect(page).toContain('Agent applications');
   });
+
+  it('provides permission-gated administrator account and role management', () => {
+    expect(migration).toContain("'admin.users.manage'");
+    expect(kernel).toContain("'abh.admin.users' => \\FieldPulse\\Domain\\AbhAdminUsersController::class");
+    expect(kernel).toContain("'abh.admin.users' => 'admin'");
+    expect(adminUsersController).toContain("requirePermission('admin.users.manage')");
+    expect(adminUsersController).toContain("['action', 'full_name', 'email', 'password', 'role_key']");
+    expect(adminUsersController).toContain("['action', 'admin_id', 'status', 'role_key']");
+    expect(adminUsersRepository).toContain('password_hash($password, PASSWORD_DEFAULT)');
+    expect(adminUsersRepository).toContain('last_super_admin');
+    expect(adminUsersRepository).toContain('self_lockout');
+    expect(adminUsersRepository).toContain('ADMIN_ACCESS_CHANGED');
+    expect(adminUsersRepository).toContain('admin.user.created');
+    expect(adminUsersRepository).toContain('admin.user.updated');
+    expect(adminUsersShim).toContain("Kernel::handle('abh.admin.users')");
+    expect(api).toContain('fetchAbhAdminUsers');
+    expect(api).toContain('createAbhAdminUser');
+    expect(api).toContain('updateAbhAdminUser');
+    expect(page).toContain('Administrator accounts');
+    expect(page).toContain('Create administrator');
+    expect(page).toContain('Staff access');
+  });
+
 });
