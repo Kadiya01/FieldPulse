@@ -55,7 +55,7 @@ final class Kernel
         'abh.admin.submission.evidence' => \FieldPulse\Domain\AbhAdminSubmissionEvidenceController::class,
         'abh.admin.reward.programs' => \FieldPulse\Domain\AbhAdminRewardProgramsController::class,
         'abh.admin.reward.rules' => \FieldPulse\Domain\AbhAdminRewardRulesController::class,
-        'abh.admin.reward.qualifications' => \\FieldPulse\\Domain\\AbhAdminRewardQualificationController::class,
+        'abh.admin.reward.qualifications' => \FieldPulse\Domain\AbhAdminRewardQualificationController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
