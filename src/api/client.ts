@@ -2354,6 +2354,17 @@ export async function createAbhRewardProgram(input: {
   return envelope.data;
 }
 
+export async function activateAbhRewardProgram(programId: number): Promise<{ id: number; status: 'ACTIVE' }> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'ACTIVATE', program_id: programId })
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { id: number; status: 'ACTIVE' } };
+  return envelope.data;
+}
+
 export async function fetchAbhRewardRules(programId: number): Promise<AbhRewardRule[]> {
   const params = new URLSearchParams({ program_id: String(programId) });
   const response = await adminAuthenticatedFetch('/abh/admin/reward-rules.php?' + params.toString());
