@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace FieldPulse\\Database;
+namespace FieldPulse\Database;
 
 /**
  * Agent-facing reward read model. Every query is scoped by the authenticated
