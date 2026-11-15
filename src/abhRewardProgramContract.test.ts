@@ -7,12 +7,12 @@ const root = dirname(fileURLToPath(import.meta.url));
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
 
 describe('ABH reward programme configuration contract', () => {
-  const kernel = read('private_storage/app/Http/Kernel.php');
+  const kernel = read('../private_storage/app/Http/Kernel.php');
   const programs = read('private_storage/app/Domain/AbhAdminRewardProgramsController.php');
   const rules = read('private_storage/app/Domain/AbhAdminRewardRulesController.php');
   const repository = read('private_storage/app/Database/AbhAdminRewardProgramRepository.php');
-  const client = read('src/api/client.ts');
-  const adminUi = read('src/pages/AdminPortalPage.tsx');
+  const client = read('api/client.ts');
+  const adminUi = read('pages/AdminPortalPage.tsx');
 
   it('registers both configuration endpoints behind ABH administrator authentication', () => {
     expect(kernel).toContain("'abh.admin.reward.programs' => \\FieldPulse\\Domain\\AbhAdminRewardProgramsController::class");
