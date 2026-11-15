@@ -34,6 +34,7 @@ final class Kernel
         'abh.agent.submissions' => \FieldPulse\Domain\AbhAgentSubmissionsController::class,
         'abh.agent.leaderboard' => \FieldPulse\Domain\AbhAgentLeaderboardController::class,
         'abh.agent.notifications' => \FieldPulse\Domain\AbhAgentNotificationsController::class,
+        'abh.agent.rewards' => \FieldPulse\Domain\AbhAgentRewardsController::class,
         'abh.auth.login' => \FieldPulse\Domain\AbhAgentLoginController::class,
         'abh.auth.refresh' => \FieldPulse\Domain\AbhAgentRefreshController::class,
         'abh.auth.logout' => \FieldPulse\Domain\AbhAgentLogoutController::class,
