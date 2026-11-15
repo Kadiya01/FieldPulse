@@ -53,6 +53,8 @@ final class Kernel
         'abh.admin.period.close' => \FieldPulse\Domain\AbhAdminPeriodCloseController::class,
         'abh.admin.submission.decision' => \FieldPulse\Domain\AbhAdminSubmissionDecisionController::class,
         'abh.admin.submission.evidence' => \FieldPulse\Domain\AbhAdminSubmissionEvidenceController::class,
+        'abh.admin.reward.programs' => \FieldPulse\Domain\AbhAdminRewardProgramsController::class,
+        'abh.admin.reward.rules' => \FieldPulse\Domain\AbhAdminRewardRulesController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
