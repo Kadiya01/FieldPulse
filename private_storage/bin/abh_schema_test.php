@@ -14,6 +14,8 @@ require_once dirname(__DIR__) . '/app/bootstrap.php';
 
 use FieldPulse\Database\AbhMigrationCatalog;
 use FieldPulse\Database\Migrator;
+use FieldPulse\Config\Config;
+use FieldPulse\Database\Connection;
 
 const ABH_TEST_DATABASE = 'abh_test_migrations';
 
@@ -1168,6 +1170,155 @@ try {
             . ' AND read_at IS NOT NULL'
         )->fetchColumn() === 1
     );
+
+
+    // Exercise the real PHP reward repositories against this disposable database.
+    // This runs in the same MySQL/MariaDB matrix as the DDL checks above.
+    $integrationEnv = sys_get_temp_dir() . '/abh-ci-' . bin2hex(random_bytes(8)) . '.env';
+    $integrationEnvContents = implode(PHP_EOL, [
+        'APP_ENV=testing',
+        'APP_DEBUG=false',
+        'APP_URL=https://localhost',
+        'APP_TIMEZONE=Africa/Lagos',
+        'DB_HOST=' . $host,
+        'DB_PORT=' . $port,
+        'DB_NAME=' . ABH_TEST_DATABASE,
+        'DB_USER=' . $user,
+        'DB_PASSWORD=' . $password,
+        'JWT_SECRET=' . bin2hex(random_bytes(32)),
+        'ACCESS_TOKEN_TTL=900',
+        'REFRESH_TOKEN_TTL_DAYS=30',
+    ]) . PHP_EOL;
+    if (file_put_contents($integrationEnv, $integrationEnvContents) === false) {
+        throw new RuntimeException('Unable to prepare isolated application integration configuration.');
+    }
+    try {
+        Config::boot($integrationEnv);
+        Connection::reset();
+
+        $pdo->prepare(
+            'UPDATE abh_reporting_periods
+                SET status = "CLOSED", closed_at = UTC_TIMESTAMP(6), closed_by_admin_id = :admin_id
+              WHERE id = :period_id'
+        )->execute(['admin_id' => $adminId, 'period_id' => $periodId]);
+
+        $secondAdminInsert = $pdo->prepare(
+            'INSERT INTO abh_admin_users (full_name, email, email_normalized, password_hash, status)
+             VALUES (?, ?, ?, ?, "ACTIVE")'
+        );
+        $secondAdminInsert->execute([
+            'CI Reward Approver', 'reward-approver@example.invalid', 'reward-approver@example.invalid',
+            password_hash('disposable-ci-password-2', PASSWORD_DEFAULT),
+        ]);
+        $secondAdminId = (int) $pdo->lastInsertId();
+
+        $integrationProgramInsert = $pdo->prepare(
+            'INSERT INTO abh_reward_programs
+             (reporting_period_id, program_code, name, description, status, created_by_admin_id)
+             VALUES (?, ?, ?, ?, "ACTIVE", ?)'
+        );
+        $integrationProgramInsert->execute([
+            $periodId, 'CI-APP-LIFECYCLE', 'Application lifecycle integration',
+            'Exercises PHP reward repositories on both supported database engines.', $adminId,
+        ]);
+        $integrationProgramId = (int) $pdo->lastInsertId();
+
+        $integrationRuleInsert = $pdo->prepare(
+            'INSERT INTO abh_reward_rules
+             (program_id, rule_key, rule_version, rank_from, rank_to, minimum_approved_quantity,
+              eligibility_conditions_json, is_active, created_by_admin_id)
+             VALUES (?, ?, 1, 1, 3, 10, ?, 1, ?)'
+        );
+        $integrationRuleInsert->execute([
+            $integrationProgramId, 'CI_TOP_THREE', '{"integration_test":true}', $adminId,
+        ]);
+
+        $preview = \FieldPulse\Database\AbhAdminRewardQualificationRepository::preview($integrationProgramId);
+        abhSchemaAssert(
+            'PHP qualification repository previews frozen snapshots',
+            ($preview['total'] ?? 0) === 2 && ($preview['eligible_count'] ?? 0) === 2
+                && ($preview['read_only'] ?? false) === true
+        );
+
+        $evaluated = \FieldPulse\Database\AbhAdminRewardQualificationRepository::evaluate($adminId, $integrationProgramId);
+        abhSchemaAssert(
+            'PHP qualification repository evaluates both frozen leaderboard rows',
+            ($evaluated['evaluated_count'] ?? 0) === 2
+                && ($evaluated['eligible_count'] ?? 0) === 2
+                && ($evaluated['idempotent_replay'] ?? true) === false
+        );
+        $replayed = \FieldPulse\Database\AbhAdminRewardQualificationRepository::evaluate($adminId, $integrationProgramId);
+        abhSchemaAssert(
+            'PHP qualification evaluation is idempotent on retry',
+            ($replayed['idempotent_replay'] ?? false) === true
+                && ($replayed['evaluated_count'] ?? 0) === 2
+        );
+
+        $gift = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::createGift(
+            $adminId, $integrationProgramId, 'CI-APP-GIFT', 'Integration Gift',
+            'Gift created through the PHP application repository.', 2, '10000.00', 'NGN'
+        );
+        abhSchemaAssert('PHP lifecycle repository creates a gift catalogue entry', isset($gift['id']));
+        $giftId = (int) $gift['id'];
+
+        $qualificationIdStmt = $pdo->prepare(
+            'SELECT id FROM abh_reward_qualifications
+              WHERE program_id = ? AND agent_id = ? LIMIT 1'
+        );
+        $qualificationIdStmt->execute([$integrationProgramId, $agentId]);
+        $integrationQualificationId = (int) $qualificationIdStmt->fetchColumn();
+
+        $assignment = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::assignGift(
+            $adminId, $integrationProgramId, $integrationQualificationId, $giftId, 1
+        );
+        abhSchemaAssert('PHP lifecycle repository assigns a gift to an eligible agent', isset($assignment['id']));
+        $awardId = (int) $assignment['id'];
+
+        $sameOperatorApproval = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::approveAward($adminId, $awardId);
+        abhSchemaAssert(
+            'PHP lifecycle repository enforces independent award approval',
+            ($sameOperatorApproval['error'] ?? '') === 'separation_of_duties'
+        );
+        $approval = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::approveAward($secondAdminId, $awardId);
+        abhSchemaAssert('PHP lifecycle repository approves award and allocates stock', ($approval['status'] ?? '') === 'APPROVED');
+
+        $payment = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::recordEvent(
+            $secondAdminId, $awardId, 'PAYMENT', null, '2500.00', 'NGN',
+            'CI-APP-PAYMENT', 'Application integration payment.', 'ci-app-payment-0001'
+        );
+        abhSchemaAssert('PHP lifecycle repository records a payment event', isset($payment['id']));
+        $paymentReplay = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::recordEvent(
+            $secondAdminId, $awardId, 'PAYMENT', null, '2500.00', 'NGN',
+            'CI-APP-PAYMENT', 'Application integration payment.', 'ci-app-payment-0001'
+        );
+        abhSchemaAssert('PHP lifecycle repository replays identical payment idempotently', ($paymentReplay['idempotent_replay'] ?? false) === true);
+        $paymentConflict = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::recordEvent(
+            $secondAdminId, $awardId, 'PAYMENT', null, '3000.00', 'NGN',
+            'CI-APP-PAYMENT', 'Changed payload must conflict.', 'ci-app-payment-0001'
+        );
+        abhSchemaAssert('PHP lifecycle repository rejects changed idempotency payload', ($paymentConflict['error'] ?? '') === 'idempotency_conflict');
+
+        $delivery = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::recordEvent(
+            $secondAdminId, $awardId, 'DELIVERY', 1, null, null,
+            'CI-APP-DELIVERY', 'Application integration delivery.', 'ci-app-delivery-0001'
+        );
+        abhSchemaAssert('PHP lifecycle repository records delivery independently from payment', isset($delivery['id']));
+
+        $lifecycle = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::list($integrationProgramId);
+        $listedAward = array_values(array_filter(
+            $lifecycle['awards'] ?? [],
+            static fn(array $row): bool => (int) $row['id'] === $awardId
+        ))[0] ?? null;
+        abhSchemaAssert(
+            'PHP lifecycle read model returns independent payment and delivery totals',
+            is_array($listedAward)
+                && (string) $listedAward['paid_amount'] === '2500.00'
+                && (int) $listedAward['delivered_quantity'] === 1
+        );
+    } finally {
+        Connection::reset();
+        @unlink($integrationEnv);
+    }
 
     abhSchemaAssert(
         'CI schema test never creates the live ABH migration ledger',
