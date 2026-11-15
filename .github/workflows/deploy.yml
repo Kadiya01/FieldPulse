@@ -334,3 +334,9 @@ jobs:
             echo "::error::Preview .env protection check returned HTTP $env_status; stop and review document-root protection."
             exit 1
           }
+          health_response="$(curl --silent --show-error --fail --location "$preview_url/api/v1/abh/health.php")"
+          grep -Fq '"status":"ok"' <<< "$health_response"
+          grep -Fq '"database":"connected"' <<< "$health_response" || {
+            echo "::error::ABH application or preview database health check failed."
+            exit 1
+          }
