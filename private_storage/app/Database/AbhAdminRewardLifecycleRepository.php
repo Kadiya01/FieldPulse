@@ -34,7 +34,7 @@ final class AbhAdminRewardLifecycleRepository
                     a.gift_title_snapshot, a.gift_description_snapshot, a.gift_quantity,
                     a.estimated_value_snapshot, a.currency_code_snapshot, a.award_status,
                     a.assigned_by_admin_id, a.approved_by_admin_id, a.assigned_at, a.approved_at,
-                    ag.agent_code, ag.display_name_snapshot,
+                    ag.agent_code, ag.full_name AS display_name,
                     COALESCE(SUM(CASE WHEN e.event_type = "PAYMENT" THEN e.amount ELSE 0 END), 0) AS paid_amount,
                     COALESCE(SUM(CASE WHEN e.event_type = "DELIVERY" THEN e.quantity ELSE 0 END), 0) AS delivered_quantity
                FROM abh_reward_awards a
@@ -194,21 +194,22 @@ final class AbhAdminRewardLifecycleRepository
             $adminId, $awardId, $type, $quantity, $amount, $currency, $reference, $note, $idempotencyKey
         ): array {
             $stmt = $pdo->prepare(
-                'SELECT a.id, a.agent_id, a.gift_quantity, a.estimated_value_snapshot,
-                        a.currency_code_snapshot, a.award_status,
-                        COALESCE(SUM(CASE WHEN e.event_type = "PAYMENT" THEN e.amount ELSE 0 END), 0) AS paid_total,
-                        COALESCE(SUM(CASE WHEN e.event_type = "DELIVERY" THEN e.quantity ELSE 0 END), 0) AS delivered_total
-                   FROM abh_reward_awards a
-                   LEFT JOIN abh_reward_fulfilment_events e ON e.award_id = a.id
-                  WHERE a.id = :id
-                  GROUP BY a.id, a.agent_id, a.gift_quantity, a.estimated_value_snapshot,
-                           a.currency_code_snapshot, a.award_status
-                  LIMIT 1 FOR UPDATE'
+                'SELECT id, agent_id, gift_quantity, estimated_value_snapshot,
+                        currency_code_snapshot, award_status
+                   FROM abh_reward_awards WHERE id = :id LIMIT 1 FOR UPDATE'
             );
             $stmt->execute(['id' => $awardId]);
-            $award = $stmt->fetch(\PDO::FETCH_ASSOC);
+            $award = $stmt->fetch(\\PDO::FETCH_ASSOC);
             if (!is_array($award)) return ['error' => 'award_not_found'];
-
+            $totals = $pdo->prepare(
+                'SELECT COALESCE(SUM(CASE WHEN event_type = "PAYMENT" THEN amount ELSE 0 END), 0) AS paid_total,
+                        COALESCE(SUM(CASE WHEN event_type = "DELIVERY" THEN quantity ELSE 0 END), 0) AS delivered_total
+                   FROM abh_reward_fulfilment_events WHERE award_id = :id'
+            );
+            $totals->execute(['id' => $awardId]);
+            $totalsRow = $totals->fetch(\\PDO::FETCH_ASSOC) ?: ['paid_total' => 0, 'delivered_total' => 0];
+            $award['paid_total'] = $totalsRow['paid_total'];
+            $award['delivered_total'] = $totalsRow['delivered_total'];
             $replay = $pdo->prepare('SELECT id, event_type, quantity, amount FROM abh_reward_fulfilment_events WHERE award_id = :award_id AND idempotency_key = :key LIMIT 1');
             $replay->execute(['award_id' => $awardId, 'key' => $idempotencyKey]);
             $existing = $replay->fetch(\PDO::FETCH_ASSOC);
