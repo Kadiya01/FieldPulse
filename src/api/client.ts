@@ -388,6 +388,48 @@ export interface AbhNotificationList {
   offset: number;
 }
 
+export interface AbhAgentRewardItem {
+  program_id: number;
+  program_code: string;
+  program_name: string;
+  program_description: string | null;
+  program_status: string;
+  period_key: string;
+  period_status: string;
+  qualification_id: number | null;
+  qualification_status: 'ELIGIBLE' | 'INELIGIBLE' | string | null;
+  frozen_rank: number | null;
+  frozen_approved_quantity: number | null;
+  evaluated_at: string | null;
+  award_id: number | null;
+  gift_title_snapshot: string | null;
+  gift_description_snapshot: string | null;
+  gift_quantity: number | null;
+  estimated_value_snapshot: string | null;
+  currency_code_snapshot: string | null;
+  award_status: string | null;
+  assigned_at: string | null;
+  approved_at: string | null;
+  paid_total: string;
+  delivered_total: number;
+  last_event_at: string | null;
+  payment_status: 'NOT_STARTED' | 'VALUE_NOT_SET' | 'UNPAID' | 'PARTIALLY_PAID' | 'PAID';
+  delivery_status: 'NOT_STARTED' | 'NOT_DELIVERED' | 'PARTIALLY_DELIVERED' | 'DELIVERED';
+  display_status: string;
+}
+
+export interface AbhAgentRewardList {
+  items: AbhAgentRewardItem[];
+  total: number;
+}
+
+export async function fetchAbhAgentRewards(): Promise<AbhAgentRewardList> {
+  const response = await authenticatedFetch('/abh/agents/rewards.php');
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhAgentRewardList };
+  return envelope.data;
+}
+
 export interface AbhLeaderboardItem {
   agent_id: number;
   rank_position: number;
