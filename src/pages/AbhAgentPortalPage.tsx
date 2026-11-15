@@ -413,9 +413,6 @@ export default function AbhAgentPortalPage({
           )}
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="abh-agent-rewards-title">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -503,6 +500,11 @@ export default function AbhAgentPortalPage({
             </div>
           )}
         </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+
 
               <h2 className="text-lg font-bold text-slate-900">Monthly leaderboard</h2>
               <p className="mt-1 text-xs text-slate-500">
