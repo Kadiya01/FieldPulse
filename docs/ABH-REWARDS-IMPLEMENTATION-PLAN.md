@@ -28,7 +28,9 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 - [x] Validate strict request fields, programme/rule keys, rank boundaries and minimum quantities.
 - [x] Write audit events in the same transaction as programme/rule changes.
 - [x] Add typed frontend API methods and contract tests.
-- [ ] Add the administrator programme/rule management screen and run full CI.
+- [x] Add the administrator programme/rule management screen.
+- [x] Add explicit activation; require at least one active rule and an OPEN reporting period, with an audit event.
+- [ ] Add programme editing and run full CI.
 
 - List programmes by month and status.
 - Create/update a programme and its description for an existing reporting period.
