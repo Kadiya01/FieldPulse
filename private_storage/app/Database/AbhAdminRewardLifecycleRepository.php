@@ -103,6 +103,45 @@ final class AbhAdminRewardLifecycleRepository
     }
 
     /** @return array<string,mixed> */
+    public static function updateGift(int $adminId, int $programId, int $giftId, string $title,
+        ?string $description, ?int $stock, ?string $value, ?string $currency, string $status): array
+    {
+        return Connection::transaction(static function (\\PDO $pdo) use (
+            $adminId, $programId, $giftId, $title, $description, $stock, $value, $currency, $status
+        ): array {
+            $stmt = $pdo->prepare(
+                'SELECT gift_title, gift_description, available_quantity, estimated_value, currency_code, status
+                   FROM abh_reward_gifts WHERE id = :gift_id AND program_id = :program_id LIMIT 1 FOR UPDATE'
+            );
+            $stmt->execute(['gift_id' => $giftId, 'program_id' => $programId]);
+            $before = $stmt->fetch(\\PDO::FETCH_ASSOC);
+            if (!is_array($before)) return ['error' => 'gift_not_found'];
+            $pdo->prepare(
+                'UPDATE abh_reward_gifts SET gift_title = :title, gift_description = :description,
+                    available_quantity = :stock, estimated_value = :value, currency_code = :currency,
+                    status = :status, updated_by_admin_id = :admin_id
+                  WHERE id = :gift_id AND program_id = :program_id'
+            )->execute([
+                'title' => $title, 'description' => $description, 'stock' => $stock,
+                'value' => $value, 'currency' => $currency, 'status' => $status,
+                'admin_id' => $adminId, 'gift_id' => $giftId, 'program_id' => $programId,
+            ]);
+            self::audit($pdo, $adminId, 'reward.gift.updated', 'reward_gift', $giftId, [
+                'gift_title' => (string) $before['gift_title'],
+                'gift_description' => $before['gift_description'],
+                'available_quantity' => $before['available_quantity'],
+                'estimated_value' => $before['estimated_value'],
+                'currency_code' => $before['currency_code'], 'status' => (string) $before['status'],
+            ], [
+                'gift_title' => $title, 'gift_description' => $description,
+                'available_quantity' => $stock, 'estimated_value' => $value,
+                'currency_code' => $currency, 'status' => $status,
+            ]);
+            return ['id' => $giftId, 'status' => $status];
+        });
+    }
+
+    /** @return array<string,mixed> */
     public static function assignGift(int $adminId, int $programId, int $qualificationId,
         int $giftId, int $quantity): array
     {
