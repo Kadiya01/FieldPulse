@@ -106,7 +106,7 @@ final class AbhAdminRewardLifecycleRepository
     public static function updateGift(int $adminId, int $programId, int $giftId, string $title,
         ?string $description, ?int $stock, ?string $value, ?string $currency, string $status): array
     {
-        return Connection::transaction(static function (\\PDO $pdo) use (
+        return Connection::transaction(static function (\PDO $pdo) use (
             $adminId, $programId, $giftId, $title, $description, $stock, $value, $currency, $status
         ): array {
             $stmt = $pdo->prepare(
@@ -114,7 +114,7 @@ final class AbhAdminRewardLifecycleRepository
                    FROM abh_reward_gifts WHERE id = :gift_id AND program_id = :program_id LIMIT 1 FOR UPDATE'
             );
             $stmt->execute(['gift_id' => $giftId, 'program_id' => $programId]);
-            $before = $stmt->fetch(\\PDO::FETCH_ASSOC);
+            $before = $stmt->fetch(\PDO::FETCH_ASSOC);
             if (!is_array($before)) return ['error' => 'gift_not_found'];
             $pdo->prepare(
                 'UPDATE abh_reward_gifts SET gift_title = :title, gift_description = :description,
