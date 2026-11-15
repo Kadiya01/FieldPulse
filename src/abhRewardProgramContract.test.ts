@@ -8,9 +8,9 @@ const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
 
 describe('ABH reward programme configuration contract', () => {
   const kernel = read('../private_storage/app/Http/Kernel.php');
-  const programs = read('private_storage/app/Domain/AbhAdminRewardProgramsController.php');
-  const rules = read('private_storage/app/Domain/AbhAdminRewardRulesController.php');
-  const repository = read('private_storage/app/Database/AbhAdminRewardProgramRepository.php');
+  const programs = read('../private_storage/app/Domain/AbhAdminRewardProgramsController.php');
+  const rules = read('../private_storage/app/Domain/AbhAdminRewardRulesController.php');
+  const repository = read('../private_storage/app/Database/AbhAdminRewardProgramRepository.php');
   const client = read('api/client.ts');
   const adminUi = read('pages/AdminPortalPage.tsx');
 
