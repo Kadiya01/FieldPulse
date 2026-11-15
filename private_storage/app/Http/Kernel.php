@@ -134,6 +134,7 @@ final class Kernel
         'abh.admin.reward.programs' => 'admin',
         'abh.admin.reward.rules' => 'admin',
         'abh.admin.reward.qualifications' => 'admin',
+        'abh.admin.reward.lifecycle' => 'admin',
         'abh.admin.period.close' => 'admin',
         'abh.admin.submission.decision' => 'admin',
         'abh.admin.submission.evidence' => 'admin',
