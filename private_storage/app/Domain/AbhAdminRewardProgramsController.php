@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace FieldPulse\\Domain;
+namespace FieldPulse\Domain;
 
-use FieldPulse\\Database\\AbhAdminRewardProgramRepository;
-use FieldPulse\\Http\\ApiException;
-use FieldPulse\\Http\\ErrorCode;
-use FieldPulse\\Http\\Request;
-use FieldPulse\\Http\\Response;
+use FieldPulse\Database\AbhAdminRewardProgramRepository;
+use FieldPulse\Http\ApiException;
+use FieldPulse\Http\ErrorCode;
+use FieldPulse\Http\Request;
+use FieldPulse\Http\Response;
 
 /** GET/POST /api/v1/abh/admin/reward-programs.php */
 final class AbhAdminRewardProgramsController implements ActionInterface
@@ -20,7 +20,7 @@ final class AbhAdminRewardProgramsController implements ActionInterface
         if ($request->method() === 'GET') {
             $admin->requirePermission('rewards.manage');
             $month = Validator::periodMonth(
-                $request->query('month') ?? (new \\DateTimeImmutable('now', new \\DateTimeZone('Africa/Lagos')))->format('Y-m'),
+                $request->query('month') ?? (new \DateTimeImmutable('now', new \DateTimeZone('Africa/Lagos')))->format('Y-m'),
                 'month',
                 true
             );
