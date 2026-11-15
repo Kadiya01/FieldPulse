@@ -164,6 +164,8 @@ describe('ABH reward programme configuration contract', () => {
     expect(lifecycleRepository).toContain('delivery_exceeds_award');
     expect(lifecycleRepository).toContain('payment_exceeds_value');
     expect(lifecycleRepository).toContain('idempotency_conflict');
+    expect(lifecycleRepository).toContain('private static function canonicalAmount');
+    expect(lifecycleRepository).toContain('private static function minorUnits');
     expect(lifecycleRepository).toContain('currency_code, reference_no, note FROM abh_reward_fulfilment_events');
     expect(lifecycleRepository).toContain("'reward.fulfilment.' . strtolower($type)");
   });
