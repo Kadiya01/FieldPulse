@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace FieldPulse\\Database;
+namespace FieldPulse\Database;
 
-use FieldPulse\\Support\\RequestId;
+use FieldPulse\Support\RequestId;
 
 /** ABH reward programme and immutable eligibility-rule version management. */
 final class AbhAdminRewardProgramRepository
@@ -34,12 +34,12 @@ final class AbhAdminRewardProgramRepository
     public static function createProgram(int $adminId, string $month, string $code, string $name, ?string $description): array
     {
         return Connection::transaction(
-            static function (\\PDO $pdo) use ($adminId, $month, $code, $name, $description): array {
+            static function (\PDO $pdo) use ($adminId, $month, $code, $name, $description): array {
                 $period = $pdo->prepare(
                     'SELECT id, status FROM abh_reporting_periods WHERE period_key = :month LIMIT 1 FOR UPDATE'
                 );
                 $period->execute(['month' => $month]);
-                $periodRow = $period->fetch(\\PDO::FETCH_ASSOC);
+                $periodRow = $period->fetch(\PDO::FETCH_ASSOC);
                 if (!is_array($periodRow)) {
                     return ['error' => 'period_not_found'];
                 }
@@ -93,7 +93,7 @@ final class AbhAdminRewardProgramRepository
         ?int $minimumQuantity
     ): array {
         return Connection::transaction(
-            static function (\\PDO $pdo) use ($adminId, $programId, $ruleKey, $rankFrom, $rankTo, $minimumQuantity): array {
+            static function (\PDO $pdo) use ($adminId, $programId, $ruleKey, $rankFrom, $rankTo, $minimumQuantity): array {
                 $stmt = $pdo->prepare(
                     'SELECT p.id, p.status, rp.status AS period_status
                        FROM abh_reward_programs p
@@ -101,7 +101,7 @@ final class AbhAdminRewardProgramRepository
                       WHERE p.id = :id LIMIT 1 FOR UPDATE'
                 );
                 $stmt->execute(['id' => $programId]);
-                $program = $stmt->fetch(\\PDO::FETCH_ASSOC);
+                $program = $stmt->fetch(\PDO::FETCH_ASSOC);
                 if (!is_array($program)) {
                     return ['error' => 'program_not_found'];
                 }
@@ -156,7 +156,7 @@ final class AbhAdminRewardProgramRepository
     }
 
     /** @param array<string,mixed>|null $before @param array<string,mixed> $after */
-    private static function audit(\\PDO $pdo, int $adminId, string $action, string $entity, int $entityId, ?array $before, array $after): void
+    private static function audit(\PDO $pdo, int $adminId, string $action, string $entity, int $entityId, ?array $before, array $after): void
     {
         $pdo->prepare(
             'INSERT INTO abh_audit_events
