@@ -219,13 +219,16 @@ final class AbhAdminRewardLifecycleRepository
             $totalsRow = $totals->fetch(\PDO::FETCH_ASSOC) ?: ['paid_total' => 0, 'delivered_total' => 0];
             $award['paid_total'] = $totalsRow['paid_total'];
             $award['delivered_total'] = $totalsRow['delivered_total'];
-            $replay = $pdo->prepare('SELECT id, event_type, quantity, amount FROM abh_reward_fulfilment_events WHERE award_id = :award_id AND idempotency_key = :key LIMIT 1');
+            $replay = $pdo->prepare('SELECT id, event_type, quantity, amount, currency_code, reference_no, note FROM abh_reward_fulfilment_events WHERE award_id = :award_id AND idempotency_key = :key LIMIT 1');
             $replay->execute(['award_id' => $awardId, 'key' => $idempotencyKey]);
             $existing = $replay->fetch(\PDO::FETCH_ASSOC);
             if (is_array($existing)) {
                 if ((string) $existing['event_type'] !== $type
                     || ($existing['quantity'] === null ? null : (int) $existing['quantity']) !== $quantity
-                    || ($existing['amount'] === null ? null : (string) $existing['amount']) !== $amount) {
+                    || ($existing['amount'] === null ? null : (string) $existing['amount']) !== $amount
+                    || ($existing['currency_code'] === null ? null : (string) $existing['currency_code']) !== $currency
+                    || ($existing['reference_no'] === null ? null : (string) $existing['reference_no']) !== $reference
+                    || ($existing['note'] === null ? null : (string) $existing['note']) !== $note) {
                     return ['error' => 'idempotency_conflict'];
                 }
                 return ['id' => (int) $existing['id'], 'idempotent_replay' => true];
