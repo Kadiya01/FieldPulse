@@ -70,6 +70,51 @@ final class AbhAdminRewardProgramRepository
     }
 
     /** @return array<string,mixed> */
+    public static function updateDraftProgram(
+        int $adminId,
+        int $programId,
+        string $code,
+        string $name,
+        ?string $description
+    ): array {
+        return Connection::transaction(
+            static function (\PDO $pdo) use ($adminId, $programId, $code, $name, $description): array {
+                $stmt = $pdo->prepare(
+                    'SELECT p.program_code, p.name, p.description, p.status, rp.status AS period_status
+                       FROM abh_reward_programs p
+                       INNER JOIN abh_reporting_periods rp ON rp.id = p.reporting_period_id
+                      WHERE p.id = :id LIMIT 1 FOR UPDATE'
+                );
+                $stmt->execute(['id' => $programId]);
+                $before = $stmt->fetch(\PDO::FETCH_ASSOC);
+                if (!is_array($before)) return ['error' => 'program_not_found'];
+                if ((string) $before['status'] !== 'DRAFT' || (string) $before['period_status'] !== 'OPEN') {
+                    return ['error' => 'program_locked'];
+                }
+
+                $pdo->prepare(
+                    'UPDATE abh_reward_programs
+                        SET program_code = :code, name = :name, description = :description
+                      WHERE id = :id'
+                )->execute([
+                    'code' => $code, 'name' => $name, 'description' => $description, 'id' => $programId,
+                ]);
+                $after = [
+                    'program_code' => $code, 'name' => $name,
+                    'description' => $description, 'status' => 'DRAFT',
+                ];
+                self::audit($pdo, $adminId, 'reward.program.updated', 'reward_program', $programId, [
+                    'program_code' => (string) $before['program_code'],
+                    'name' => (string) $before['name'],
+                    'description' => $before['description'] === null ? null : (string) $before['description'],
+                    'status' => (string) $before['status'],
+                ], $after);
+                return ['id' => $programId] + $after;
+            }
+        );
+    }
+
+    /** @return array<string,mixed> */
     public static function activateProgram(int $adminId, int $programId): array
     {
         return Connection::transaction(
