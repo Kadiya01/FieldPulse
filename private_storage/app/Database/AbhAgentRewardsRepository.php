@@ -42,7 +42,6 @@ final class AbhAgentRewardsRepository
                      GROUP BY award_id
                ) ev ON ev.award_id = a.id
               WHERE p.status IN ("ACTIVE", "DRAFT", "PAUSED", "CLOSED")
-                AND (q.agent_id IS NULL OR q.agent_id = :agent_id)
               ORDER BY rp.period_key DESC, p.created_at DESC, p.id DESC',
             ['agent_id' => $agentId]
         );
