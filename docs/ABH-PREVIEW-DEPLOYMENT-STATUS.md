@@ -1,6 +1,6 @@
 # ABH Preview Deployment Status
 
-Last verified: 2026-11-14  
+Last verified: 2026-11-15  
 Repository: `Kadiya01/FieldPulse`  
 Branch: `feature/abh-monthly-enrollment`  
 Preview URL: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/
@@ -125,17 +125,17 @@ The workflow uploaded a deployment artifact only. It did not upload application 
 
 - R1: programme and versioned eligibility-rule management implemented.
 - R2: read-only qualification preview and explicit, idempotent evaluation from frozen leaderboard snapshots implemented.
-- R3: gift catalogue create/update/deactivate, eligible-agent gift assignment, independent award approval, stock locking, notifications and audit events are implemented in code; CI verification is pending.
-- R4: separate append-only payment and delivery events, value/quantity/currency checks, UUID idempotency, notifications, audit events and administrator history UI are implemented in code; CI verification is pending.
+- R3: gift catalogue create/update/deactivate, eligible-agent gift assignment, independent award approval, finite-stock locking, snapshots, notifications and audit events are implemented and CI-verified.
+- R4: separate append-only payment and delivery events, value/quantity/currency checks, UUID idempotency (including stable client retries and decimal normalization), notifications, audit events, derived fulfilment statuses and administrator history UI are implemented and CI-verified.
 - R5: agent reward views, end-to-end tests and full release gate remain to be implemented.
 
-The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1 and R2 have passing CI evidence; this is not evidence of staging runtime verification.
+The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1–R4 have passing CI evidence; this is not evidence of staging runtime verification.
 
 ## 7. Deployment readiness and controls
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-No live preview application deployment, cPanel database migration, or browser-to-staging-database end-to-end runtime test has been performed. R3/R4 code has been added but is not yet CI-verified; R5 agent reward views and end-to-end coverage remain incomplete. Administrator account/role management beyond first-admin provisioning and remaining leaderboard month-selection/frozen-history end-to-end checks also require completion.
+No live preview application deployment, cPanel database migration, or browser-to-staging-database end-to-end runtime test has been performed. R3 and R4 passed GitHub Actions run [#43764701273](https://github.com/Kadiya01/FieldPulse/actions/runs/43764701273) on commit `d9be619e8949616f50e6ec388fd1ff4306d83a9c`. Frontend lint/tests, PHP lint, preview isolation, migration safety/planning, production build, MySQL 8.0 and MariaDB 11.4 schema checks passed. The cPanel deployment job was skipped. R5 agent reward views and end-to-end coverage remain incomplete. Administrator account/role management beyond first-admin provisioning and remaining leaderboard month-selection/frozen-history end-to-end checks also require completion.
 
 Keep both controls unchanged:
 
