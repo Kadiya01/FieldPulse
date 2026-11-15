@@ -29,9 +29,12 @@ import {
   createAbhRewardRule,
   fetchAbhRewardQualificationPreview,
   evaluateAbhRewardQualifications,
+  fetchAbhRewardLifecycle, createAbhRewardGift, assignAbhRewardGift,
+  approveAbhRewardAward, recordAbhRewardPayment, recordAbhRewardDelivery,
   type AbhRewardProgram,
   type AbhRewardRule,
   type AbhRewardQualificationPreview,
+  type AbhRewardLifecycleData,
   restoreAdminSession,
   type AbhAdminDashboardData,
   type AdminAgentDetails,
@@ -1397,6 +1400,114 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
   );
 }
 
+
+function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [programs, setPrograms] = useState<AbhRewardProgram[]>([]);
+  const [programId, setProgramId] = useState<number | null>(null);
+  const [data, setData] = useState<AbhRewardLifecycleData | null>(null);
+  const [giftCode, setGiftCode] = useState('');
+  const [giftTitle, setGiftTitle] = useState('');
+  const [stock, setStock] = useState('');
+  const [qualificationId, setQualificationId] = useState('');
+  const [giftId, setGiftId] = useState('');
+  const [giftQuantity, setGiftQuantity] = useState('1');
+  const [amounts, setAmounts] = useState<Record<number, string>>({});
+  const [deliveries, setDeliveries] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const canManage = admin.permissions.includes('rewards.manage');
+  const canApprove = admin.permissions.includes('rewards.approve');
+  const refresh = useCallback(async () => {
+    if (!canManage) return;
+    const list = await fetchAbhRewardPrograms(month);
+    setPrograms(list);
+    const chosen = programId && list.some(item => item.id === programId)
+      ? programId : (list.find(item => item.status === 'ACTIVE')?.id ?? list[0]?.id ?? null);
+    setProgramId(chosen);
+    setData(chosen ? await fetchAbhRewardLifecycle(chosen) : null);
+  }, [canManage, month, programId]);
+  useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Could not load rewards.')); }, [refresh]);
+  const act = async (fn: () => Promise<unknown>, message: string) => {
+    setBusy(true); setError(''); setNotice('');
+    try { await fn(); setNotice(message); if (programId) setData(await fetchAbhRewardLifecycle(programId)); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Reward action failed.'); }
+    finally { setBusy(false); }
+  };
+  const addGift = (event: FormEvent) => {
+    event.preventDefault();
+    if (!programId) return;
+    void act(() => createAbhRewardGift({ program_id: programId, gift_code: giftCode, gift_title: giftTitle,
+      ...(stock ? { available_quantity: Number(stock) } : {}) }), 'Gift added.');
+    setGiftCode(''); setGiftTitle(''); setStock('');
+  };
+  const assign = (event: FormEvent) => {
+    event.preventDefault();
+    if (!programId || !qualificationId || !giftId) return;
+    void act(() => assignAbhRewardGift({ program_id: programId, qualification_id: Number(qualificationId),
+      gift_id: Number(giftId), quantity: Number(giftQuantity) }), 'Gift assigned and awaiting independent approval.');
+  };
+  if (!canManage) return <section className="p-5 text-sm text-amber-800">Your role cannot manage the gift catalogue.</section>;
+  return <section className="mx-auto max-w-7xl space-y-4 px-4 pb-8">
+    <div className="flex flex-wrap items-center gap-3">
+      <h2 className="text-xl font-bold">Gift catalogue, awards and fulfilment</h2>
+      <input aria-label="Reward month" type="month" value={month} onChange={e => setMonth(e.target.value)} className="rounded border p-2" />
+      <select aria-label="Reward programme" value={programId ?? ''} onChange={e => setProgramId(e.target.value ? Number(e.target.value) : null)} className="rounded border p-2">
+        {programs.map(p => <option key={p.id} value={p.id}>{p.program_code} ({p.status})</option>)}
+      </select>
+    </div>
+    {!data ? <p className="rounded-xl bg-white p-4 text-sm">Choose an active programme to manage gifts.</p> : <>
+      <div className="grid gap-4 md:grid-cols-2">
+        <form onSubmit={addGift} className="space-y-2 rounded-xl border bg-white p-4">
+          <h3 className="font-semibold">Add gift</h3>
+          <input required value={giftCode} onChange={e => setGiftCode(e.target.value)} placeholder="Gift code" className="w-full rounded border p-2" />
+          <input required value={giftTitle} onChange={e => setGiftTitle(e.target.value)} placeholder="Gift title" className="w-full rounded border p-2" />
+          <input type="number" min="0" value={stock} onChange={e => setStock(e.target.value)} placeholder="Stock (blank = unlimited)" className="w-full rounded border p-2" />
+          <button disabled={busy || !programs.some(p => p.id === programId && p.status === 'ACTIVE')} className="rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">Add gift</button>
+        </form>
+        <form onSubmit={assign} className="space-y-2 rounded-xl border bg-white p-4">
+          <h3 className="font-semibold">Assign to eligible agent</h3>
+          <select required value={qualificationId} onChange={e => setQualificationId(e.target.value)} className="w-full rounded border p-2">
+            <option value="">Select eligible agent</option>
+            {data.qualifications.map(q => <option key={q.id} value={q.id}>{q.display_name} · Rank {q.frozen_rank}</option>)}
+          </select>
+          <select required value={giftId} onChange={e => setGiftId(e.target.value)} className="w-full rounded border p-2">
+            <option value="">Select gift</option>
+            {data.gifts.filter(g => g.status === 'ACTIVE').map(g => <option key={g.id} value={g.id}>{g.gift_title}</option>)}
+          </select>
+          <input type="number" min="1" value={giftQuantity} onChange={e => setGiftQuantity(e.target.value)} className="w-full rounded border p-2" />
+          <button disabled={busy || !qualificationId || !giftId} className="rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-50">Assign for approval</button>
+        </form>
+      </div>
+      <div className="rounded-xl border bg-white p-4">
+        <h3 className="mb-3 font-semibold">Award register</h3>
+        {data.awards.map(a => <article key={a.id} className="border-b py-3">
+          <div className="flex flex-wrap justify-between gap-2"><strong>{a.display_name} · {a.gift_title_snapshot} × {a.gift_quantity}</strong><span>{a.award_status}</span></div>
+          <p className="text-xs text-slate-500">Assigned by #{a.assigned_by_admin_id}; approved by {a.approved_by_admin_id ?? '—'}; paid {a.paid_amount}; delivered {a.delivered_quantity}/{a.gift_quantity}</p>
+          {a.award_status === 'PENDING_APPROVAL' && canApprove && a.assigned_by_admin_id !== admin.id &&
+            <button disabled={busy} onClick={() => void act(() => approveAbhRewardAward(a.id), 'Award approved.')} className="mt-2 rounded bg-blue-700 px-3 py-2 text-xs text-white">Approve award</button>}
+          {a.award_status === 'APPROVED' && canApprove && <div className="mt-2 flex flex-wrap gap-2">
+            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardPayment({ award_id: a.id, amount: amounts[a.id] || '', currency_code: a.currency_code_snapshot || 'NGN', idempotency_key: crypto.randomUUID() }), 'Payment recorded.'); }}>
+              <input required type="number" min="0.01" step="0.01" value={amounts[a.id] || ''} onChange={e => setAmounts(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment amount" className="mr-2 rounded border p-2" />
+              <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record payment</button>
+            </form>
+            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardDelivery({ award_id: a.id, quantity: Number(deliveries[a.id] || 1), idempotency_key: crypto.randomUUID() }), 'Delivery recorded.'); }}>
+              <input required type="number" min="1" value={deliveries[a.id] || ''} onChange={e => setDeliveries(v => ({...v,[a.id]:e.target.value}))} placeholder="Delivered quantity" className="mr-2 rounded border p-2" />
+              <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record delivery</button>
+            </form>
+          </div>}
+        </article>)}
+      </div>
+      <div className="rounded-xl border bg-white p-4">
+        <h3 className="mb-2 font-semibold">Append-only fulfilment history</h3>
+        {data.events.map(e => <p key={e.id} className="border-b py-2 text-sm">Award #{e.award_id} · {e.event_type} · {e.amount ? e.amount + ' ' + (e.currency_code || '') : 'Qty ' + e.quantity} · {e.reference_no || 'No reference'}</p>)}
+      </div>
+    </>}
+    {(error || notice) && <p role={error ? 'alert' : 'status'} className="rounded bg-slate-100 p-3 text-sm">{error || notice}</p>}
+  </section>;
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
   const canViewOverview = [
     'agents.read', 'submissions.read', 'targets.manage', 'periods.close', 'rewards.manage', 'rewards.approve'
@@ -1574,7 +1685,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
       ) : activeSection === 'targets' ? (
         <AdminTargetManagement admin={admin} />
       ) : activeSection === 'rewards' ? (
-        <AdminRewardProgramManagement admin={admin} />
+        <><AdminRewardProgramManagement admin={admin} /><AdminRewardLifecycleManagement admin={admin} /></>
       ) : (
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(350px,0.9fr)]">
         <section className="min-w-0">
