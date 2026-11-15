@@ -1166,7 +1166,7 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
 
   const canManage = admin.permissions.includes('rewards.manage');
   const loadPrograms = useCallback(async () => {
-    if (!canManage) return;
+    if (!canRead) return;
     try {
       const result = await fetchAbhRewardPrograms(month);
       setPrograms(result);
@@ -1421,6 +1421,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
   const [notice, setNotice] = useState('');
   const canManage = admin.permissions.includes('rewards.manage');
   const canApprove = admin.permissions.includes('rewards.approve');
+  const canRead = canManage || canApprove;
   const refresh = useCallback(async () => {
     if (!canManage) return;
     const list = await fetchAbhRewardPrograms(month);
@@ -1429,7 +1430,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
       ? programId : (list.find(item => item.status === 'ACTIVE')?.id ?? list[0]?.id ?? null);
     setProgramId(chosen);
     setData(chosen ? await fetchAbhRewardLifecycle(chosen) : null);
-  }, [canManage, month, programId]);
+  }, [canRead, canManage, month, programId]);
   useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Could not load rewards.')); }, [refresh]);
   const act = async (fn: () => Promise<unknown>, message: string) => {
     setBusy(true); setError(''); setNotice('');
@@ -1450,7 +1451,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
     void act(() => assignAbhRewardGift({ program_id: programId, qualification_id: Number(qualificationId),
       gift_id: Number(giftId), quantity: Number(giftQuantity) }), 'Gift assigned and awaiting independent approval.');
   };
-  if (!canManage) return <section className="p-5 text-sm text-amber-800">Your role cannot manage the gift catalogue.</section>;
+  if (!canRead) return <section className="p-5 text-sm text-amber-800">Your role cannot view reward awards.</section>;
   return <section className="mx-auto max-w-7xl space-y-4 px-4 pb-8">
     <div className="flex flex-wrap items-center gap-3">
       <h2 className="text-xl font-bold">Gift catalogue, awards and fulfilment</h2>
@@ -1460,7 +1461,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
       </select>
     </div>
     {!data ? <p className="rounded-xl bg-white p-4 text-sm">Choose an active programme to manage gifts.</p> : <>
-      <div className="grid gap-4 md:grid-cols-2">
+      {canManage && <div className="grid gap-4 md:grid-cols-2">
         <form onSubmit={addGift} className="space-y-2 rounded-xl border bg-white p-4">
           <h3 className="font-semibold">Add gift</h3>
           <input required value={giftCode} onChange={e => setGiftCode(e.target.value)} placeholder="Gift code" className="w-full rounded border p-2" />
@@ -1481,13 +1482,13 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
           <input type="number" min="1" value={giftQuantity} onChange={e => setGiftQuantity(e.target.value)} className="w-full rounded border p-2" />
           <button disabled={busy || !qualificationId || !giftId} className="rounded bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-50">Assign for approval</button>
         </form>
-      </div>
+      </div>}
       <div className="rounded-xl border bg-white p-4">
         <h3 className="mb-3 font-semibold">Gift catalogue</h3>
         <div className="space-y-2">
           {data.gifts.map(g => <div key={g.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 text-sm">
             <span><strong>{g.gift_title}</strong> · {g.gift_code} · {g.available_quantity === null ? 'Unlimited stock' : 'Remaining ' + g.available_quantity} · {g.status}</span>
-            <button disabled={busy} onClick={() => void act(() => updateAbhRewardGift({
+            {canManage && <button disabled={busy} onClick={() => void act(() => updateAbhRewardGift({
               program_id: g.program_id, gift_id: g.id, gift_title: g.gift_title,
               ...(g.gift_description ? { gift_description: g.gift_description } : {}),
               available_quantity: g.available_quantity,
@@ -1495,7 +1496,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
               status: g.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
             }), 'Gift catalogue status updated and audited.')} className="rounded border px-3 py-1 text-xs">
               {g.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
-            </button>
+            </button>}
           </div>)}
           {data.gifts.length === 0 && <p className="text-sm text-slate-500">No gifts configured yet.</p>}
         </div>
@@ -1683,7 +1684,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Leaderboard
             </button>
           )}
-          {admin.permissions.includes('rewards.manage') && (
+          {(admin.permissions.includes('rewards.manage') || admin.permissions.includes('rewards.approve')) && (
             <button type="button" onClick={() => setActiveSection('rewards')}
               className={activeSection === 'rewards' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
               Rewards
@@ -1709,7 +1710,7 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
       ) : activeSection === 'targets' ? (
         <AdminTargetManagement admin={admin} />
       ) : activeSection === 'rewards' ? (
-        <><AdminRewardProgramManagement admin={admin} /><AdminRewardLifecycleManagement admin={admin} /></>
+        <>{admin.permissions.includes('rewards.manage') && <AdminRewardProgramManagement admin={admin} />}<AdminRewardLifecycleManagement admin={admin} /></>
       ) : (
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(350px,0.9fr)]">
         <section className="min-w-0">
