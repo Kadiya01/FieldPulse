@@ -56,11 +56,34 @@ final class AbhAgentRewardsRepository
             $item['gift_quantity'] = $item['gift_quantity'] === null ? null : (int) $item['gift_quantity'];
             $item['paid_total'] = (string) $item['paid_total'];
             $item['delivered_total'] = (int) $item['delivered_total'];
+            $item['payment_status'] = self::paymentStatus($item);
+            $item['delivery_status'] = self::deliveryStatus($item);
             $item['display_status'] = self::displayStatus($item);
         }
         unset($item);
 
         return ['items' => $items, 'total' => count($items)];
+    }
+
+    /** @param array<string,mixed> $item */
+    private static function paymentStatus(array $item): string
+    {
+        if ($item['award_id'] === null || $item['award_status'] !== 'APPROVED') return 'NOT_STARTED';
+        if ($item['estimated_value_snapshot'] === null || (float) $item['estimated_value_snapshot'] <= 0) return 'VALUE_NOT_SET';
+        $paid = (float) $item['paid_total'];
+        $value = (float) $item['estimated_value_snapshot'];
+        if ($paid <= 0) return 'UNPAID';
+        return $paid >= $value ? 'PAID' : 'PARTIALLY_PAID';
+    }
+
+    /** @param array<string,mixed> $item */
+    private static function deliveryStatus(array $item): string
+    {
+        if ($item['award_id'] === null || $item['award_status'] !== 'APPROVED') return 'NOT_STARTED';
+        $delivered = (int) $item['delivered_total'];
+        $quantity = (int) $item['gift_quantity'];
+        if ($delivered <= 0) return 'NOT_DELIVERED';
+        return $delivered >= $quantity ? 'DELIVERED' : 'PARTIALLY_DELIVERED';
     }
 
     /** @param array<string,mixed> $item */
