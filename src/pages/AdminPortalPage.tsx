@@ -27,8 +27,11 @@ import {
   updateAbhRewardProgram,
   fetchAbhRewardRules,
   createAbhRewardRule,
+  fetchAbhRewardQualificationPreview,
+  evaluateAbhRewardQualifications,
   type AbhRewardProgram,
   type AbhRewardRule,
+  type AbhRewardQualificationPreview,
   restoreAdminSession,
   type AbhAdminDashboardData,
   type AdminAgentDetails,
@@ -54,6 +57,8 @@ function AdminSignIn({ onAuthenticated }: { onAuthenticated: (admin: SessionAdmi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [qualificationPreview, setQualificationPreview] = useState<AbhRewardQualificationPreview | null>(null);
+  const [evaluationNotice, setEvaluationNotice] = useState('');
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -1227,6 +1232,31 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
     } finally { setBusy(false); }
   };
 
+  const previewQualifications = async (programId: number) => {
+    setBusy(true); setError(''); setNotice(''); setEvaluationNotice('');
+    try {
+      const result = await fetchAbhRewardQualificationPreview(programId);
+      setQualificationPreview(result);
+    } catch (caught) {
+      setQualificationPreview(null);
+      setError(caught instanceof Error ? caught.message : 'Qualification preview could not be loaded.');
+    } finally { setBusy(false); }
+  };
+
+  const evaluateQualifications = async () => {
+    if (selected === null || qualificationPreview?.program_id !== selected) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await evaluateAbhRewardQualifications(selected);
+      setEvaluationNotice(result.idempotent_replay
+        ? `Qualification evaluation already exists for ${result.evaluated_count} agent(s); no records were changed.`
+        : `Evaluation saved: ${result.eligible_count ?? 0} eligible and ${result.ineligible_count ?? 0} ineligible from ${result.evaluated_count} frozen results.`);
+      await previewQualifications(selected);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Qualification evaluation failed.');
+    } finally { setBusy(false); }
+  };
+
   const addRule = async (event: FormEvent) => {
     event.preventDefault();
     if (selected === null) return;
@@ -1320,6 +1350,44 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
                 ))}
                 {rules.length === 0 && <p className="text-sm text-slate-500">No rules created yet.</p>}
               </div>
+              {programs.find(program => program.id === selected)?.status === 'ACTIVE' && (
+                <div className="mt-5 space-y-3 border-t border-slate-200 pt-5">
+                  <div>
+                    <h3 className="font-semibold text-slate-900">Qualification preview</h3>
+                    <p className="mt-1 text-xs text-slate-600">Read-only preview from the closed month’s frozen leaderboard. It does not create qualifications.</p>
+                  </div>
+                  <button type="button" disabled={busy} onClick={() => void previewQualifications(selected)}
+                    className="rounded-lg border border-blue-700 px-4 py-2 text-sm font-semibold text-blue-800 disabled:opacity-50">
+                    Preview qualification
+                  </button>
+                  {qualificationPreview?.program_id === selected && (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg bg-slate-50 p-3"><strong>{qualificationPreview.snapshot_count}</strong><p className="text-xs text-slate-500">Frozen agents</p></div>
+                        <div className="rounded-lg bg-emerald-50 p-3"><strong>{qualificationPreview.eligible_count}</strong><p className="text-xs text-slate-600">Eligible</p></div>
+                        <div className="rounded-lg bg-amber-50 p-3"><strong>{qualificationPreview.ineligible_count}</strong><p className="text-xs text-slate-600">Not eligible</p></div>
+                      </div>
+                      <div className="max-h-72 space-y-2 overflow-auto">
+                        {qualificationPreview.items.map(item => (
+                          <div key={item.agent_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-3 text-sm">
+                            <div><strong>{item.display_name}</strong><p className="text-xs text-slate-500">{item.agent_code} · Rank {item.rank_position} · Approved {item.approved_quantity}</p></div>
+                            <span className={item.qualification_status === 'ELIGIBLE' ? 'text-xs font-semibold text-emerald-700' : 'text-xs font-semibold text-slate-500'}>
+                              {item.qualification_status === 'ELIGIBLE' ? `Eligible · ${item.matched_rule?.rule_key} v${item.matched_rule?.rule_version}` : 'Not eligible'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <button type="button" disabled={busy || qualificationPreview.snapshot_count === 0}
+                        onClick={() => void evaluateQualifications()}
+                        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                        Save qualification evaluation
+                      </button>
+                      <p className="text-xs text-slate-500">Saving is explicit and one-time. Results are stored with the frozen rank, approved quantity and rule versions; retrying does not create duplicates.</p>
+                    </div>
+                  )}
+                  {evaluationNotice && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{evaluationNotice}</p>}
+                </div>
+              )}
             </>
           )}
         </div>
