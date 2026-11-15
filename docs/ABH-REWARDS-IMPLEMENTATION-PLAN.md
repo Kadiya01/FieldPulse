@@ -22,6 +22,14 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 ## Delivery slices
 
 ### R1 — Programme and rule management
+- [x] Add ABH-admin-only API endpoints to list and create reward programmes.
+- [x] Require an existing OPEN reporting period; new programmes start in DRAFT.
+- [x] Add ABH-admin-only rule listing and version creation, with immutable prior versions and one active version per rule key.
+- [x] Validate strict request fields, programme/rule keys, rank boundaries and minimum quantities.
+- [x] Write audit events in the same transaction as programme/rule changes.
+- [x] Add typed frontend API methods and contract tests.
+- [ ] Add the administrator programme/rule management screen and run full CI.
+
 - List programmes by month and status.
 - Create/update a programme and its description for an existing reporting period.
 - Add versioned eligibility rules supporting rank range and minimum approved quantity.
