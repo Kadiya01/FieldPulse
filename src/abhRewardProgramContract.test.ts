@@ -141,6 +141,8 @@ describe('ABH reward programme configuration contract', () => {
     expect(lifecycleRepository).toContain("qualification_status'] !== 'ELIGIBLE'");
     expect(lifecycleRepository).toContain("'PENDING_APPROVAL'");
     expect(lifecycleRepository).toContain('gift_title_snapshot');
+    expect(lifecycleRepository).toContain('public static function updateGift');
+    expect(lifecycleRepository).toContain("'reward.gift.updated'");
     expect(lifecycleRepository).toContain('assigned_by_admin_id');
     expect(lifecycleRepository).toContain('award_already_assigned');
     expect(lifecycleRepository).toContain('insufficient_stock');
@@ -161,12 +163,14 @@ describe('ABH reward programme configuration contract', () => {
     expect(lifecycleRepository).toContain('delivery_exceeds_award');
     expect(lifecycleRepository).toContain('payment_exceeds_value');
     expect(lifecycleRepository).toContain('idempotency_conflict');
+    expect(lifecycleRepository).toContain('currency_code, reference_no, note FROM abh_reward_fulfilment_events');
     expect(lifecycleRepository).toContain("'reward.fulfilment.' . strtolower($type)");
   });
 
   it('exposes typed lifecycle client methods and admin controls', () => {
     expect(client).toContain('fetchAbhRewardLifecycle');
     expect(client).toContain('createAbhRewardGift');
+    expect(client).toContain('updateAbhRewardGift');
     expect(client).toContain('assignAbhRewardGift');
     expect(client).toContain('approveAbhRewardAward');
     expect(client).toContain('recordAbhRewardPayment');
