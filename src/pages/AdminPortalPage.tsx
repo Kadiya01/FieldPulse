@@ -1416,6 +1416,8 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
   const [deliveries, setDeliveries] = useState<Record<number, string>>({});
   const [references, setReferences] = useState<Record<number, string>>({});
   const [notes, setNotes] = useState<Record<number, string>>({});
+  const [paymentKeys, setPaymentKeys] = useState<Record<number, string>>({});
+  const [deliveryKeys, setDeliveryKeys] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -1432,10 +1434,10 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
     setData(chosen ? await fetchAbhRewardLifecycle(chosen) : null);
   }, [canRead, canManage, month, programId]);
   useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Could not load rewards.')); }, [refresh]);
-  const act = async (fn: () => Promise<unknown>, message: string) => {
+  const act = async (fn: () => Promise<unknown>, message: string): Promise<boolean> => {
     setBusy(true); setError(''); setNotice('');
-    try { await fn(); setNotice(message); if (programId) setData(await fetchAbhRewardLifecycle(programId)); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Reward action failed.'); }
+    try { await fn(); setNotice(message); if (programId) setData(await fetchAbhRewardLifecycle(programId)); return true; }
+    catch (e) { setError(e instanceof Error ? e.message : 'Reward action failed.'); return false; }
     finally { setBusy(false); }
   };
   const addGift = (event: FormEvent) => {
@@ -1506,6 +1508,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
         {data.awards.map(a => <article key={a.id} className="border-b py-3">
           <div className="flex flex-wrap justify-between gap-2"><strong>{a.display_name} · {a.gift_title_snapshot} × {a.gift_quantity}</strong><span>{a.award_status}</span></div>
           <p className="text-xs text-slate-500">Assigned by #{a.assigned_by_admin_id}; approved by {a.approved_by_admin_id ?? '—'}; paid {a.paid_amount}; delivered {a.delivered_quantity}/{a.gift_quantity}</p>
+          {a.award_status === 'APPROVED' && <p className="mt-1 text-xs font-semibold text-slate-700">Payment: {Number(a.paid_amount) <= 0 ? 'Unpaid' : (a.estimated_value_snapshot !== null && Number(a.paid_amount) >= Number(a.estimated_value_snapshot) ? 'Paid' : 'Partially paid')} · Delivery: {a.delivered_quantity <= 0 ? 'Not delivered' : (a.delivered_quantity >= a.gift_quantity ? 'Delivered' : 'Partially delivered')}</p>}
           {a.award_status === 'PENDING_APPROVAL' && canApprove && a.assigned_by_admin_id !== admin.id &&
             <button disabled={busy} onClick={() => void act(() => approveAbhRewardAward(a.id), 'Award approved.')} className="mt-2 rounded bg-blue-700 px-3 py-2 text-xs text-white">Approve award</button>}
           {a.award_status === 'APPROVED' && canApprove && <div className="mb-2 grid gap-2 md:grid-cols-2">
@@ -1513,11 +1516,11 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
             <input value={notes[a.id] || ''} onChange={e => setNotes(v => ({...v,[a.id]:e.target.value}))} placeholder="Fulfilment note (optional)" className="rounded border p-2 text-sm" />
           </div>}
           {a.award_status === 'APPROVED' && canApprove && <div className="mt-2 flex flex-wrap gap-2">
-            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardPayment({ award_id: a.id, amount: amounts[a.id] || '', currency_code: a.currency_code_snapshot || 'NGN', reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: crypto.randomUUID() }), 'Payment recorded.'); }}>
+            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardPayment({ award_id: a.id, amount: amounts[a.id] || '', currency_code: a.currency_code_snapshot || 'NGN', reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: paymentKeys[a.id] || crypto.randomUUID() }), 'Payment recorded.').then(ok => { if (ok) setPaymentKeys(v => ({...v,[a.id]:''})); else if (!paymentKeys[a.id]) setPaymentKeys(v => ({...v,[a.id]:crypto.randomUUID()})); }); }}>
               <input required type="number" min="0.01" step="0.01" value={amounts[a.id] || ''} onChange={e => setAmounts(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment amount" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record payment</button>
             </form>
-            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardDelivery({ award_id: a.id, quantity: Number(deliveries[a.id] || 1), reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: crypto.randomUUID() }), 'Delivery recorded.'); }}>
+            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardDelivery({ award_id: a.id, quantity: Number(deliveries[a.id] || 1), reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: deliveryKeys[a.id] || crypto.randomUUID() }), 'Delivery recorded.').then(ok => { if (ok) setDeliveryKeys(v => ({...v,[a.id]:''})); else if (!deliveryKeys[a.id]) setDeliveryKeys(v => ({...v,[a.id]:crypto.randomUUID()})); }); }}>
               <input required type="number" min="1" value={deliveries[a.id] || ''} onChange={e => setDeliveries(v => ({...v,[a.id]:e.target.value}))} placeholder="Delivered quantity" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record delivery</button>
             </form>
