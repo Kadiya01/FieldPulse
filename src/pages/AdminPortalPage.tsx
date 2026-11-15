@@ -1512,8 +1512,8 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
           {a.award_status === 'PENDING_APPROVAL' && canApprove && a.assigned_by_admin_id !== admin.id &&
             <button disabled={busy} onClick={() => void act(() => approveAbhRewardAward(a.id), 'Award approved.')} className="mt-2 rounded bg-blue-700 px-3 py-2 text-xs text-white">Approve award</button>}
           {a.award_status === 'APPROVED' && canApprove && <div className="mb-2 grid gap-2 md:grid-cols-2">
-            <input value={references[a.id] || ''} onChange={e => setReferences(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment/delivery reference (optional)" className="rounded border p-2 text-sm" />
-            <input value={notes[a.id] || ''} onChange={e => setNotes(v => ({...v,[a.id]:e.target.value}))} placeholder="Fulfilment note (optional)" className="rounded border p-2 text-sm" />
+            <input value={references[a.id] || ''} onChange={e => { setReferences(v => ({...v,[a.id]:e.target.value})); setPaymentKeys(v => ({...v,[a.id]:''})); setDeliveryKeys(v => ({...v,[a.id]:''})); }} placeholder="Payment/delivery reference (optional)" className="rounded border p-2 text-sm" />
+            <input value={notes[a.id] || ''} onChange={e => { setNotes(v => ({...v,[a.id]:e.target.value})); setPaymentKeys(v => ({...v,[a.id]:''})); setDeliveryKeys(v => ({...v,[a.id]:''})); }} placeholder="Fulfilment note (optional)" className="rounded border p-2 text-sm" />
           </div>}
           {a.award_status === 'APPROVED' && canApprove && <div className="mt-2 flex flex-wrap gap-2">
             <form onSubmit={e => {
@@ -1527,7 +1527,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
                 idempotency_key: key
               }), 'Payment recorded.').then(ok => { if (ok) setPaymentKeys(v => ({...v,[a.id]:''})); });
             }}>
-              <input required type="number" min="0.01" step="0.01" value={amounts[a.id] || ''} onChange={e => setAmounts(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment amount" className="mr-2 rounded border p-2" />
+              <input required type="number" min="0.01" step="0.01" value={amounts[a.id] || ''} onChange={e => { setAmounts(v => ({...v,[a.id]:e.target.value})); setPaymentKeys(v => ({...v,[a.id]:''})); }} placeholder="Payment amount" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record payment</button>
             </form>
             <form onSubmit={e => {
@@ -1540,7 +1540,7 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
                 idempotency_key: key
               }), 'Delivery recorded.').then(ok => { if (ok) setDeliveryKeys(v => ({...v,[a.id]:''})); });
             }}>
-              <input required type="number" min="1" value={deliveries[a.id] || ''} onChange={e => setDeliveries(v => ({...v,[a.id]:e.target.value}))} placeholder="Delivered quantity" className="mr-2 rounded border p-2" />
+              <input required type="number" min="1" value={deliveries[a.id] || ''} onChange={e => { setDeliveries(v => ({...v,[a.id]:e.target.value})); setDeliveryKeys(v => ({...v,[a.id]:''})); }} placeholder="Delivered quantity" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record delivery</button>
             </form>
           </div>}
