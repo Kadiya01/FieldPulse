@@ -77,7 +77,11 @@ Rule selection is deterministic: the first matching active rule ordered by `rule
 - [x] Extend disposable database checks for reward permission grants, separate PAYMENT/DELIVERY totals and duplicate fulfilment idempotency-key rejection. MySQL 8.0 and MariaDB 11.4 both passed 139 schema checks in GitHub Actions run #43770806923.
 - [x] Exercise concurrent stock allocation using two independent database connections and InnoDB row locks on both MySQL 8.0 and MariaDB 11.4; both engines confirmed only one allocator can reserve the final stock unit.
 - [ ] Complete application-level lifecycle integration tests (calling the PHP repositories/controllers against disposable databases) on both engines.
-- [ ] Complete browser-to-preview-database runtime verification, administrator account/role management, and leaderboard month-selection/frozen-history checks before signing off the full release gate.
+- [x] Provide administrator and agent leaderboard month selectors and read closed-period rankings from immutable leaderboard snapshots; contract tests cover live-versus-frozen source selection and competition-rank behavior.
+- [ ] Add full end-to-end regression tests for month switching and frozen-history immutability.
+- [ ] Implement administrator account creation, status management and role assignment/revocation beyond one-time first-admin bootstrap.
+- [ ] Complete PHP application-level lifecycle integration tests against disposable MySQL 8.0 and MariaDB 11.4 databases.
+- [ ] Complete browser-to-preview-database runtime verification and formal release-gate sign-off before deployment.
 - [ ] Keep cPanel deployment disabled until all remaining release-gate checks and isolated staging runtime verification pass.
 
 ## Acceptance gate
