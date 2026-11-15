@@ -57,8 +57,6 @@ function AdminSignIn({ onAuthenticated }: { onAuthenticated: (admin: SessionAdmi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [qualificationPreview, setQualificationPreview] = useState<AbhRewardQualificationPreview | null>(null);
-  const [evaluationNotice, setEvaluationNotice] = useState('');
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -1160,6 +1158,8 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [qualificationPreview, setQualificationPreview] = useState<AbhRewardQualificationPreview | null>(null);
+  const [evaluationNotice, setEvaluationNotice] = useState('');
 
   const canManage = admin.permissions.includes('rewards.manage');
   const loadPrograms = useCallback(async () => {
