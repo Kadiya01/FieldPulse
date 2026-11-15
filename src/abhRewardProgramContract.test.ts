@@ -15,6 +15,10 @@ describe('ABH reward programme configuration contract', () => {
   const qualificationController = read('../private_storage/app/Domain/AbhAdminRewardQualificationController.php');
   const lifecycleRepository = read('../private_storage/app/Database/AbhAdminRewardLifecycleRepository.php');
   const lifecycleController = read('../private_storage/app/Domain/AbhAdminRewardLifecycleController.php');
+  const agentRewardsRepository = read('../private_storage/app/Database/AbhAgentRewardsRepository.php');
+  const agentRewardsController = read('../private_storage/app/Domain/AbhAgentRewardsController.php');
+  const agentRewardsShim = read('../public_html/api/v1/abh/agents/rewards.php');
+  const agentPortal = read('pages/AbhAgentPortalPage.tsx');
   const client = read('api/client.ts');
   const adminUi = read('pages/AdminPortalPage.tsx');
 
@@ -187,6 +191,42 @@ describe('ABH reward programme configuration contract', () => {
     expect(adminUi).toContain('const canRead = canManage || canApprove');
     expect(adminUi).toContain('const key = paymentKeys[a.id] || crypto.randomUUID()');
     expect(adminUi).toContain('const key = deliveryKeys[a.id] || crypto.randomUUID()');
+  });
+
+
+  it('exposes a signed agent-only reward endpoint and scopes every result to the caller', () => {
+    expect(kernel).toContain("'abh.agent.rewards' => \\FieldPulse\\Domain\\AbhAgentRewardsController::class");
+    expect(kernel).toContain("'abh.agent.rewards' => 'signed'");
+    expect(agentRewardsController).toContain("$request->requireAuth()");
+    expect(agentRewardsController).toContain("$agent->agentId()");
+    expect(agentRewardsRepository).toContain("q.agent_id = :agent_id");
+    expect(agentRewardsRepository).toContain("a.agent_id = :agent_id");
+    expect(agentRewardsRepository).toContain("abh_reward_fulfilment_events");
+    expect(agentRewardsShim).toContain("Kernel::handle('abh.agent.rewards')");
+    expect(client).toContain("fetchAbhAgentRewards");
+    expect(client).toContain("authenticatedFetch('/abh/agents/rewards.php')");
+  });
+
+  it('shows the agent qualification, award and independent fulfilment progress', () => {
+    expect(agentRewardsRepository).toContain("'UPCOMING'");
+    expect(agentRewardsRepository).toContain("'IN_PROGRESS'");
+    expect(agentRewardsRepository).toContain("'ELIGIBLE'");
+    expect(agentRewardsRepository).toContain("'PENDING_APPROVAL'");
+    expect(agentRewardsRepository).toContain("'PARTIALLY_PAID'");
+    expect(agentRewardsRepository).toContain("'PARTIALLY_DELIVERED'");
+    expect(agentRewardsRepository).toContain("'PAID_AND_DELIVERED'");
+    expect(agentPortal).toContain('My rewards');
+    expect(agentPortal).toContain('Frozen monthly rank');
+    expect(agentPortal).toContain('Payment progress');
+    expect(agentPortal).toContain('Delivery progress');
+    expect(agentPortal).toContain('fetchAbhAgentRewards');
+  });
+
+  it('keeps preview deployment disabled pending isolated staging runtime verification', () => {
+    const status = read('../docs/ABH-PREVIEW-DEPLOYMENT-STATUS.md');
+    expect(status).toContain('ABH_PREVIEW_DEPLOY_ENABLED=false');
+    expect(status).toContain('ABH_PREVIEW_DRY_RUN=true');
+    expect(status).toContain('NOT READY FOR APPLICATION DEPLOYMENT');
   });
 
 });
