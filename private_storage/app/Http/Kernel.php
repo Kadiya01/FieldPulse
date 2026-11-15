@@ -119,6 +119,7 @@ final class Kernel
         'abh.agent.submissions' => 'signed',
         'abh.agent.leaderboard' => 'signed',
         'abh.agent.notifications' => 'signed',
+        'abh.agent.rewards' => 'signed',
         'abh.auth.login' => 'public',
         'abh.auth.refresh' => 'public',
         'abh.auth.logout' => 'public',
