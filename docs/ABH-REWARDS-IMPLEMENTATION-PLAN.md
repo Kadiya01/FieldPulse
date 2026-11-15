@@ -31,7 +31,7 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 - [x] Add the administrator programme/rule management screen.
 - [x] Add explicit activation; require at least one active rule and an OPEN reporting period, with an audit event.
 - [x] Add audited programme editing, restricted to DRAFT programmes in OPEN periods.
-- [ ] Run full CI and resolve any failures.
+- [x] Run full CI and resolve any failures (GitHub Actions run #339 passed frontend, PHP, migration-safety, MySQL 8.0 and MariaDB 11.4 checks; deployment remained skipped).
 
 - List programmes by month and status.
 - Create/update a programme and its description for an existing reporting period.
@@ -47,7 +47,7 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 - [x] Make evaluation idempotent; duplicate requests do not insert duplicate qualifications.
 - [x] Write qualification audit and agent notifications in the evaluation transaction.
 - [x] Add reward-manager UI, typed client methods and contract tests.
-- [ ] Run full CI and resolve any failures.
+- [x] Run full CI and resolve any failures (GitHub Actions run #339 passed frontend, PHP, migration-safety, MySQL 8.0 and MariaDB 11.4 checks; deployment remained skipped).
 
 Rule selection is deterministic: the first matching active rule ordered by `rule_key` ascending is recorded as the qualification's selected rule. All active rule versions tested are retained in the qualification snapshot.
 
