@@ -53,6 +53,29 @@ final class AbhAdminRewardLifecycleController implements ActionInterface
             self::assertResult($result);
             return Response::json(['data'=>$result],201);
         }
+        if ($action === 'UPDATE_GIFT') {
+            $admin->requirePermission('rewards.manage');
+            Validator::assertNoUnknownKeys($body,['action','program_id','gift_id','gift_title','gift_description','available_quantity','estimated_value','currency_code','status'],'gift update');
+            $programId = Validator::intRange($body['program_id']??null,1,2147483647,'program_id');
+            $giftId = Validator::intRange($body['gift_id']??null,1,2147483647,'gift_id');
+            $title = Validator::string($body['gift_title']??null,2,160,'gift_title');
+            $description = isset($body['gift_description']) ? Validator::string($body['gift_description'],1,2000,'gift_description') : null;
+            $stock = array_key_exists('available_quantity',$body) && $body['available_quantity'] !== null
+                ? Validator::intRange($body['available_quantity'],0,1000000000,'available_quantity') : null;
+            $value = null;
+            if (isset($body['estimated_value'])) {
+                if (!is_numeric($body['estimated_value']) || (float)$body['estimated_value'] < 0 || !preg_match('/^\\d{1,13}(?:\\.\\d{1,2})?$/',(string)$body['estimated_value'])) throw ApiException::validation('Invalid estimated value.',['field'=>'estimated_value']);
+                $value = (string)$body['estimated_value'];
+            }
+            $currency = isset($body['currency_code']) ? strtoupper(Validator::string($body['currency_code'],3,3,'currency_code')) : null;
+            if (($value === null) !== ($currency === null)) throw ApiException::validation('Estimated value and currency must be supplied together.');
+            if ($currency !== null && preg_match('/^[A-Z]{3}$/',$currency)!==1) throw ApiException::validation('Invalid currency code.',['field'=>'currency_code']);
+            $status = $body['status'] ?? 'ACTIVE';
+            if (!in_array($status,['ACTIVE','INACTIVE'],true)) throw ApiException::validation('Gift status must be ACTIVE or INACTIVE.',['field'=>'status']);
+            $result = AbhAdminRewardLifecycleRepository::updateGift($admin->id(),$programId,$giftId,$title,$description,$stock,$value,$currency,$status);
+            self::assertResult($result);
+            return Response::json(['data'=>$result]);
+        }
         if ($action === 'ASSIGN_GIFT') {
             $admin->requirePermission('rewards.manage');
             Validator::assertNoUnknownKeys($body,['action','program_id','qualification_id','gift_id','quantity'],'gift assignment');
@@ -108,6 +131,7 @@ final class AbhAdminRewardLifecycleController implements ActionInterface
         $messages = [
             'program_not_found'=>[404,'Reward programme not found.'],
             'qualification_or_gift_not_found'=>[404,'Eligible qualification or programme gift not found.'],
+            'gift_not_found'=>[404,'Programme gift not found.'],
             'award_not_found'=>[404,'Reward award not found.'],
             'program_not_active'=>[409,'Gift catalogue requires an active programme.'],
             'program_or_period_locked'=>[409,'Gift assignment requires an active programme and closed reporting period.'],
