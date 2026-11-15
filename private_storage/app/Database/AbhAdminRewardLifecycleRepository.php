@@ -277,9 +277,9 @@ final class AbhAdminRewardLifecycleRepository
                 if ($quantity === null || $quantity < 1) return ['error' => 'invalid_event'];
                 if ((int) $award['delivered_total'] + $quantity > (int) $award['gift_quantity']) return ['error' => 'delivery_exceeds_award'];
             } else {
-                if ($amount === null || (float) $amount <= 0 || $currency === null) return ['error' => 'invalid_event'];
+                if ($amount === null || self::minorUnits($amount) <= 0 || $currency === null) return ['error' => 'invalid_event'];
                 if ($award['estimated_value_snapshot'] !== null
-                    && (float) $award['paid_total'] + (float) $amount > (float) $award['estimated_value_snapshot']) return ['error' => 'payment_exceeds_value'];
+                    && self::minorUnits((string) $award['paid_total']) + self::minorUnits($amount) > self::minorUnits((string) $award['estimated_value_snapshot'])) return ['error' => 'payment_exceeds_value'];
                 if ($award['currency_code_snapshot'] !== null && $currency !== (string) $award['currency_code_snapshot']) return ['error' => 'currency_mismatch'];
             }
 
@@ -309,6 +309,11 @@ final class AbhAdminRewardLifecycleRepository
         });
     }
 
+    private static function minorUnits(string $amount): int
+    {
+        [$whole, $fraction] = array_pad(explode('.', $amount, 2), 2, '');
+        return ((int) $whole * 100) + (int) str_pad(substr($fraction, 0, 2), 2, '0');
+    }
     private static function notify(\PDO $pdo, int $agentId, string $key, string $title, string $message): void
     {
         $pdo->prepare(
