@@ -1196,6 +1196,32 @@ try {
         Config::boot($integrationEnv);
         Connection::reset();
 
+        $managedAdmin = \FieldPulse\Database\AbhAdminUserRepository::create(
+            $adminId, 'CI Managed Administrator', 'managed-admin@example.invalid',
+            'ManagedAdmin2026', 'AGENT_REVIEWER'
+        );
+        abhSchemaAssert(
+            'PHP administrator repository creates a hashed account with a selected role',
+            isset($managedAdmin['id']) && ($managedAdmin['role_key'] ?? '') === 'AGENT_REVIEWER'
+        );
+        $managedAdminId = (int) $managedAdmin['id'];
+        $managedAdminUpdate = \FieldPulse\Database\AbhAdminUserRepository::update(
+            $adminId, $managedAdminId, 'SUSPENDED', 'REWARD_MANAGER'
+        );
+        abhSchemaAssert(
+            'PHP administrator repository changes role and status transactionally',
+            ($managedAdminUpdate['status'] ?? '') === 'SUSPENDED'
+                && ($managedAdminUpdate['role_key'] ?? '') === 'REWARD_MANAGER'
+                && ($managedAdminUpdate['sessions_revoked'] ?? false) === true
+        );
+        $selfLockout = \FieldPulse\Database\AbhAdminUserRepository::update(
+            $adminId, $adminId, 'SUSPENDED', 'REWARD_MANAGER'
+        );
+        abhSchemaAssert(
+            'PHP administrator repository blocks self-lockout',
+            ($selfLockout['error'] ?? '') === 'self_lockout'
+        );
+
         $pdo->prepare(
             'UPDATE abh_reporting_periods
                 SET status = "CLOSED", closed_at = UTC_TIMESTAMP(6), closed_by_admin_id = :admin_id
@@ -1256,7 +1282,7 @@ try {
         $preview = \FieldPulse\Database\AbhAdminRewardQualificationRepository::preview($integrationProgramId);
         abhSchemaAssert(
             'PHP qualification repository previews frozen snapshots',
-            ($preview['total'] ?? 0) === 2 && ($preview['eligible_count'] ?? 0) === 2
+            ($preview['snapshot_count'] ?? 0) === 2 && ($preview['eligible_count'] ?? 0) === 2
                 && ($preview['read_only'] ?? false) === true
         );
 
@@ -1300,7 +1326,7 @@ try {
             ($sameOperatorApproval['error'] ?? '') === 'separation_of_duties'
         );
         $approval = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::approveAward($secondAdminId, $awardId);
-        abhSchemaAssert('PHP lifecycle repository approves award and allocates stock', ($approval['status'] ?? '') === 'APPROVED');
+        abhSchemaAssert('PHP lifecycle repository approves award and allocates stock', ($approval['award_status'] ?? '') === 'APPROVED');
 
         $payment = \FieldPulse\Database\AbhAdminRewardLifecycleRepository::recordEvent(
             $secondAdminId, $awardId, 'PAYMENT', null, '2500.00', 'NGN',
