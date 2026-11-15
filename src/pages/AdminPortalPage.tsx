@@ -24,6 +24,7 @@ import {
   fetchAbhRewardPrograms,
   createAbhRewardProgram,
   activateAbhRewardProgram,
+  updateAbhRewardProgram,
   fetchAbhRewardRules,
   createAbhRewardRule,
   type AbhRewardProgram,
@@ -1144,6 +1145,9 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [editCode, setEditCode] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
   const [ruleKey, setRuleKey] = useState('');
   const [rankFrom, setRankFrom] = useState('');
   const [rankTo, setRankTo] = useState('');
@@ -1191,6 +1195,24 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
       await loadPrograms();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Programme could not be created.');
+    } finally { setBusy(false); }
+  };
+
+  const saveProgramEdits = async (event: FormEvent) => {
+    event.preventDefault();
+    if (selected === null) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await updateAbhRewardProgram({
+        program_id: selected,
+        program_code: editCode.trim(),
+        name: editName.trim(),
+        ...(editDescription.trim() ? { description: editDescription.trim() } : {})
+      });
+      setNotice('Draft programme details updated and audited.');
+      await loadPrograms();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Programme details could not be updated.');
     } finally { setBusy(false); }
   };
 
@@ -1244,7 +1266,12 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
           {programs.length === 0 && <p className="rounded-xl bg-white p-4 text-sm text-slate-500">No programmes configured for this month.</p>}
           {programs.map(program => (
             <div key={program.id} className={selected === program.id ? 'rounded-xl border-2 border-blue-600 bg-white p-4' : 'rounded-xl border border-slate-200 bg-white p-4'}>
-              <button type="button" onClick={() => setSelected(program.id)} className="w-full text-left">
+              <button type="button" onClick={() => {
+                setSelected(program.id);
+                setEditCode(program.program_code);
+                setEditName(program.name);
+                setEditDescription(program.description ?? '');
+              }} className="w-full text-left">
                 <div className="flex justify-between gap-3"><strong>{program.name}</strong><span className="text-xs font-semibold text-slate-500">{program.status}</span></div>
                 <p className="mt-1 text-xs text-slate-500">{program.program_code} · {program.active_rule_count} active rule(s)</p>
               </button>
@@ -1265,6 +1292,15 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
           <h2 className="text-lg font-bold text-slate-900">Eligibility rule versions</h2>
           {selected === null ? <p className="mt-3 text-sm text-slate-500">Select a programme to view its rules.</p> : (
             <>
+              {programs.find(program => program.id === selected)?.status === 'DRAFT' && (
+                <form onSubmit={event => void saveProgramEdits(event)} className="mt-4 space-y-3 border-b border-slate-200 pb-5">
+                  <h3 className="font-semibold text-slate-900">Edit draft programme</h3>
+                  <input required minLength={2} maxLength={48} value={editCode} onChange={event => setEditCode(event.target.value)} aria-label="Programme code" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                  <input required minLength={2} maxLength={160} value={editName} onChange={event => setEditName(event.target.value)} aria-label="Programme name" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                  <textarea maxLength={2000} value={editDescription} onChange={event => setEditDescription(event.target.value)} aria-label="Programme description" rows={2} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                  <button disabled={busy} className="rounded-lg border border-blue-700 px-4 py-2 text-sm font-semibold text-blue-800 disabled:opacity-50">Save programme changes</button>
+                </form>
+              )}
               <form onSubmit={event => void addRule(event)} className="mt-4 space-y-3 border-b border-slate-200 pb-5">
                 <p className="text-sm text-slate-600">Adding a rule with an existing key creates a new version; earlier versions remain in the record.</p>
                 <input required minLength={2} maxLength={64} value={ruleKey} onChange={event => setRuleKey(event.target.value)} placeholder="Rule key e.g. TOP_THREE" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
