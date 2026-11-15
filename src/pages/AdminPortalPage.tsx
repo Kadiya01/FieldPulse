@@ -1516,11 +1516,30 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
             <input value={notes[a.id] || ''} onChange={e => setNotes(v => ({...v,[a.id]:e.target.value}))} placeholder="Fulfilment note (optional)" className="rounded border p-2 text-sm" />
           </div>}
           {a.award_status === 'APPROVED' && canApprove && <div className="mt-2 flex flex-wrap gap-2">
-            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardPayment({ award_id: a.id, amount: amounts[a.id] || '', currency_code: a.currency_code_snapshot || 'NGN', reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: paymentKeys[a.id] || crypto.randomUUID() }), 'Payment recorded.').then(ok => { if (ok) setPaymentKeys(v => ({...v,[a.id]:''})); else if (!paymentKeys[a.id]) setPaymentKeys(v => ({...v,[a.id]:crypto.randomUUID()})); }); }}>
+            <form onSubmit={e => {
+              e.preventDefault();
+              const key = paymentKeys[a.id] || crypto.randomUUID();
+              setPaymentKeys(v => ({...v,[a.id]:key}));
+              void act(() => recordAbhRewardPayment({
+                award_id: a.id, amount: amounts[a.id] || '',
+                currency_code: a.currency_code_snapshot || 'NGN',
+                reference_no: references[a.id] || undefined, note: notes[a.id] || undefined,
+                idempotency_key: key
+              }), 'Payment recorded.').then(ok => { if (ok) setPaymentKeys(v => ({...v,[a.id]:''})); });
+            }}>
               <input required type="number" min="0.01" step="0.01" value={amounts[a.id] || ''} onChange={e => setAmounts(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment amount" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record payment</button>
             </form>
-            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardDelivery({ award_id: a.id, quantity: Number(deliveries[a.id] || 1), reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: deliveryKeys[a.id] || crypto.randomUUID() }), 'Delivery recorded.').then(ok => { if (ok) setDeliveryKeys(v => ({...v,[a.id]:''})); else if (!deliveryKeys[a.id]) setDeliveryKeys(v => ({...v,[a.id]:crypto.randomUUID()})); }); }}>
+            <form onSubmit={e => {
+              e.preventDefault();
+              const key = deliveryKeys[a.id] || crypto.randomUUID();
+              setDeliveryKeys(v => ({...v,[a.id]:key}));
+              void act(() => recordAbhRewardDelivery({
+                award_id: a.id, quantity: Number(deliveries[a.id] || 1),
+                reference_no: references[a.id] || undefined, note: notes[a.id] || undefined,
+                idempotency_key: key
+              }), 'Delivery recorded.').then(ok => { if (ok) setDeliveryKeys(v => ({...v,[a.id]:''})); });
+            }}>
               <input required type="number" min="1" value={deliveries[a.id] || ''} onChange={e => setDeliveries(v => ({...v,[a.id]:e.target.value}))} placeholder="Delivered quantity" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record delivery</button>
             </form>
