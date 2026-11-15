@@ -52,17 +52,22 @@ Complete the reward lifecycle without changing the legacy FieldPulse reward rout
 Rule selection is deterministic: the first matching active rule ordered by `rule_key` ascending is recorded as the qualification's selected rule. All active rule versions tested are retained in the qualification snapshot.
 
 ### R3 — Gift catalogue, award assignment and approval
-- Create and maintain programme-specific gifts, stock and estimated values.
-- Assign gifts only to evaluated eligible agents.
-- Require `rewards.manage` to assign and `rewards.approve` to approve.
-- Enforce separation of duties between assigning and approving administrators.
-- Preserve gift title, description, quantity and value snapshots on each award.
+- [x] Create and maintain programme-specific gifts, stock, estimated values and active/inactive status, with audit records.
+- [x] Assign gifts only to evaluated eligible agents and preserve gift title, description, quantity and value snapshots.
+- [x] Require `rewards.manage` to create/update/assign and `rewards.approve` to approve.
+- [x] Enforce separation of duties between assigning and approving administrators.
+- [x] Check and decrement finite stock while locking the award and gift rows in one transaction.
+- [x] Notify the agent and audit assignment/approval in the same transaction.
+- [ ] Run CI and resolve all failures; staging runtime verification remains outstanding.
 
 ### R4 — Payment and delivery fulfilment
-- Record partial or complete payment and delivery as distinct append-only events.
-- Validate event quantity/amount, currency, reference and note.
-- Enforce remaining award quantity/value and idempotency under transaction locks.
-- Derive display status from award approval and recorded fulfilment totals; never overwrite history.
+- [x] Record payment and delivery as distinct append-only event types; neither implies the other.
+- [x] Validate positive payment amount/currency and delivery quantity, plus optional reference and note.
+- [x] Enforce award quantity/value ceilings and currency consistency under an award row lock.
+- [x] Add per-award UUID idempotency keys and reject key reuse with changed event data.
+- [x] Write audit and agent notification records in the same transaction as each event.
+- [x] Expose the immutable event history in the administrator reward interface.
+- [ ] Run CI and resolve all failures; staging runtime verification remains outstanding.
 
 ### R5 — Agent reward view and release gate
 - Show an agent only their own programmes, qualification outcomes and awards.
