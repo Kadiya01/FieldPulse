@@ -1233,7 +1233,7 @@ function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
   };
 
   const previewQualifications = async (programId: number) => {
-    setBusy(true); setError(''); setNotice(''); setEvaluationNotice('');
+    setBusy(true); setError(''); setNotice('');
     try {
       const result = await fetchAbhRewardQualificationPreview(programId);
       setQualificationPreview(result);
