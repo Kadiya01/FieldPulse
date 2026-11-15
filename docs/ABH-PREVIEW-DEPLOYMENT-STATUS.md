@@ -108,41 +108,38 @@ The following ABH slices are implemented on the feature branch and passed the ap
 
 ## 5. Latest CI evidence
 
-GitHub Actions run [#292](https://github.com/Kadiya01/FieldPulse/actions/runs/43630400560) passed on branch head `f06c1e80d22bfa431ba4d9c28486fcfe0706fab4`:
+GitHub Actions run [#339](https://github.com/Kadiya01/FieldPulse/actions/runs/43758247464) passed on branch commit `9a4d9d113918505ec6165965f68409aed0cc4ae5`:
 
-- Frontend lint passed.
-- **20 frontend test files; 175 tests passed.**
-- PHP syntax checks passed.
-- 5 preview bootstrap isolation checks passed.
-- 19 ABH migration-planning checks passed.
+- Frontend lint and unit/contract tests passed.
+- PHP application/API syntax checks passed.
+- Preview bootstrap path isolation passed.
+- ABH migration safety/planning checks passed.
 - Frontend production build and build-output verification passed.
-- MySQL 8.0 ABH schema compatibility: **136 checks passed**.
-- MariaDB 11.4 ABH schema compatibility: **136 checks passed**.
-- The separate **Deploy to ABH preview cPanel (FTPS)** job was **skipped** by the deployment safety guard.
+- MySQL 8.0 schema compatibility passed.
+- MariaDB 11.4 schema compatibility passed.
+- The cPanel deployment job was skipped because deployment is not enabled and release readiness is not signed off.
 
-The workflow uploaded a CI build artifact only. It did not deploy application files to cPanel.
+The workflow uploaded a deployment artifact only. It did not upload application files to cPanel, execute cPanel migrations, or configure Cron Jobs.
 
-## 6. Overall application readiness
+## 6. Current reward implementation status
+
+- R1: programme and versioned eligibility-rule management implemented.
+- R2: read-only qualification preview and explicit, idempotent evaluation from frozen leaderboard snapshots implemented.
+- R3: gift catalogue, gift assignment and independent award approval remain to be implemented.
+- R4: separate append-only payment and delivery workflows remain to be implemented.
+- R5: agent reward views, end-to-end tests and full release gate remain to be implemented.
+
+The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1 and R2 have passing CI evidence; this is not evidence of staging runtime verification.
+
+## 7. Deployment readiness and controls
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-The implemented registration, authentication, agent submissions, correction, administrator agent/device review, submission review, monthly target management, period finalisation and live administrator overview are not yet the complete ABH Monthly Enrollment System. No live preview application deployment, cPanel migration, or browser-to-staging-database end-to-end runtime test has been performed.
-
-Remaining work includes:
-
-- Reward-programme management, rule configuration, automatic qualification previews, award selection/approval, gift assignment, and separate payment/delivery recording and screens. The ABH reward schema exists, but these workflows still need their dedicated API and user-interface implementation.
-- Administrator account/role management beyond first-admin provisioning.
-- End-to-end checks for agent/admin leaderboard month selection and frozen prior-month snapshots.
-- End-to-end tests across both websites, then runtime checks against the isolated preview database.
-- Deployment readiness sign-off after preview configuration, one-time administrator bootstrap, staging migration status and the full application release gate are verified.
-
-Do not upload this intermediate build as the completed ABH system.
-
-## 7. Current deployment controls
+No live preview application deployment, cPanel database migration, or browser-to-staging-database end-to-end runtime test has been performed. The reward lifecycle is incomplete. Administrator account/role management beyond first-admin provisioning and remaining leaderboard month-selection/frozen-history end-to-end checks also require completion.
 
 Keep both controls unchanged:
 
 - `ABH_PREVIEW_DEPLOY_ENABLED=false`
 - `ABH_PREVIEW_DRY_RUN=true`
 
-Production remains untouched. Do not apply migrations or upload application files to cPanel until the remaining ABH pages, APIs, runtime tests and release sign-off are complete.
+Do not upload the application, apply cPanel migrations, or create/change Cron Jobs until R3–R5, administrator/leaderboard gaps, the complete release gate, and isolated staging runtime verification have passed. Production remains untouched.
