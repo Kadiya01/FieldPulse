@@ -1414,6 +1414,8 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
   const [giftQuantity, setGiftQuantity] = useState('1');
   const [amounts, setAmounts] = useState<Record<number, string>>({});
   const [deliveries, setDeliveries] = useState<Record<number, string>>({});
+  const [references, setReferences] = useState<Record<number, string>>({});
+  const [notes, setNotes] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -1505,12 +1507,16 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
           <p className="text-xs text-slate-500">Assigned by #{a.assigned_by_admin_id}; approved by {a.approved_by_admin_id ?? '—'}; paid {a.paid_amount}; delivered {a.delivered_quantity}/{a.gift_quantity}</p>
           {a.award_status === 'PENDING_APPROVAL' && canApprove && a.assigned_by_admin_id !== admin.id &&
             <button disabled={busy} onClick={() => void act(() => approveAbhRewardAward(a.id), 'Award approved.')} className="mt-2 rounded bg-blue-700 px-3 py-2 text-xs text-white">Approve award</button>}
+          {a.award_status === 'APPROVED' && canApprove && <div className="mb-2 grid gap-2 md:grid-cols-2">
+            <input value={references[a.id] || ''} onChange={e => setReferences(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment/delivery reference (optional)" className="rounded border p-2 text-sm" />
+            <input value={notes[a.id] || ''} onChange={e => setNotes(v => ({...v,[a.id]:e.target.value}))} placeholder="Fulfilment note (optional)" className="rounded border p-2 text-sm" />
+          </div>}
           {a.award_status === 'APPROVED' && canApprove && <div className="mt-2 flex flex-wrap gap-2">
-            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardPayment({ award_id: a.id, amount: amounts[a.id] || '', currency_code: a.currency_code_snapshot || 'NGN', idempotency_key: crypto.randomUUID() }), 'Payment recorded.'); }}>
+            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardPayment({ award_id: a.id, amount: amounts[a.id] || '', currency_code: a.currency_code_snapshot || 'NGN', reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: crypto.randomUUID() }), 'Payment recorded.'); }}>
               <input required type="number" min="0.01" step="0.01" value={amounts[a.id] || ''} onChange={e => setAmounts(v => ({...v,[a.id]:e.target.value}))} placeholder="Payment amount" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record payment</button>
             </form>
-            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardDelivery({ award_id: a.id, quantity: Number(deliveries[a.id] || 1), idempotency_key: crypto.randomUUID() }), 'Delivery recorded.'); }}>
+            <form onSubmit={e => { e.preventDefault(); void act(() => recordAbhRewardDelivery({ award_id: a.id, quantity: Number(deliveries[a.id] || 1), reference_no: references[a.id] || undefined, note: notes[a.id] || undefined, idempotency_key: crypto.randomUUID() }), 'Delivery recorded.'); }}>
               <input required type="number" min="1" value={deliveries[a.id] || ''} onChange={e => setDeliveries(v => ({...v,[a.id]:e.target.value}))} placeholder="Delivered quantity" className="mr-2 rounded border p-2" />
               <button disabled={busy} className="rounded border px-3 py-2 text-xs">Record delivery</button>
             </form>
