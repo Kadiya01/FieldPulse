@@ -199,7 +199,7 @@ final class AbhAdminRewardLifecycleRepository
                    FROM abh_reward_awards WHERE id = :id LIMIT 1 FOR UPDATE'
             );
             $stmt->execute(['id' => $awardId]);
-            $award = $stmt->fetch(\\PDO::FETCH_ASSOC);
+            $award = $stmt->fetch(\PDO::FETCH_ASSOC);
             if (!is_array($award)) return ['error' => 'award_not_found'];
             $totals = $pdo->prepare(
                 'SELECT COALESCE(SUM(CASE WHEN event_type = "PAYMENT" THEN amount ELSE 0 END), 0) AS paid_total,
@@ -207,7 +207,7 @@ final class AbhAdminRewardLifecycleRepository
                    FROM abh_reward_fulfilment_events WHERE award_id = :id'
             );
             $totals->execute(['id' => $awardId]);
-            $totalsRow = $totals->fetch(\\PDO::FETCH_ASSOC) ?: ['paid_total' => 0, 'delivered_total' => 0];
+            $totalsRow = $totals->fetch(\PDO::FETCH_ASSOC) ?: ['paid_total' => 0, 'delivered_total' => 0];
             $award['paid_total'] = $totalsRow['paid_total'];
             $award['delivered_total'] = $totalsRow['delivered_total'];
             $replay = $pdo->prepare('SELECT id, event_type, quantity, amount FROM abh_reward_fulfilment_events WHERE award_id = :award_id AND idempotency_key = :key LIMIT 1');
