@@ -24,7 +24,7 @@ describe('ABH reporting period finalisation', () => {
     expect(migration).toContain('DECIMAL(24,2)');
     expect(schemaTest).toContain("p.permission_key = 'periods.close'");
     expect(schemaTest).toContain("(int) $snapshotPrecision['NUMERIC_PRECISION'] === 24");
-    expect(schemaTest).toContain("'periods.close')");
+    expect(schemaTest).toContain("count($requiredPermissions) === 14");
   });
 
   it('protects period close with the dedicated admin permission', () => {
