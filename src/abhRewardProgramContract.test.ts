@@ -13,6 +13,8 @@ describe('ABH reward programme configuration contract', () => {
   const repository = read('../private_storage/app/Database/AbhAdminRewardProgramRepository.php');
   const qualificationRepository = read('../private_storage/app/Database/AbhAdminRewardQualificationRepository.php');
   const qualificationController = read('../private_storage/app/Domain/AbhAdminRewardQualificationController.php');
+  const lifecycleRepository = read('../private_storage/app/Database/AbhAdminRewardLifecycleRepository.php');
+  const lifecycleController = read('../private_storage/app/Domain/AbhAdminRewardLifecycleController.php');
   const client = read('api/client.ts');
   const adminUi = read('pages/AdminPortalPage.tsx');
 
@@ -124,4 +126,57 @@ describe('ABH reward programme configuration contract', () => {
     expect(client).toContain('fetchAbhRewardRules');
     expect(client).toContain('createAbhRewardRule');
   });
+
+  it('registers and protects the gift, award and fulfilment API', () => {
+    expect(kernel).toContain("'abh.admin.reward.lifecycle' =>");
+    expect(kernel).toContain("'abh.admin.reward.lifecycle' => 'admin'");
+    expect(lifecycleController).toContain("requirePermission('rewards.manage')");
+    expect(lifecycleController).toContain("requirePermission('rewards.approve')");
+    expect(lifecycleController).toContain("CREATE_GIFT");
+    expect(lifecycleController).toContain("ASSIGN_GIFT");
+    expect(lifecycleController).toContain("APPROVE_AWARD");
+  });
+
+  it('assigns only evaluated eligible agents and snapshots gift details', () => {
+    expect(lifecycleRepository).toContain("qualification_status'] !== 'ELIGIBLE'");
+    expect(lifecycleRepository).toContain("'PENDING_APPROVAL'");
+    expect(lifecycleRepository).toContain('gift_title_snapshot');
+    expect(lifecycleRepository).toContain('assigned_by_admin_id');
+    expect(lifecycleRepository).toContain('award_already_assigned');
+    expect(lifecycleRepository).toContain('insufficient_stock');
+  });
+
+  it('enforces independent award approval and decrements finite stock under a transaction', () => {
+    expect(lifecycleRepository).toContain('separation_of_duties');
+    expect(lifecycleRepository).toContain('assigned_by_admin_id');
+    expect(lifecycleRepository).toContain('available_quantity = available_quantity - :quantity');
+    expect(lifecycleRepository).toContain("'reward.award.approved'");
+  });
+
+  it('records payment and delivery as separate append-only idempotent events', () => {
+    expect(lifecycleRepository).toContain('abh_reward_fulfilment_events');
+    expect(lifecycleRepository).toContain('idempotency_key');
+    expect(lifecycleRepository).toContain("event_type = \"PAYMENT\"");
+    expect(lifecycleRepository).toContain("event_type = \"DELIVERY\"");
+    expect(lifecycleRepository).toContain('delivery_exceeds_award');
+    expect(lifecycleRepository).toContain('payment_exceeds_value');
+    expect(lifecycleRepository).toContain('idempotency_conflict');
+    expect(lifecycleRepository).toContain("'reward.fulfilment.' . strtolower($type)");
+  });
+
+  it('exposes typed lifecycle client methods and admin controls', () => {
+    expect(client).toContain('fetchAbhRewardLifecycle');
+    expect(client).toContain('createAbhRewardGift');
+    expect(client).toContain('assignAbhRewardGift');
+    expect(client).toContain('approveAbhRewardAward');
+    expect(client).toContain('recordAbhRewardPayment');
+    expect(client).toContain('recordAbhRewardDelivery');
+    expect(adminUi).toContain('Gift catalogue, awards and fulfilment');
+    expect(adminUi).toContain('Assign to eligible agent');
+    expect(adminUi).toContain('Approve award');
+    expect(adminUi).toContain('Record payment');
+    expect(adminUi).toContain('Record delivery');
+    expect(adminUi).toContain('Append-only fulfilment history');
+  });
+
 });
