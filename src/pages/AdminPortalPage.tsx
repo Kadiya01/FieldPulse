@@ -21,6 +21,12 @@ import {
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   fetchAbhAdminDashboard,
+  fetchAbhRewardPrograms,
+  createAbhRewardProgram,
+  fetchAbhRewardRules,
+  createAbhRewardRule,
+  type AbhRewardProgram,
+  type AbhRewardRule,
   restoreAdminSession,
   type AbhAdminDashboardData,
   type AdminAgentDetails,
@@ -1128,11 +1134,148 @@ function AdminOverview() {
   );
 }
 
+
+function AdminRewardProgramManagement({ admin }: { admin: SessionAdmin }) {
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [programs, setPrograms] = useState<AbhRewardProgram[]>([]);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [rules, setRules] = useState<AbhRewardRule[]>([]);
+  const [code, setCode] = useState('');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [ruleKey, setRuleKey] = useState('');
+  const [rankFrom, setRankFrom] = useState('');
+  const [rankTo, setRankTo] = useState('');
+  const [minimum, setMinimum] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const canManage = admin.permissions.includes('rewards.manage');
+  const loadPrograms = useCallback(async () => {
+    if (!canManage) return;
+    try {
+      const result = await fetchAbhRewardPrograms(month);
+      setPrograms(result);
+      if (selected !== null && !result.some(item => item.id === selected)) {
+        setSelected(null);
+        setRules([]);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Reward programmes could not be loaded.');
+    }
+  }, [canManage, month, selected]);
+
+  const loadRules = useCallback(async (programId: number) => {
+    try {
+      setRules(await fetchAbhRewardRules(programId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Reward rules could not be loaded.');
+    }
+  }, []);
+
+  useEffect(() => { void loadPrograms(); }, [loadPrograms]);
+  useEffect(() => { if (selected !== null) void loadRules(selected); }, [selected, loadRules]);
+
+  const createProgram = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await createAbhRewardProgram({
+        period_key: month, program_code: code.trim(), name: name.trim(),
+        ...(description.trim() ? { description: description.trim() } : {})
+      });
+      setCode(''); setName(''); setDescription('');
+      setNotice(`Programme ${result.program_code} created as DRAFT.`);
+      await loadPrograms();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Programme could not be created.');
+    } finally { setBusy(false); }
+  };
+
+  const addRule = async (event: FormEvent) => {
+    event.preventDefault();
+    if (selected === null) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await createAbhRewardRule({
+        program_id: selected, rule_key: ruleKey.trim(),
+        ...(rankFrom ? { rank_from: Number(rankFrom) } : {}),
+        ...(rankTo ? { rank_to: Number(rankTo) } : {}),
+        ...(minimum ? { minimum_approved_quantity: Number(minimum) } : {})
+      });
+      setRuleKey(''); setRankFrom(''); setRankTo(''); setMinimum('');
+      setNotice('A new immutable rule version was created.');
+      await loadRules(selected); await loadPrograms();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Rule version could not be created.');
+    } finally { setBusy(false); }
+  };
+
+  if (!canManage) return <main className="mx-auto max-w-5xl p-6 text-sm text-amber-900">Your administrator role does not include reward programme management.</main>;
+
+  return (
+    <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-2">
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h1 className="text-2xl font-bold text-slate-900">Reward programmes</h1><p className="text-sm text-slate-600">Configure monthly reward programmes and eligibility rules.</p></div>
+          <input aria-label="Reporting month" type="month" value={month} onChange={event => setMonth(event.target.value)} className="rounded-xl border border-slate-300 bg-white px-3 py-2" />
+        </div>
+        <form onSubmit={event => void createProgram(event)} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="font-semibold text-slate-900">Create programme</h2>
+          <input required minLength={2} maxLength={48} value={code} onChange={event => setCode(event.target.value)} placeholder="Programme code e.g. NOV-AGENT-REWARDS" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <input required minLength={2} maxLength={160} value={name} onChange={event => setName(event.target.value)} placeholder="Programme name" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <textarea maxLength={2000} value={description} onChange={event => setDescription(event.target.value)} placeholder="Description (optional)" rows={2} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <button disabled={busy || !month} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Create draft programme</button>
+        </form>
+        <div className="space-y-2">
+          {programs.length === 0 && <p className="rounded-xl bg-white p-4 text-sm text-slate-500">No programmes configured for this month.</p>}
+          {programs.map(program => (
+            <button key={program.id} type="button" onClick={() => setSelected(program.id)} className={selected === program.id ? 'w-full rounded-xl border-2 border-blue-600 bg-white p-4 text-left' : 'w-full rounded-xl border border-slate-200 bg-white p-4 text-left'}>
+              <div className="flex justify-between gap-3"><strong>{program.name}</strong><span className="text-xs font-semibold text-slate-500">{program.status}</span></div>
+              <p className="mt-1 text-xs text-slate-500">{program.program_code} · {program.active_rule_count} active rule(s)</p>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="space-y-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-slate-900">Eligibility rule versions</h2>
+          {selected === null ? <p className="mt-3 text-sm text-slate-500">Select a programme to view its rules.</p> : (
+            <>
+              <form onSubmit={event => void addRule(event)} className="mt-4 space-y-3 border-b border-slate-200 pb-5">
+                <p className="text-sm text-slate-600">Adding a rule with an existing key creates a new version; earlier versions remain in the record.</p>
+                <input required minLength={2} maxLength={64} value={ruleKey} onChange={event => setRuleKey(event.target.value)} placeholder="Rule key e.g. TOP_THREE" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <div className="grid grid-cols-3 gap-2">
+                  <input type="number" min="1" value={rankFrom} onChange={event => setRankFrom(event.target.value)} placeholder="Rank from" className="min-w-0 rounded-lg border border-slate-300 px-2 py-2" />
+                  <input type="number" min="1" value={rankTo} onChange={event => setRankTo(event.target.value)} placeholder="Rank to" className="min-w-0 rounded-lg border border-slate-300 px-2 py-2" />
+                  <input type="number" min="1" value={minimum} onChange={event => setMinimum(event.target.value)} placeholder="Min. approved" className="min-w-0 rounded-lg border border-slate-300 px-2 py-2" />
+                </div>
+                <button disabled={busy || (!rankFrom && !rankTo && !minimum)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Add rule version</button>
+              </form>
+              <div className="mt-4 space-y-2">
+                {rules.map(rule => (
+                  <div key={rule.id} className="rounded-lg border border-slate-200 p-3">
+                    <div className="flex justify-between gap-2"><strong className="text-sm">{rule.rule_key} · v{rule.rule_version}</strong><span className="text-xs text-slate-500">{Number(rule.is_active) === 1 ? 'Active' : 'Historical'}</span></div>
+                    <p className="mt-1 text-xs text-slate-600">Rank {rule.rank_from ?? '—'} to {rule.rank_to ?? '—'} · Minimum approved: {rule.minimum_approved_quantity ?? '—'}</p>
+                  </div>
+                ))}
+                {rules.length === 0 && <p className="text-sm text-slate-500">No rules created yet.</p>}
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+      {(error || notice) && <div role={error ? 'alert' : 'status'} className={error ? 'lg:col-span-2 rounded-xl bg-red-50 p-3 text-sm text-red-800' : 'lg:col-span-2 rounded-xl bg-blue-50 p-3 text-sm text-blue-800'}>{error || notice}</div>}
+    </main>
+  );
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
   const canViewOverview = [
     'agents.read', 'submissions.read', 'targets.manage', 'periods.close', 'rewards.manage', 'rewards.approve'
   ].some(permission => admin.permissions.includes(permission));
-  const [activeSection, setActiveSection] = useState<'overview' | 'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications'>(() =>
+  const [activeSection, setActiveSection] = useState<'overview' | 'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications' | 'rewards'>(() =>
     canViewOverview
       ? 'overview'
       : 'notifications'
@@ -1279,6 +1422,12 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Leaderboard
             </button>
           )}
+          {admin.permissions.includes('rewards.manage') && (
+            <button type="button" onClick={() => setActiveSection('rewards')}
+              className={activeSection === 'rewards' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              Rewards
+            </button>
+          )}
           {(admin.permissions.includes('targets.manage') || admin.permissions.includes('periods.close')) && (
             <button type="button" onClick={() => setActiveSection('targets')}
               className={activeSection === 'targets' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
@@ -1298,6 +1447,8 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
         <AdminLeaderboardView />
       ) : activeSection === 'targets' ? (
         <AdminTargetManagement admin={admin} />
+      ) : activeSection === 'rewards' ? (
+        <AdminRewardProgramManagement admin={admin} />
       ) : (
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(350px,0.9fr)]">
         <section className="min-w-0">
