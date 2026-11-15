@@ -33,6 +33,21 @@ final class AbhAdminRewardProgramsController implements ActionInterface
 
         $admin->requirePermission('rewards.manage');
         $body = $request->json();
+        if (($body['action'] ?? null) === 'ACTIVATE') {
+            Validator::assertNoUnknownKeys($body, ['action', 'program_id'], 'reward programme activation');
+            $programId = Validator::intRange($body['program_id'] ?? null, 1, 2147483647, 'program_id');
+            $result = AbhAdminRewardProgramRepository::activateProgram($admin->id(), $programId);
+            if (($result['error'] ?? null) === 'program_not_found') {
+                throw new ApiException(404, ErrorCode::NOT_FOUND, 'Reward programme not found.');
+            }
+            if (($result['error'] ?? null) === 'program_locked') {
+                throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'Only a draft programme in an open reporting period can be activated.');
+            }
+            if (($result['error'] ?? null) === 'rules_required') {
+                throw new ApiException(409, ErrorCode::STATE_CONFLICT, 'Add at least one active eligibility rule before activating this programme.');
+            }
+            return Response::json(['data' => $result]);
+        }
         Validator::assertNoUnknownKeys($body, ['period_key', 'program_code', 'name', 'description'], 'reward programme');
 
         $month = substr(Validator::periodMonth($body['period_key'] ?? null, 'period_key', true), 0, 7);
