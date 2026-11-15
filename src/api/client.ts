@@ -1887,6 +1887,28 @@ export interface SessionAdmin {
   permissions: string[];
 }
 
+export interface AbhAdminUserItem {
+  id: number;
+  full_name: string;
+  email: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  last_login_at: string | null;
+  created_at: string;
+  role_key: string | null;
+  role_name: string | null;
+}
+export interface AbhAdminRoleItem {
+  id: number;
+  role_key: string;
+  role_name: string;
+  description: string | null;
+  permissions: string[];
+}
+export interface AbhAdminUsersData {
+  users: AbhAdminUserItem[];
+  roles: AbhAdminRoleItem[];
+}
+
 export interface AbhAdminDashboardData {
   period: {
     id: number;
@@ -2635,6 +2657,33 @@ export async function fetchAbhAdminDashboard(month: string): Promise<AbhAdminDas
   }
   const envelope = await response.json() as { data: AbhAdminDashboardData };
   return envelope.data;
+}
+
+export async function fetchAbhAdminUsers(): Promise<AbhAdminUsersData> {
+  const response = await adminAuthenticatedFetch('/abh/admin/users.php');
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhAdminUsersData };
+  return envelope.data;
+}
+
+export async function createAbhAdminUser(input: {
+  full_name: string; email: string; password: string; role_key: string;
+}): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/users.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'CREATE', ...input })
+  });
+  if (!response.ok) throw await toApiError(response);
+}
+
+export async function updateAbhAdminUser(input: {
+  admin_id: number; status: 'ACTIVE' | 'SUSPENDED'; role_key: string;
+}): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/users.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'UPDATE', ...input })
+  });
+  if (!response.ok) throw await toApiError(response);
 }
 
 export async function decideAbhAdminAgent(
