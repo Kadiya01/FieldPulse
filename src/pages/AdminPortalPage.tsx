@@ -21,6 +21,7 @@ import {
   fetchAbhAdminAgentDetails,
   fetchAbhAdminAgents,
   fetchAbhAdminDashboard,
+  fetchAbhAdminUsers, createAbhAdminUser, updateAbhAdminUser,
   fetchAbhRewardPrograms,
   createAbhRewardProgram,
   activateAbhRewardProgram,
@@ -44,7 +45,9 @@ import {
   type AbhAdminTargetData,
   type AbhLeaderboardData,
   type AbhNotificationItem,
-  type SessionAdmin
+  type SessionAdmin,
+  type AbhAdminUserItem,
+  type AbhAdminRoleItem
 } from '../api/client';
 
 type AgentStatus = AdminAgentItem['status'] | 'ALL';
@@ -1588,11 +1591,105 @@ function AdminRewardLifecycleManagement({ admin }: { admin: SessionAdmin }) {
   </section>;
 }
 
+function AdminUsersManagement({ admin }: { admin: SessionAdmin }) {
+  const [data, setData] = useState<{ users: AbhAdminUserItem[]; roles: AbhAdminRoleItem[] } | null>(null);
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [roleKey, setRoleKey] = useState('');
+  const [drafts, setDrafts] = useState<Record<number, { status: 'ACTIVE' | 'SUSPENDED'; role_key: string }>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchAbhAdminUsers();
+      setData(result);
+      setRoleKey(current => current || result.roles.find(role => role.role_key !== 'SUPER_ADMIN')?.role_key || result.roles[0]?.role_key || '');
+      setDrafts(Object.fromEntries(result.users.map(user => [user.id, {
+        status: user.status, role_key: user.role_key || ''
+      }])));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Administrator accounts could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [load]);
+
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true); setError(''); setNotice('');
+    try {
+      await createAbhAdminUser({ full_name: fullName.trim(), email: email.trim(), password, role_key: roleKey });
+      setFullName(''); setEmail(''); setPassword('');
+      setNotice('Administrator account created. Share the temporary sign-in details securely.');
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Administrator account could not be created.');
+    } finally { setSaving(false); }
+  };
+
+  const save = async (user: AbhAdminUserItem) => {
+    const draft = drafts[user.id];
+    if (!draft?.role_key) return;
+    setSaving(true); setError(''); setNotice('');
+    try {
+      await updateAbhAdminUser({ admin_id: user.id, status: draft.status, role_key: draft.role_key });
+      setNotice('Administrator access and role updated. Their existing sessions have been revoked.');
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Administrator changes could not be saved.');
+    } finally { setSaving(false); }
+  };
+
+  if (!admin.permissions.includes('admin.users.manage')) {
+    return <div className="mx-auto max-w-7xl p-6"><p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Your role cannot manage administrator accounts.</p></div>;
+  }
+
+  return <div className="mx-auto max-w-7xl space-y-6 px-4 py-6">
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <div><h1 className="text-2xl font-bold text-slate-900">Administrator accounts</h1>
+        <p className="mt-1 text-sm text-slate-600">Create staff accounts, assign one system role and suspend access when required.</p></div>
+      <button type="button" onClick={() => void load()} disabled={loading} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Refresh</button>
+    </header>
+    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+    {notice && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
+    <form onSubmit={create} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
+      <h2 className="md:col-span-2 text-lg font-bold text-slate-900">Create administrator</h2>
+      <label className="text-sm font-semibold text-slate-700">Full name<input required minLength={2} maxLength={160} value={fullName} onChange={e => setFullName(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" /></label>
+      <label className="text-sm font-semibold text-slate-700">Email<input required type="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" /></label>
+      <label className="text-sm font-semibold text-slate-700">Initial password<input required type="password" minLength={8} maxLength={128} value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" /><span className="mt-1 block text-xs font-normal text-slate-500">Use at least 8 characters, including a letter and a number.</span></label>
+      <label className="text-sm font-semibold text-slate-700">Role<select required value={roleKey} onChange={e => setRoleKey(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-normal">{(data?.roles ?? []).map(role => <option key={role.id} value={role.role_key}>{role.role_name}</option>)}</select></label>
+      <div className="md:col-span-2"><button type="submit" disabled={saving || !roleKey} className="rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Create account'}</button></div>
+    </form>
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 p-5"><h2 className="text-lg font-bold text-slate-900">Staff access</h2><p className="text-sm text-slate-500">Changing a role or status revokes all existing sessions for that account.</p></div>
+      {loading ? <p className="p-5 text-sm text-slate-500">Loading administrator accounts…</p> : !data?.users.length ? <p className="p-5 text-sm text-slate-500">No administrator accounts found.</p> :
+        <div className="divide-y divide-slate-100">{data.users.map(user => {
+          const draft = drafts[user.id] || { status: user.status, role_key: user.role_key || '' };
+          return <div key={user.id} className="grid gap-3 p-5 lg:grid-cols-[minmax(0,1fr)_180px_160px_auto] lg:items-center">
+            <div><p className="font-semibold text-slate-900">{user.full_name}</p><p className="text-sm text-slate-500">{user.email}</p><p className="mt-1 text-xs text-slate-400">Last sign-in: {user.last_login_at ? new Date(user.last_login_at).toLocaleString() : 'Never'}</p></div>
+            <label className="text-xs font-semibold text-slate-600">Role<select value={draft.role_key} onChange={e => setDrafts(current => ({ ...current, [user.id]: { ...draft, role_key: e.target.value } }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-2 text-sm">{data.roles.map(role => <option key={role.id} value={role.role_key}>{role.role_name}</option>)}</select></label>
+            <label className="text-xs font-semibold text-slate-600">Status<select value={draft.status} onChange={e => setDrafts(current => ({ ...current, [user.id]: { ...draft, status: e.target.value as 'ACTIVE' | 'SUSPENDED' } }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-2 text-sm"><option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option></select></label>
+            <button type="button" disabled={saving || !draft.role_key || (draft.role_key === user.role_key && draft.status === user.status)} onClick={() => void save(user)} className="rounded-lg border border-blue-300 px-3 py-2 text-sm font-semibold text-blue-700 disabled:opacity-40">Save changes</button>
+          </div>;
+        })}</div>}
+    </section>
+    <section className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900"><strong>Security:</strong> Only Super Administrators can manage staff access. The system prevents removing the final active Super Administrator and prevents an administrator from locking themselves out.</section>
+  </div>;
+}
+
 function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () => void }) {
   const canViewOverview = [
     'agents.read', 'submissions.read', 'targets.manage', 'periods.close', 'rewards.manage', 'rewards.approve'
   ].some(permission => admin.permissions.includes(permission));
-  const [activeSection, setActiveSection] = useState<'overview' | 'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications' | 'rewards'>(() =>
+  const [activeSection, setActiveSection] = useState<'overview' | 'agents' | 'submissions' | 'targets' | 'leaderboard' | 'notifications' | 'rewards' | 'users'>(() =>
     canViewOverview
       ? 'overview'
       : 'notifications'
@@ -1745,6 +1842,12 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
               Rewards
             </button>
           )}
+          {admin.permissions.includes('admin.users.manage') && (
+            <button type="button" onClick={() => setActiveSection('users')}
+              className={activeSection === 'users' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
+              Administrator accounts
+            </button>
+          )}
           {(admin.permissions.includes('targets.manage') || admin.permissions.includes('periods.close')) && (
             <button type="button" onClick={() => setActiveSection('targets')}
               className={activeSection === 'targets' ? 'rounded-xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white' : 'rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700'}>
@@ -1764,6 +1867,8 @@ function AdminHome({ admin, onSignOut }: { admin: SessionAdmin; onSignOut: () =>
         <AdminLeaderboardView />
       ) : activeSection === 'targets' ? (
         <AdminTargetManagement admin={admin} />
+      ) : activeSection === 'users' ? (
+        <AdminUsersManagement admin={admin} />
       ) : activeSection === 'rewards' ? (
         <>{admin.permissions.includes('rewards.manage') && <AdminRewardProgramManagement admin={admin} />}<AdminRewardLifecycleManagement admin={admin} /></>
       ) : (
