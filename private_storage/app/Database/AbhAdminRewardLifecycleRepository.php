@@ -238,6 +238,7 @@ final class AbhAdminRewardLifecycleRepository
     public static function recordEvent(int $adminId, int $awardId, string $type, ?int $quantity,
         ?string $amount, ?string $currency, ?string $reference, ?string $note, string $idempotencyKey): array
     {
+        $amount = $amount === null ? null : self::canonicalAmount($amount);
         return Connection::transaction(static function (\PDO $pdo) use (
             $adminId, $awardId, $type, $quantity, $amount, $currency, $reference, $note, $idempotencyKey
         ): array {
@@ -309,6 +310,13 @@ final class AbhAdminRewardLifecycleRepository
         });
     }
 
+    private static function canonicalAmount(string $amount): string
+    {
+        [$whole, $fraction] = array_pad(explode('.', $amount, 2), 2, '');
+        $whole = ltrim($whole, '0');
+        if ($whole === '') $whole = '0';
+        return $whole . '.' . str_pad(substr($fraction, 0, 2), 2, '0');
+    }
     private static function minorUnits(string $amount): int
     {
         [$whole, $fraction] = array_pad(explode('.', $amount, 2), 2, '');
