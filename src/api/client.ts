@@ -2354,6 +2354,24 @@ export async function createAbhRewardProgram(input: {
   return envelope.data;
 }
 
+export async function updateAbhRewardProgram(input: {
+  program_id: number;
+  program_code: string;
+  name: string;
+  description?: string;
+}): Promise<{ id: number; program_code: string; name: string; description: string | null; status: 'DRAFT' }> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'UPDATE', ...input })
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: {
+    id: number; program_code: string; name: string; description: string | null; status: 'DRAFT'
+  } };
+  return envelope.data;
+}
+
 export async function activateAbhRewardProgram(programId: number): Promise<{ id: number; status: 'ACTIVE' }> {
   const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
     method: 'POST',
