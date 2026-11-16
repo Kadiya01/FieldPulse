@@ -111,7 +111,7 @@ The following ABH slices are implemented on the feature branch and passed the ap
 
 ## 5. Latest CI evidence
 
-GitHub Actions run [#43777815456](https://github.com/Kadiya01/FieldPulse/actions/runs/43777815456) passed on commit `72e5fc8e49a71c46f37ee882813c24a2bdcab3ac`:
+GitHub Actions run [#43778136365](https://github.com/Kadiya01/FieldPulse/actions/runs/43778136365) passed on commit `df1aa630cbd2c67da44a7b88034fc53fdb040b7f`:
 
 - Frontend lint passed; all 198 frontend/unit/contract tests passed.
 - PHP application/API syntax checks passed.
@@ -130,7 +130,7 @@ The workflow uploaded a deployment artifact only. It did not upload application 
 - R2: read-only qualification preview and explicit, idempotent evaluation from frozen leaderboard snapshots implemented.
 - R3: gift catalogue create/update/deactivate, eligible-agent gift assignment, independent award approval, finite-stock locking, snapshots, notifications and audit events are implemented and CI-verified.
 - R4: separate append-only payment and delivery events, value/quantity/currency checks, UUID idempotency (including stable client retries and decimal normalization), notifications, audit events, derived fulfilment statuses and administrator history UI are implemented and CI-verified.
-- R5: the agent-scoped reward API and portal, separate payment/delivery progress, administrator account/role management, and month-filtered frozen leaderboard reads are implemented. PHP repository integration tests and schema checks passed 158 checks on both MySQL 8.0 and MariaDB 11.4 in run #43777815456. The remaining gate is isolated cPanel preview deployment and real browser-to-preview-database runtime verification.
+- R5: the agent-scoped reward API and portal, separate payment/delivery progress, administrator account/role management, and month-filtered frozen leaderboard reads are implemented. PHP repository integration tests and schema checks passed 158 checks on both MySQL 8.0 and MariaDB 11.4 in run #43778136365. The remaining gate is isolated cPanel preview deployment and real browser-to-preview-database runtime verification.
 
 The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1–R5 have passing code-level and disposable-database CI evidence; this is not evidence of staging runtime verification.
 
