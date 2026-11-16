@@ -130,9 +130,9 @@ The workflow uploaded a deployment artifact only. It did not upload application 
 - R2: read-only qualification preview and explicit, idempotent evaluation from frozen leaderboard snapshots implemented.
 - R3: gift catalogue create/update/deactivate, eligible-agent gift assignment, independent award approval, finite-stock locking, snapshots, notifications and audit events are implemented and CI-verified.
 - R4: separate append-only payment and delivery events, value/quantity/currency checks, UUID idempotency (including stable client retries and decimal normalization), notifications, audit events, derived fulfilment statuses and administrator history UI are implemented and CI-verified.
-- R5: the agent-scoped reward API and portal, separate payment/delivery progress, and release-gate contract coverage are implemented. CI verified frontend/PHP checks and 141 disposable schema checks on each supported database engine, including a two-connection InnoDB stock contention test. True concurrent multi-connection stock-allocation/application lifecycle integration tests and isolated staging runtime verification remain outstanding.
+- R5: the agent-scoped reward API and portal, separate payment/delivery progress, administrator account/role management, and month-filtered frozen leaderboard reads are implemented. PHP repository integration tests and schema checks passed 158 checks on both MySQL 8.0 and MariaDB 11.4 in run #43777815456. The remaining gate is isolated cPanel preview deployment and real browser-to-preview-database runtime verification.
 
-The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1–R4 have passing CI evidence; this is not evidence of staging runtime verification.
+The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION-PLAN.md`. R1–R5 have passing code-level and disposable-database CI evidence; this is not evidence of staging runtime verification.
 
 ## 7. Deployment readiness and controls
 
