@@ -94,14 +94,17 @@ final class AbhAdminUserRepository
                 && (string) $before['status'] === 'ACTIVE';
             $willBeSuper = $roleKey === 'SUPER_ADMIN' && $status === 'ACTIVE';
             if ($wasSuper && !$willBeSuper) {
-                $count = (int) $pdo->query(
-                    'SELECT COUNT(DISTINCT a.id)
+                // Lock every active Super Administrator before counting. This serializes
+                // concurrent demotions so two operators cannot both remove the final pair.
+                $activeSuperAdmins = $pdo->query(
+                    'SELECT a.id
                        FROM abh_admin_users a
                        INNER JOIN abh_admin_user_roles ur ON ur.admin_user_id = a.id
                        INNER JOIN abh_admin_roles r ON r.id = ur.role_id
-                      WHERE a.status = "ACTIVE" AND r.role_key = "SUPER_ADMIN"'
-                )->fetchColumn();
-                if ($count <= 1) return ['error' => 'last_super_admin'];
+                      WHERE a.status = "ACTIVE" AND r.role_key = "SUPER_ADMIN"
+                      ORDER BY a.id ASC FOR UPDATE'
+                )->fetchAll(\PDO::FETCH_COLUMN);
+                if (count($activeSuperAdmins) <= 1) return ['error' => 'last_super_admin'];
             }
             if ($targetId === $actorId && !$willBeSuper) return ['error' => 'self_lockout'];
 
