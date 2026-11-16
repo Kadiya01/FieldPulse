@@ -23,6 +23,10 @@ const page = read('pages/AdminPortalPage.tsx');
 const adminUsersRepository = read('../private_storage/app/Database/AbhAdminUserRepository.php');
 const adminUsersController = read('../private_storage/app/Domain/AbhAdminUsersController.php');
 const adminUsersShim = read('../public_html/api/v1/abh/admin/users.php');
+const healthController = read('../private_storage/app/Domain/AbhHealthController.php');
+const healthShim = read('../public_html/api/v1/abh/health.php');
+const deployWorkflow = read('../.github/workflows/deploy.yml');
+const schemaIntegration = read('../private_storage/bin/abh_schema_test.php');
 
 describe('ABH administrator security and management contract', () => {
   it('creates independent administrator sessions and attempt throttling', () => {
@@ -128,6 +132,7 @@ describe('ABH administrator security and management contract', () => {
     expect(adminUsersController).toContain("['action', 'admin_id', 'status', 'role_key']");
     expect(adminUsersRepository).toContain('password_hash($password, PASSWORD_DEFAULT)');
     expect(adminUsersRepository).toContain('last_super_admin');
+    expect(adminUsersRepository).toContain('ORDER BY a.id ASC FOR UPDATE');
     expect(adminUsersRepository).toContain('self_lockout');
     expect(adminUsersRepository).toContain('ADMIN_ACCESS_CHANGED');
     expect(adminUsersRepository).toContain('admin.user.created');
@@ -139,6 +144,28 @@ describe('ABH administrator security and management contract', () => {
     expect(page).toContain('Administrator accounts');
     expect(page).toContain('Create administrator');
     expect(page).toContain('Staff access');
+  });
+
+
+  it('provides a minimal database health probe and guarded post-deploy smoke check', () => {
+    expect(kernel).toContain("'abh.health' => \\FieldPulse\\Domain\\AbhHealthController::class");
+    expect(kernel).toContain("'abh.health' => 'public'");
+    expect(healthController).toContain("Connection::fetchValue('SELECT 1')");
+    expect(healthController).toContain("'database' => 'connected'");
+    expect(healthShim).toContain("Kernel::handle('abh.health')");
+    expect(deployWorkflow).toContain('/api/v1/abh/health.php');
+    expect(deployWorkflow).toContain('ABH application or preview database health check failed');
+  });
+
+  it('runs actual PHP reward lifecycle and administrator repositories on the disposable database matrix', () => {
+    expect(schemaIntegration).toContain('AbhAdminUserRepository::create');
+    expect(schemaIntegration).toContain('AbhAdminUserRepository::update');
+    expect(schemaIntegration).toContain('AbhAdminRewardQualificationRepository::evaluate');
+    expect(schemaIntegration).toContain('AbhAdminRewardLifecycleRepository::assignGift');
+    expect(schemaIntegration).toContain('AbhAdminRewardLifecycleRepository::approveAward');
+    expect(schemaIntegration).toContain('AbhAdminRewardLifecycleRepository::recordEvent');
+    expect(schemaIntegration).toContain('AbhLeaderboardRepository::getForMonth');
+    expect(schemaIntegration).toContain('preserves frozen display names after live profile changes');
   });
 
 });

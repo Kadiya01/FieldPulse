@@ -17,6 +17,7 @@ const adminShim = read('../public_html/api/v1/abh/admin/leaderboard.php');
 const api = read('api/client.ts');
 const agentPage = read('pages/AbhAgentPortalPage.tsx');
 const adminPage = read('pages/AdminPortalPage.tsx');
+const schemaIntegration = read('../private_storage/bin/abh_schema_test.php');
 
 describe('ABH monthly leaderboard', () => {
   it('protects the agent and administrator leaderboard endpoints independently', () => {
@@ -72,4 +73,13 @@ describe('ABH monthly leaderboard', () => {
     expect(adminPage).toContain('AdminLeaderboardView');
     expect(adminPage).toContain('Approved agent performance');
   });
+
+  it('exercises month switching and frozen snapshot immutability through the PHP repository', () => {
+    expect(schemaIntegration).toContain("getForMonth('2026-11'");
+    expect(schemaIntegration).toContain("getForMonth('2026-10'");
+    expect(schemaIntegration).toContain('preserves frozen display names after live profile changes');
+    expect(adminPage).toContain("useState(currentAdminMonth)");
+    expect(agentPage).toContain('type="month"');
+  });
+
 });

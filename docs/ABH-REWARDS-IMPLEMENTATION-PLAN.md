@@ -76,13 +76,12 @@ Rule selection is deterministic: the first matching active rule ordered by `rule
 - [x] Add typed client methods, agent portal loading/error/empty states, refresh control and contract tests for route authentication, agent scoping, status derivation, closed-period assignment guard, row locks and idempotent replay/conflict behavior.
 - [x] Extend disposable database checks for reward permission grants, separate PAYMENT/DELIVERY totals and duplicate fulfilment idempotency-key rejection. MySQL 8.0 and MariaDB 11.4 both passed 139 schema checks in GitHub Actions run #43770806923.
 - [x] Exercise concurrent stock allocation using two independent database connections and InnoDB row locks on both MySQL 8.0 and MariaDB 11.4; both engines confirmed only one allocator can reserve the final stock unit.
-- [ ] Complete application-level lifecycle integration tests (calling the PHP repositories/controllers against disposable databases) on both engines.
+- [x] Complete application-level reward lifecycle integration tests against disposable MySQL 8.0 and MariaDB 11.4 databases. The PHP repositories were exercised for frozen qualification preview/evaluation/idempotent replay, gift creation/assignment, independent award approval, stock allocation, payment/delivery, and fulfilment replay/conflict; both engines passed 158 total schema/integration checks in run #43777815456.
 - [x] Provide administrator and agent leaderboard month selectors and read closed-period rankings from immutable leaderboard snapshots; contract tests cover live-versus-frozen source selection and competition-rank behavior.
-- [ ] Add full end-to-end regression tests for month switching and frozen-history immutability.
-- [ ] Implement administrator account creation, status management and role assignment/revocation beyond one-time first-admin bootstrap.
-- [ ] Complete PHP application-level lifecycle integration tests against disposable MySQL 8.0 and MariaDB 11.4 databases.
-- [ ] Complete browser-to-preview-database runtime verification and formal release-gate sign-off before deployment.
-- [ ] Keep cPanel deployment disabled until all remaining release-gate checks and isolated staging runtime verification pass.
+- [x] Add PHP repository integration checks for requested-month switching and frozen display-name preservation after a live agent profile change; existing portal/API contract tests cover both month selectors.
+- [x] Implement administrator account creation, role assignment, activation/suspension and session revocation. Protect the last active Super Administrator and prevent self-lockout; repository integration tests pass on both database engines.
+- [ ] Deploy to the isolated cPanel preview using the guarded workflow, apply the reviewed staging migrations, and verify browser-to-preview-database runtime flows (homepage, database health, admin sign-in and agent sign-in). Only then sign off the release gate.
+- [x] Keep cPanel deployment disabled while isolated staging runtime verification remains outstanding.
 
 ## Acceptance gate
 

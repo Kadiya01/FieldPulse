@@ -1,6 +1,6 @@
 # ABH Preview Deployment Status
 
-Last verified: 2026-11-15  
+Last verified: 2026-11-16  
 Repository: `Kadiya01/FieldPulse`  
 Branch: `feature/abh-monthly-enrollment`  
 Preview URL: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/
@@ -71,11 +71,14 @@ The following ABH slices are implemented on the feature branch and passed the ap
 - Administrator sign-in and refresh use separate `abh_admin_*` tables, cookies, in-memory tokens, Web Locks and BroadcastChannel. Agent credentials and legacy FieldPulse admin credentials are not accepted.
 - The first SUPER_ADMIN can be created only when `ABH_ADMIN_BOOTSTRAP_KEY` is configured in the private `.env` file. The database guard permits only one first-admin creation, including concurrent requests. Remove the environment key after successful setup; the guard also blocks later bootstrap attempts.
 - There is no public administrator self-registration.
+- Super Administrators have a dedicated account-management screen and permission-gated API to create staff accounts, assign one system role, and activate/suspend accounts. Role or status changes revoke existing administrator sessions and are audited.
+- The repository protects the last active Super Administrator and blocks self-lockout; the last-Super-Administrator check locks active Super Administrator rows to serialize concurrent demotions.
 - The independent `/admin` portal provides administrator sign-in, first-admin setup, role-aware agent application search and review, and agent/device details.
 - Agent approve/reject/suspend/reactivate decisions require the relevant permission and valid state transition. Rejection and suspension require a reason.
 - Device approval and revocation are independent of the agent account decision. Device approval requires the agent account to be ACTIVE. Revoking a device or suspending/rejecting an agent revokes active agent sessions.
 - Agent/device status changes, corresponding notifications and audit entries are committed together in database transactions. Administrator roles and permissions are read from the ABH database on every private admin request.
 - The administrator overview uses the selected reporting month and reads agent counts, submission states, approved enrollment totals, organisation and agent targets, top agents, reward programme/qualification/award states, and payment/delivery event counts from ABH tables. Sections are omitted unless the administrator has the matching read/management permission.
+- A minimal public `/api/v1/abh/health.php` probe checks application database connectivity without exposing database names or credentials. The guarded deployment workflow now checks this endpoint after a real upload, in addition to HTTPS homepage and `.env` protection checks.
 - Dashboard performance is based on approved monthly totals; the sum of agent-claimed quantities is shown separately and is never presented as approved performance. The route is protected by ABH administrator authentication and its permission allowlist.
 
 ### Monthly enrollment, evidence and performance
@@ -108,16 +111,16 @@ The following ABH slices are implemented on the feature branch and passed the ap
 
 ## 5. Latest CI evidence
 
-GitHub Actions run [#339](https://github.com/Kadiya01/FieldPulse/actions/runs/43758247464) passed on branch commit `9a4d9d113918505ec6165965f68409aed0cc4ae5`:
+GitHub Actions run [#43777815456](https://github.com/Kadiya01/FieldPulse/actions/runs/43777815456) passed on commit `72e5fc8e49a71c46f37ee882813c24a2bdcab3ac`:
 
-- Frontend lint and unit/contract tests passed.
+- Frontend lint passed; all 198 frontend/unit/contract tests passed.
 - PHP application/API syntax checks passed.
-- Preview bootstrap path isolation passed.
-- ABH migration safety/planning checks passed.
-- Frontend production build and build-output verification passed.
-- MySQL 8.0 schema compatibility passed.
-- MariaDB 11.4 schema compatibility passed.
-- The cPanel deployment job was skipped because deployment is not enabled and release readiness is not signed off.
+- Preview bootstrap path isolation and migration safety/planning checks passed.
+- Frontend production build and deployment-bundle preparation passed.
+- Disposable MySQL 8.0 schema and application-repository integration suite: **158 checks passed**.
+- Disposable MariaDB 11.4 schema and application-repository integration suite: **158 checks passed**.
+- Both engines exercised administrator creation/role changes/self-lockout protection, reporting-month selection, frozen leaderboard identity after a live profile change, reward qualification preview/evaluation/replay, gift assignment, separation-of-duties approval, stock allocation, payment/delivery events, idempotent replay and changed-payload conflict.
+- The cPanel deployment job was skipped because the explicit deployment switch remains disabled and the readiness file is not signed off.
 
 The workflow uploaded a deployment artifact only. It did not upload application files to cPanel, execute cPanel migrations, or configure Cron Jobs.
 
@@ -135,11 +138,18 @@ The reward implementation plan is maintained in `docs/ABH-REWARDS-IMPLEMENTATION
 
 Status: **NOT READY FOR APPLICATION DEPLOYMENT**
 
-No live preview application deployment, cPanel database migration, or browser-to-staging-database end-to-end runtime test has been performed. R3 and R4 passed GitHub Actions run [#43764701273](https://github.com/Kadiya01/FieldPulse/actions/runs/43764701273) on commit `d9be619e8949616f50e6ec388fd1ff4306d83a9c`. Frontend lint/tests, PHP lint, preview isolation, migration safety/planning, production build, MySQL 8.0 and MariaDB 11.4 schema checks passed. The cPanel deployment job was skipped. R5 agent reward views and contract coverage are implemented. The latest full R5 validation is GitHub Actions run [#43771256725](https://github.com/Kadiya01/FieldPulse/actions/runs/43771256725) on commit `f21fd553b56e104e0100382fbb25d313c12e10e3`; frontend lint/tests, PHP lint, preview isolation, migration safety/planning and production build passed. Disposable MySQL 8.0 and MariaDB 11.4 schema suites each passed 141 checks, including a two-connection InnoDB stock-allocation contention test proving only one allocator can reserve the final unit. The cPanel deployment job was skipped. The administrator and agent leaderboard month selectors are implemented in the portal, and frozen-period reads use immutable snapshot rows; further end-to-end regression coverage is still required. Remaining blockers are application-level lifecycle integration tests against both engines, administrator account/role management beyond first-admin provisioning, browser-to-preview-database runtime verification, and formal release-gate sign-off.
+The code-level release blockers previously identified are now implemented and tested:
+
+- PHP application-level reward lifecycle tests run against disposable MySQL 8.0 and MariaDB 11.4 databases.
+- Administrator account creation, role assignment, activation/suspension, session revocation, self-lockout protection and last-Super-Administrator protection are implemented.
+- Administrator and agent month selection is covered by portal/API contract checks; PHP repository integration tests verify month selection and prove closed-period display names remain frozen after a live agent profile change.
+- The post-deployment smoke test now checks the ABH health endpoint for a live database connection.
+
+**The real cPanel preview runtime check is still outstanding.** No application files have been uploaded, no cPanel migration has been applied, and no browser has connected to the dedicated preview database. The deployment readiness file `docs/ABH-PREVIEW-DEPLOYMENT-READY.md` is absent, so the workflow cannot pass its release gate.
 
 Keep both controls unchanged:
 
 - `ABH_PREVIEW_DEPLOY_ENABLED=false`
 - `ABH_PREVIEW_DRY_RUN=true`
 
-Do not upload the application, apply cPanel migrations, or create/change Cron Jobs until the remaining R5 concurrency/integration tests, administrator/leaderboard gaps, complete release gate, and isolated staging runtime verification have passed. Production remains untouched.
+Do not enable uploads or mark the release gate PASS until the dedicated cPanel preview application has been deployed through the guarded workflow, the staging migrations have been applied using the reviewed cPanel procedure, and the HTTPS homepage, health endpoint, administrator sign-in, agent sign-in and browser-to-preview-database flows have been verified. Production remains untouched.
