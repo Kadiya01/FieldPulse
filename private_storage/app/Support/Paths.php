@@ -41,10 +41,9 @@ final class Paths
     /**
      * Candidate document roots, most specific first.
      *
-     * APP_URL wins when it names a subdirectory, because that is the only
-     * authoritative statement of where the operator believes the app lives.
-     * public_html beside private_storage is the documented default and is
-     * always tried as a fallback.
+     * The APP_URL hostname identifies cPanel addon/subdomain roots; its path
+     * identifies an optional application subdirectory. The account-level
+     * public_html remains the final fallback.
      *
      * @return list<string>
      */
@@ -89,7 +88,7 @@ final class Paths
         $urlPath = parse_url($appUrl, PHP_URL_PATH);
         if (is_string($urlPath) && trim($urlPath, '/') !== '') {
             $relativePath = trim($urlPath, '/');
-            $segments = explode('/', rawurldecode(str_replace('\\\\', '/', $relativePath)));
+            $segments = explode('/', rawurldecode(str_replace('\\', '/', $relativePath)));
             $safeSegments = array_filter(
                 $segments,
                 static fn (string $segment): bool => $segment !== '' && $segment !== '.' && $segment !== '..'
