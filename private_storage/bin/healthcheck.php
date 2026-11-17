@@ -424,7 +424,7 @@ if (!is_file($envFile)) {
 
 $dotfiles = [];
 foreach ($resolvedDocroots as $docroot) {
-    $dotfiles = array_merge($dotfiles, glob(rtrim($docroot, '/\\\\') . '/.env*') ?: []);
+    $dotfiles = array_merge($dotfiles, glob(rtrim($docroot, '/\\') . '/.env*') ?: []);
 }
 $dotfiles = array_values(array_unique($dotfiles));
 
