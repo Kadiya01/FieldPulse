@@ -66,7 +66,7 @@ $t = new TestRunner($filter);
 $t->group('support');
 
 $t->test('cPanel subdomain URL resolves its hostname document root', function (TestRunner $t): void {
-    $candidates = \\FieldPulse\\Support\\Paths::documentRootCandidatesFor(
+    $candidates = \FieldPulse\Support\Paths::documentRootCandidatesFor(
         'https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/',
         '/home/abhgloba'
     );
@@ -80,7 +80,7 @@ $t->test('cPanel subdomain URL resolves its hostname document root', function (T
 });
 
 $t->test('application URL subdirectory resolves beneath public_html', function (TestRunner $t): void {
-    $candidates = \\FieldPulse\\Support\\Paths::documentRootCandidatesFor(
+    $candidates = \FieldPulse\Support\Paths::documentRootCandidatesFor(
         'https://example.com/portal/',
         '/home/example'
     );
@@ -90,7 +90,7 @@ $t->test('application URL subdirectory resolves beneath public_html', function (
 });
 
 $t->test('document root resolver refuses traversal in URL path', function (TestRunner $t): void {
-    $candidates = \\FieldPulse\\Support\\Paths::documentRootCandidatesFor(
+    $candidates = \FieldPulse\Support\Paths::documentRootCandidatesFor(
         'https://example.com/%2e%2e/private/',
         '/home/example'
     );
