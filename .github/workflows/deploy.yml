@@ -79,12 +79,17 @@ jobs:
             php -l "$file" >/dev/null
           done < <(find private_storage/app public_html/api -type f -name '*.php' -print0)
           php -l private_storage/bin/bootstrap_path_test.php
+          php -l private_storage/bin/healthcheck.php
+          php -l private_storage/bin/selftest.php
           php -l private_storage/bin/abh_migrate.php
           php -l private_storage/bin/abh_migration_plan_test.php
           php -l private_storage/bin/abh_schema_test.php
 
       - name: Test preview bootstrap path isolation
         run: php private_storage/bin/bootstrap_path_test.php
+
+      - name: Test cPanel document root resolution
+        run: php private_storage/bin/selftest.php --filter="document root"
 
       - name: Test ABH migration safety and planning
         run: php private_storage/bin/abh_migration_plan_test.php
