@@ -24,7 +24,12 @@ on:
   workflow_dispatch:
     inputs:
       deploy_preview:
-        description: "Deploy to the ABH preview site after all readiness checks pass"
+        description: "Deploy after the full preview readiness gate has passed"
+        required: true
+        type: boolean
+        default: false
+      bootstrap_preview:
+        description: "One-time initial upload to the isolated preview roots only; no migrations or runtime sign-off"
         required: true
         type: boolean
         default: false
@@ -190,7 +195,12 @@ jobs:
       github.event_name == 'push' && vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' ||
       github.event_name == 'workflow_dispatch' &&
       inputs.deploy_preview == true &&
-      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true'
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' ||
+      github.event_name == 'workflow_dispatch' &&
+      inputs.bootstrap_preview == true &&
+      inputs.deploy_preview == false &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'false' &&
+      vars.ABH_PREVIEW_DRY_RUN == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -206,6 +216,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Require explicit ABH staging deployment readiness
+        if: inputs.bootstrap_preview != true
         shell: bash
         run: |
           set -euo pipefail
@@ -224,6 +235,21 @@ jobs:
           test -s public_html/.htaccess
           test -s public_html/.user.ini
           test -d public_html/api
+
+      - name: Validate one-time bootstrap mode
+        if: inputs.bootstrap_preview == true
+        shell: bash
+        env:
+          DEPLOY_ENABLED: ${{ vars.ABH_PREVIEW_DEPLOY_ENABLED || 'false' }}
+          DRY_RUN: ${{ vars.ABH_PREVIEW_DRY_RUN || 'true' }}
+        run: |
+          set -euo pipefail
+          [[ "${{ github.event_name }}" == "workflow_dispatch" ]]
+          [[ "${{ inputs.deploy_preview }}" == "false" ]]
+          [[ "$DEPLOY_ENABLED" == "false" ]]
+          [[ "$DRY_RUN" == "true" ]]
+          test ! -e docs/ABH-PREVIEW-DEPLOYMENT-READY.md
+          echo "Bootstrap mode confirmed: isolated preview file upload only; migrations and runtime sign-off remain blocked."
 
       - name: Download validated deployment bundle
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
@@ -280,7 +306,7 @@ jobs:
           local-dir: deploy/preview/private/
           server-dir: ./
           dangerous-clean-slate: false
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dry-run: ${{ inputs.bootstrap_preview != true && vars.ABH_PREVIEW_DRY_RUN != 'false' }}
           timeout: 60000
           exclude: |
             **/.git*
@@ -307,7 +333,7 @@ jobs:
           local-dir: deploy/preview/public/
           server-dir: ./
           dangerous-clean-slate: false
-          dry-run: ${{ vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          dry-run: ${{ inputs.bootstrap_preview != true && vars.ABH_PREVIEW_DRY_RUN != 'false' }}
           timeout: 60000
           exclude: |
             **/.git*
@@ -319,7 +345,7 @@ jobs:
             **/private_storage/**
 
       - name: Verify preview site responds over HTTPS
-        if: vars.ABH_PREVIEW_DRY_RUN == 'false'
+        if: inputs.bootstrap_preview != true && vars.ABH_PREVIEW_DRY_RUN == 'false'
         shell: bash
         run: |
           set -euo pipefail
