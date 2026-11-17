@@ -1,0 +1,95 @@
+name: ABH Preview Code-Only Correction
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_preview_code_update:
+        description: "Upload only the reviewed document-root correction to the isolated preview private directory"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abh-preview-code-only-update
+  cancel-in-progress: false
+
+jobs:
+  deploy_preview_code_update:
+    name: Deploy two reviewed PHP files to preview only
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/feature/abh-monthly-enrollment' &&
+      inputs.confirm_preview_code_update == true &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'false' &&
+      vars.ABH_PREVIEW_DRY_RUN == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+    steps:
+      - name: Check out approved feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: feature/abh-monthly-enrollment
+
+      - name: Set up PHP for targeted regression checks
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: '8.2'
+
+      - name: Verify exact correction files and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l private_storage/app/Support/Paths.php
+          php -l private_storage/bin/healthcheck.php
+          php private_storage/bin/selftest.php --filter="document root"
+
+      - name: Stage only the two reviewed runtime files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/preview-private/app/Support deploy/preview-private/bin
+          cp private_storage/app/Support/Paths.php deploy/preview-private/app/Support/Paths.php
+          cp private_storage/bin/healthcheck.php deploy/preview-private/bin/healthcheck.php
+          test "$(find deploy/preview-private -type f | wc -l)" -eq 2
+          ! find deploy/preview-private -type f | grep -E 'migration|\.env|selftest|bootstrap|uploads|\.log'
+
+      - name: Verify dedicated preview FTPS credentials and destinations
+        shell: bash
+        env:
+          FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$FTP_SERVER"
+          test -n "$FTP_USERNAME"
+          test -n "$FTP_PASSWORD"
+          [[ "$FTP_SERVER" == "nano.yahmis.com" ]]
+          [[ "$FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
+
+      - name: Upload only the two PHP correction files to preview private storage
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview-private/
+          server-dir: ./
+          dangerous-clean-slate: false
+          dry-run: false
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.env
+            **/.env.*
+            **/*.log
