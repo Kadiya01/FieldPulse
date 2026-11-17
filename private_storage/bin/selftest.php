@@ -65,6 +65,42 @@ $t = new TestRunner($filter);
 // --- Support primitives -----------------------------------------------------
 $t->group('support');
 
+$t->test('cPanel subdomain URL resolves its hostname document root', function (TestRunner $t): void {
+    $candidates = \\FieldPulse\\Support\\Paths::documentRootCandidatesFor(
+        'https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng/',
+        '/home/abhgloba'
+    );
+
+    $t->assertSame(
+        '/home/abhgloba/public_html/monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng',
+        $candidates[0],
+        'hostname-specific preview document root must be checked first'
+    );
+    $t->assertSame('/home/abhgloba/public_html', $candidates[count($candidates) - 1], 'account web root remains fallback');
+});
+
+$t->test('application URL subdirectory resolves beneath public_html', function (TestRunner $t): void {
+    $candidates = \\FieldPulse\\Support\\Paths::documentRootCandidatesFor(
+        'https://example.com/portal/',
+        '/home/example'
+    );
+
+    $t->assertSame('/home/example/public_html/example.com', $candidates[0], 'domain root candidate');
+    $t->assertSame('/home/example/public_html/portal', $candidates[1], 'URL path candidate');
+});
+
+$t->test('document root resolver refuses traversal in URL path', function (TestRunner $t): void {
+    $candidates = \\FieldPulse\\Support\\Paths::documentRootCandidatesFor(
+        'https://example.com/%2e%2e/private/',
+        '/home/example'
+    );
+
+    $t->assertFalse(
+        in_array('/home/example/private', $candidates, true),
+        'URL path must not escape public_html'
+    );
+});
+
 $t->test('uuid v4 is well formed and unique', function (TestRunner $t): void {
     $seen = [];
 
