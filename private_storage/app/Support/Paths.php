@@ -89,7 +89,7 @@ final class Paths
         $urlPath = parse_url($appUrl, PHP_URL_PATH);
         if (is_string($urlPath) && trim($urlPath, '/') !== '') {
             $relativePath = trim($urlPath, '/');
-            $segments = explode('/', str_replace('\\\\', '/', $relativePath));
+            $segments = explode('/', rawurldecode(str_replace('\\\\', '/', $relativePath)));
             $safeSegments = array_filter(
                 $segments,
                 static fn (string $segment): bool => $segment !== '' && $segment !== '.' && $segment !== '..'
