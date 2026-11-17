@@ -422,11 +422,16 @@ if (!is_file($envFile)) {
     }
 }
 
-$dotfiles = glob(FIELDPULSE_BASE_ROOT . '/public_html/.env*') ?: [];
+$dotfiles = [];
+foreach ($resolvedDocroots as $docroot) {
+    $dotfiles = array_merge($dotfiles, glob(rtrim($docroot, '/\\\\') . '/.env*') ?: []);
+}
+$dotfiles = array_values(array_unique($dotfiles));
+
 if ($dotfiles !== []) {
-    $fail('an .env file exists inside public_html: ' . implode(', ', array_map('basename', $dotfiles)));
+    $fail('an .env file exists inside a resolved document root: ' . implode(', ', array_map('basename', $dotfiles)));
 } else {
-    $ok('no .env inside public_html');
+    $ok('no .env files inside resolved document roots');
 }
 
 /* -------------------------------------------------------------------------- */
