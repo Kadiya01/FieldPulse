@@ -1,0 +1,97 @@
+name: ABH Preview Private Application Upload
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_preview_private_app_upload:
+        description: "Upload the reviewed private_storage/app source tree to preview private storage only"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abh-preview-private-app-upload
+  cancel-in-progress: false
+
+jobs:
+  upload_preview_private_app:
+    name: Upload private application code to preview only
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/feature/abh-monthly-enrollment' &&
+      inputs.confirm_preview_private_app_upload == true &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'false' &&
+      vars.ABH_PREVIEW_DRY_RUN == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+    steps:
+      - name: Check out the approved feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: feature/abh-monthly-enrollment
+
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: '8.4'
+
+      - name: Verify and stage only the private application source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f private_storage/app/bootstrap.php
+          test -f private_storage/app/Support/Paths.php
+          count=$(find private_storage/app -type f | wc -l)
+          test "$count" -eq 139
+          test -z "$(find private_storage/app -type l -print -quit)"
+          while IFS= read -r -d '' file; do php -l "$file" >/dev/null; done < <(find private_storage/app -type f -name '*.php' -print0)
+          php private_storage/bin/selftest.php --filter="document root"
+          mkdir -p deploy/preview-private
+          cp -a private_storage/app deploy/preview-private/app
+          staged=$(find deploy/preview-private/app -type f | wc -l)
+          test "$staged" -eq 139
+          test -f deploy/preview-private/app/bootstrap.php
+          ! find deploy/preview-private -type f | grep -E '(^|/)(\.env([^/]*)?|.*\.log|.*migration.*|uploads?)(/|$)'
+          echo "Verified $staged application source files; no env, migrations, logs, or uploads staged."
+
+      - name: Verify dedicated preview private FTPS destination
+        shell: bash
+        env:
+          FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$FTP_SERVER"
+          test -n "$FTP_USERNAME"
+          test -n "$FTP_PASSWORD"
+          [[ "$FTP_SERVER" == "nano.yahmis.com" ]]
+          [[ "$FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
+
+      - name: Upload only private_storage/app to preview private storage
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview-private/
+          server-dir: ./ 
+          state-name: .ftp-deploy-sync-state-private-app-bootstrap.json
+          dangerous-clean-slate: false
+          dry-run: false
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.env
+            **/.env.*
+            **/*.log
