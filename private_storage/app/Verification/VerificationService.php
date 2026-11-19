@@ -520,13 +520,19 @@ final class VerificationService
             return;
         }
 
-        $period = PeriodResolver::periodFor((string) $submission['server_received_at']);
+        $receivedAt    = (string) $submission['server_received_at'];
+        $weeklyPeriod  = PeriodResolver::periodFor($receivedAt);
+        $monthlyDate   = isset($submission['reporting_month']) && $submission['reporting_month'] !== null
+            ? (string) $submission['reporting_month']
+            : PeriodResolver::monthlyPeriodFor($receivedAt)['date'];
 
         // Delegated rather than re-implemented. This summary write previously
         // existed in two places and they drifted apart — one copy had a column
         // the table does not have, so every verification would have failed on a
         // fresh install. One table, one writer.
-        (new LeaderboardRepository())->refresh($agentId, $period['date']);
+        $board = new LeaderboardRepository();
+        $board->refresh($agentId, $weeklyPeriod['date'], PeriodResolver::TYPE_WEEKLY);
+        $board->refresh($agentId, $monthlyDate, PeriodResolver::TYPE_MONTHLY);
 
         $this->submissions->markAggregated($submissionId);
     }

@@ -34,7 +34,15 @@ final class Cli
             exit;
         }
 
-        Config::boot();
+        /*
+         * Parse --env before booting. Several entry points expose --env so the
+         * database matrix can point one tree at another server without editing
+         * the deployment's .env. Booting the default file first made that
+         * impossible on a host that has no private_storage/.env, because the
+         * missing-file check fired before the entry point could read its own
+         * option.
+         */
+        Config::boot(self::option($_SERVER['argv'] ?? [], 'env'));
 
         set_exception_handler(static function (\Throwable $e) use ($entryScript): void {
             Logger::channel('app')->error('cli.unhandled_exception', [

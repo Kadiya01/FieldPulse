@@ -145,7 +145,7 @@ final class ReviewRepository extends Repository
         int $reviewerAgentId,
         string $note
     ): array {
-        return Connection::transaction(function () use ($submissionId, $decision, $reviewerAgentId, $note): array {
+        $result = Connection::transaction(function () use ($submissionId, $decision, $reviewerAgentId, $note): array {
             $submission = $this->one('SELECT * FROM submissions WHERE id = :id FOR UPDATE', ['id' => $submissionId]);
 
             if ($submission === null) {
@@ -231,20 +231,64 @@ final class ReviewRepository extends Repository
                 ]
             );
 
-            $this->refreshSummary((int) $submission['agent_id'], (string) $submission['server_received_at']);
+            $this->refreshSummary(
+                (int) $submission['agent_id'],
+                (string) $submission['server_received_at'],
+                isset($submission['reporting_month']) && $submission['reporting_month'] !== null
+                    ? (string) $submission['reporting_month']
+                    : null
+            );
 
             return ['applied' => true, 'submission' => $submission];
         });
+
+        $submission = $result['submission'] ?? null;
+
+        if (is_array($submission)) {
+            $approved = $decision === self::DECISION_APPROVE;
+            $count    = (int) $submission['count_claimed'];
+
+            try {
+                (new NotificationRepository())->create(
+                    (int) $submission['agent_id'],
+                    $approved ? 'SUBMISSION_APPROVED' : 'SUBMISSION_REJECTED',
+                    $approved ? 'Submission approved' : 'Submission rejected',
+                    sprintf(
+                        'Submission %s for %d enrollment%s was %s.',
+                        (string) $submission['submission_uuid'],
+                        $count,
+                        $count === 1 ? '' : 's',
+                        $approved ? 'approved' : 'rejected'
+                    ),
+                    'submission',
+                    (int) $submission['id']
+                );
+            } catch (\Throwable $e) {
+                // The decision is already committed. A notification failure must
+                // not turn a successful approval into an error response, which
+                // would make the reviewer retry and hit the immutability 409.
+                \FieldPulse\Support\Logger::error('notification.review_decision_failed', [
+                    'submission_id' => (int) $submission['id'],
+                    'error'         => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $result;
     }
 
     /**
-     * Recompute the affected agent's period summary after a review.
+     * Recompute the affected agent's period summary (both weekly and monthly) after a review.
      */
-    private function refreshSummary(int $agentId, string $receivedAt): void
+    private function refreshSummary(int $agentId, string $receivedAt, ?string $reportingMonth = null): void
     {
-        $period = \FieldPulse\Domain\PeriodResolver::periodFor($receivedAt);
+        $weeklyPeriod = \FieldPulse\Domain\PeriodResolver::periodFor($receivedAt);
+        $monthlyDate  = $reportingMonth
+            ?? \FieldPulse\Domain\PeriodResolver::monthlyPeriodFor($receivedAt)['date'];
 
-        (new LeaderboardRepository())->refresh($agentId, $period['date']);
+        $board = new LeaderboardRepository();
+        $board->refresh($agentId, $weeklyPeriod['date'], \FieldPulse\Domain\PeriodResolver::TYPE_WEEKLY);
+        $board->refresh($agentId, $monthlyDate, \FieldPulse\Domain\PeriodResolver::TYPE_MONTHLY);
     }
 
     /**

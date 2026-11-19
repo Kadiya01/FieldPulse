@@ -63,7 +63,7 @@ final class Credentials
         if (strlen($plaintext) > 72) {
             throw new ApiException(
                 422,
-                ErrorCode::VALIDATION_ERROR,
+                ErrorCode::VALIDATION_FAILED,
                 'Password must be at most 72 bytes.'
             );
         }

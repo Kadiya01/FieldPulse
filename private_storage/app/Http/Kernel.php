@@ -26,15 +26,49 @@ final class Kernel
 {
     /** @var array<string,class-string> */
     private const ROUTES = [
+        'abh.health' => \FieldPulse\Domain\AbhHealthController::class,
         'auth.login'       => \FieldPulse\Domain\LoginController::class,
         'auth.agent_login' => \FieldPulse\Domain\AgentLoginController::class,
+        'auth.password'    => \FieldPulse\Domain\PasswordController::class,
         'agent.register'   => \FieldPulse\Domain\AgentRegistrationController::class,
+        'abh.agent.register' => \FieldPulse\Domain\AbhAgentRegistrationController::class,
+        'abh.agent.submissions' => \FieldPulse\Domain\AbhAgentSubmissionsController::class,
+        'abh.agent.leaderboard' => \FieldPulse\Domain\AbhAgentLeaderboardController::class,
+        'abh.agent.notifications' => \FieldPulse\Domain\AbhAgentNotificationsController::class,
+        'abh.agent.rewards' => \FieldPulse\Domain\AbhAgentRewardsController::class,
+        'abh.auth.login' => \FieldPulse\Domain\AbhAgentLoginController::class,
+        'abh.auth.refresh' => \FieldPulse\Domain\AbhAgentRefreshController::class,
+        'abh.auth.logout' => \FieldPulse\Domain\AbhAgentLogoutController::class,
+        'abh.admin.auth.bootstrap' => \FieldPulse\Domain\AbhAdminBootstrapController::class,
+        'abh.admin.auth.login' => \FieldPulse\Domain\AbhAdminLoginController::class,
+        'abh.admin.auth.refresh' => \FieldPulse\Domain\AbhAdminRefreshController::class,
+        'abh.admin.auth.logout' => \FieldPulse\Domain\AbhAdminLogoutController::class,
+        'abh.admin.users' => \FieldPulse\Domain\AbhAdminUsersController::class,
+        'abh.admin.agents' => \FieldPulse\Domain\AbhAdminAgentsController::class,
+        'abh.admin.agent.details' => \FieldPulse\Domain\AbhAdminAgentDetailsController::class,
+        'abh.admin.dashboard' => \FieldPulse\Domain\AbhAdminDashboardController::class,
+        'abh.admin.agent.decision' => \FieldPulse\Domain\AbhAdminAgentDecisionController::class,
+        'abh.admin.device.decision' => \FieldPulse\Domain\AbhAdminDeviceDecisionController::class,
+        'abh.admin.submissions' => \FieldPulse\Domain\AbhAdminSubmissionsController::class,
+        'abh.admin.leaderboard' => \FieldPulse\Domain\AbhAdminLeaderboardController::class,
+        'abh.admin.notifications' => \FieldPulse\Domain\AbhAdminNotificationsController::class,
+        'abh.admin.targets' => \FieldPulse\Domain\AbhAdminTargetsController::class,
+        'abh.admin.period.close' => \FieldPulse\Domain\AbhAdminPeriodCloseController::class,
+        'abh.admin.submission.decision' => \FieldPulse\Domain\AbhAdminSubmissionDecisionController::class,
+        'abh.admin.submission.evidence' => \FieldPulse\Domain\AbhAdminSubmissionEvidenceController::class,
+        'abh.admin.reward.programs' => \FieldPulse\Domain\AbhAdminRewardProgramsController::class,
+        'abh.admin.reward.rules' => \FieldPulse\Domain\AbhAdminRewardRulesController::class,
+        'abh.admin.reward.qualifications' => \FieldPulse\Domain\AbhAdminRewardQualificationController::class,
         'auth.refresh'     => \FieldPulse\Domain\RefreshController::class,
         'auth.logout'      => \FieldPulse\Domain\LogoutController::class,
         'device.register'  => \FieldPulse\Domain\DeviceController::class,
         'submit'           => \FieldPulse\Domain\SubmitController::class,
         'submission.status' => \FieldPulse\Domain\SubmissionStatusController::class,
         'leaderboard'      => \FieldPulse\Domain\LeaderboardController::class,
+        'dashboard'        => \FieldPulse\Domain\DashboardController::class,
+        'profile'          => \FieldPulse\Domain\ProfileController::class,
+        'notifications.index' => \FieldPulse\Domain\NotificationController::class,
+        'notifications.read'  => \FieldPulse\Domain\NotificationController::class,
         'reviews.index'    => \FieldPulse\Domain\ReviewController::class,
         'reviews.decide'   => \FieldPulse\Domain\ReviewController::class,
         'rewards.self'     => \FieldPulse\Domain\RewardController::class,
@@ -42,6 +76,10 @@ final class Kernel
         'rewards.decide'   => \FieldPulse\Domain\RewardController::class,
         'admin.agents'     => \FieldPulse\Domain\AdminAgentController::class,
         'admin.agent'      => \FieldPulse\Domain\AdminAgentController::class,
+        'admin.dashboard'  => \FieldPulse\Domain\AdminDashboardController::class,
+        'admin.targets'    => \FieldPulse\Domain\AdminTargetController::class,
+        'admin.periods'    => \FieldPulse\Domain\AdminPeriodController::class,
+        'admin.audit'      => \FieldPulse\Domain\AdminAuditController::class,
     ];
 
     /**
@@ -69,22 +107,53 @@ final class Kernel
      *              SUPERVISOR to hold it would be one misassigned role away
      *              from a hostile supervisor.
      *
-     * device.register is `bootstrap`, not `public`. Both login routes issue a
-     * bootstrap token and the route upgrades it to a device-bound session.
-     * Existing accounts still follow the configured pairing policy; public
-     * self-registered agents can bind their first browser without an operator
-     * code because registration is immediately active.
+     * device.register is `bootstrap`, not `public`. The login route issues a
+     * bootstrap token and this route upgrades it to a device-bound session.
+     * Every account follows the configured pairing policy; public
+     * self-registration does not exempt an agent from proving control of a
+     * device out of band.
      */
     private const AUTH = [
+        'abh.health' => 'public',
         'auth.login'       => 'public',
         'auth.agent_login' => 'public',
+        'auth.password'    => 'signed',
         'agent.register'   => 'public',
+        'abh.agent.register' => 'public',
+        'abh.agent.submissions' => 'signed',
+        'abh.agent.leaderboard' => 'signed',
+        'abh.agent.notifications' => 'signed',
+        'abh.agent.rewards' => 'signed',
+        'abh.auth.login' => 'public',
+        'abh.auth.refresh' => 'public',
+        'abh.auth.logout' => 'public',
+        'abh.admin.auth.bootstrap' => 'public',
+        'abh.admin.auth.login' => 'public',
+        'abh.admin.auth.refresh' => 'public',
+        'abh.admin.auth.logout' => 'public',
+        'abh.admin.users' => 'admin',
+        'abh.admin.dashboard' => 'admin',
+        'abh.admin.submissions' => 'admin',
+        'abh.admin.leaderboard' => 'admin',
+        'abh.admin.notifications' => 'admin',
+        'abh.admin.targets' => 'admin',
+        'abh.admin.reward.programs' => 'admin',
+        'abh.admin.reward.rules' => 'admin',
+        'abh.admin.reward.qualifications' => 'admin',
+        'abh.admin.reward.lifecycle' => 'admin',
+        'abh.admin.period.close' => 'admin',
+        'abh.admin.submission.decision' => 'admin',
+        'abh.admin.submission.evidence' => 'admin',
         'auth.refresh'     => 'public',   // the refresh cookie IS the credential
         'auth.logout'      => 'public',   // must work with an expired access token
         'device.register'  => 'bootstrap',
         'submit'           => 'signed',
         'submission.status' => 'bearer',
         'leaderboard'      => 'bearer',
+        'dashboard'        => 'bearer',
+        'profile'          => 'signed',
+        'notifications.index' => 'bearer',
+        'notifications.read'  => 'bearer',
         'reviews.index'    => 'operator',
         'reviews.decide'   => 'operator',
         // An agent sees their own entitlement and nobody else's: bearer is
@@ -96,6 +165,10 @@ final class Kernel
         'rewards.decide'   => 'operator',
         'admin.agents'     => 'admin',
         'admin.agent'      => 'admin',
+        'admin.dashboard'  => 'admin',
+        'admin.targets'    => 'admin',
+        'admin.periods'    => 'admin',
+        'admin.audit'      => 'admin',
     ];
 
     private static bool $booted = false;
@@ -337,6 +410,22 @@ final class Kernel
         $requirement = self::AUTH[$route] ?? 'bearer';
 
         if ($requirement === 'public') {
+            return;
+        }
+
+        // ABH requests use their own session/device tables. Never let an ABH
+        // opaque access token fall through to the legacy FieldPulse authenticator.
+        if (str_starts_with($route, 'abh.admin.')) {
+            $context = \FieldPulse\Security\AbhAdminAuthenticator::authenticate($request);
+            $request->setAbhAdminContext($context);
+
+            return;
+        }
+
+        if (str_starts_with($route, 'abh.')) {
+            $context = \FieldPulse\Security\AbhAuthenticator::i()->authenticateSignedRequest($request);
+            $request->setAuthContext($context);
+
             return;
         }
 

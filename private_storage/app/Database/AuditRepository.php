@@ -91,6 +91,84 @@ final class AuditRepository extends Repository
     }
 
     /**
+     * Audit rows attached to one entity (for the agent detail panel).
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function forEntity(string $entityType, int $entityId, int $limit = 20): array
+    {
+        return $this->all(
+            'SELECT * FROM audit_logs
+              WHERE entity_type = :entity_type AND entity_id = :entity_id
+              ORDER BY created_at DESC, id DESC' . self::limitClause($limit, 100),
+            ['entity_type' => $entityType, 'entity_id' => $entityId]
+        );
+    }
+
+    /**
+     * Paged audit search with the actor joined for display.
+     *
+     * @param  array{action?:?string,actor_agent_id?:?int,entity_type?:?string,entity_id?:?int} $filters
+     * @return list<array<string,mixed>>
+     */
+    public function adminSearch(array $filters, int $limit = 50, int $offset = 0): array
+    {
+        [$where, $params] = $this->adminWhere($filters);
+
+        return $this->all(
+            "SELECT l.*, a.agent_code AS actor_agent_code, a.full_name AS actor_full_name
+               FROM audit_logs l
+               LEFT JOIN agents a ON a.id = l.actor_agent_id"
+            . $where
+            . ' ORDER BY l.created_at DESC, l.id DESC'
+            . self::limitClause($limit, 200, $offset),
+            $params
+        );
+    }
+
+    /**
+     * @param array{action?:?string,actor_agent_id?:?int,entity_type?:?string,entity_id?:?int} $filters
+     */
+    public function countAdminSearch(array $filters): int
+    {
+        [$where, $params] = $this->adminWhere($filters);
+
+        return (int) $this->value('SELECT COUNT(*) FROM audit_logs l' . $where, $params);
+    }
+
+    /**
+     * @param  array{action?:?string,actor_agent_id?:?int,entity_type?:?string,entity_id?:?int} $filters
+     * @return array{0:string,1:array<string,mixed>}
+     */
+    private function adminWhere(array $filters): array
+    {
+        $where  = [];
+        $params = [];
+
+        if (($filters['action'] ?? null) !== null && $filters['action'] !== '') {
+            $where[] = 'l.action = :action';
+            $params['action'] = $filters['action'];
+        }
+
+        if (($filters['actor_agent_id'] ?? null) !== null) {
+            $where[] = 'l.actor_agent_id = :actor_agent_id';
+            $params['actor_agent_id'] = (int) $filters['actor_agent_id'];
+        }
+
+        if (($filters['entity_type'] ?? null) !== null && $filters['entity_type'] !== '') {
+            $where[] = 'l.entity_type = :entity_type';
+            $params['entity_type'] = $filters['entity_type'];
+        }
+
+        if (($filters['entity_id'] ?? null) !== null) {
+            $where[] = 'l.entity_id = :entity_id';
+            $params['entity_id'] = (int) $filters['entity_id'];
+        }
+
+        return [$where === [] ? '' : ' WHERE ' . implode(' AND ', $where), $params];
+    }
+
+    /**
      * Retention pruning. Audit history is kept for a long window by default
      * because it is the only independent record of a disposition decision.
      */

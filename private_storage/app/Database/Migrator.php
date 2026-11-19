@@ -143,7 +143,13 @@ final class Migrator
 
         foreach (self::splitStatements($sql) as $index => $statement) {
             try {
-                $pdo->exec($statement);
+                $stmt = $pdo->query($statement);
+                if ($stmt instanceof \PDOStatement) {
+                    while ($stmt->nextRowset()) {
+                        // drain any remaining result sets
+                    }
+                    $stmt->closeCursor();
+                }
             } catch (\PDOException $e) {
                 throw new \RuntimeException(
                     sprintf(

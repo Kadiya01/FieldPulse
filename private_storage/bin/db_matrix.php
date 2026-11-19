@@ -67,7 +67,7 @@ function engines(): array
         // The server this checkout is configured against, and therefore the
         // one every other suite already runs against. It always exists.
         ['app', 'application configuration', null, dirname(__DIR__) . '/.env'],
-        ['mariadb', 'MariaDB 11.4.13', 'FIELDPULSE_MARIADB_ENV', $var('FIELDPULSE_MARIADB_ENV')],
+        ['mariadb', 'MariaDB (configured)', 'FIELDPULSE_MARIADB_ENV', $var('FIELDPULSE_MARIADB_ENV')],
         ['mysql', 'MySQL 8.0.40', 'FIELDPULSE_MYSQL_ENV', $var('FIELDPULSE_MYSQL_ENV')],
     ];
 
@@ -117,7 +117,7 @@ function engines(): array
 /**
  * Turn a server version string into the engine family it actually is.
  *
- * `SELECT VERSION()` returns `11.4.13-MariaDB` on MariaDB and `8.0.40` on
+ * `SELECT VERSION()` returns `X.Y.Z-MariaDB` on MariaDB and `X.Y.Z` on
  * MySQL; anything unrecognisable is reported verbatim rather than guessed at,
  * because a wrong guess here is the whole reason this function exists.
  */

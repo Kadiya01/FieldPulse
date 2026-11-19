@@ -35,7 +35,16 @@ $service = new RewardService();
 
 try {
     $periodArg = Cli::option($argv, 'period');
+    $typeArg   = Cli::option($argv, 'type');
     $dryRun    = Cli::hasFlag($argv, 'dry-run');
+
+    if ($typeArg !== null) {
+        $typeArg = strtoupper($typeArg);
+        if (!in_array($typeArg, PeriodResolver::PERIOD_TYPES, true)) {
+            Cli::fail('--type must be WEEKLY or MONTHLY');
+            exit(1);
+        }
+    }
 
     if ($periodArg !== null) {
         if (Validator::isIsoDate($periodArg) === false) {
@@ -43,13 +52,36 @@ try {
             exit(1);
         }
 
-        $monday = (new DateTimeImmutable($periodArg . ' 00:00:00'))
-            ->modify('monday this week')
-            ->format('Y-m-d');
+        if ($typeArg === PeriodResolver::TYPE_MONTHLY) {
+            $firstDay = (new DateTimeImmutable($periodArg . ' 00:00:00'))->format('Y-m-01');
+            if ($firstDay !== $periodArg) {
+                Cli::fail($periodArg . ' is not the first day of the month; the period starts on ' . $firstDay);
+                exit(1);
+            }
+        } elseif ($typeArg === PeriodResolver::TYPE_WEEKLY) {
+            $monday = (new DateTimeImmutable($periodArg . ' 00:00:00'))
+                ->modify('monday this week')
+                ->format('Y-m-d');
 
-        if ($monday !== $periodArg) {
-            Cli::fail($periodArg . ' is not a Monday; the period starts on ' . $monday);
-            exit(1);
+            if ($monday !== $periodArg) {
+                Cli::fail($periodArg . ' is not a Monday; the period starts on ' . $monday);
+                exit(1);
+            }
+        } else {
+            // Infer type from date: Monday => WEEKLY, first of month => MONTHLY
+            $isMonday = (new DateTimeImmutable($periodArg . ' 00:00:00'))
+                ->modify('monday this week')
+                ->format('Y-m-d') === $periodArg;
+            $isFirstOfMonth = (new DateTimeImmutable($periodArg . ' 00:00:00'))->format('Y-m-01') === $periodArg;
+
+            if ($isMonday) {
+                $typeArg = PeriodResolver::TYPE_WEEKLY;
+            } elseif ($isFirstOfMonth) {
+                $typeArg = PeriodResolver::TYPE_MONTHLY;
+            } else {
+                Cli::fail($periodArg . ' is neither a Monday nor the first day of the month');
+                exit(1);
+            }
         }
     }
 
@@ -61,17 +93,19 @@ try {
     Cli::out('');
 
     if ($periodArg !== null) {
-        if ($dryRun) {
-            $frozen = (new \FieldPulse\Database\RewardRepository())->periodIsFrozen($periodArg);
-            $due    = $service->isDue($periodArg);
+        $periodType = $typeArg ?? PeriodResolver::TYPE_WEEKLY;
 
-            Cli::out('  ' . $periodArg . ': due=' . ($due ? 'yes' : 'no')
+        if ($dryRun) {
+            $frozen = (new \FieldPulse\Database\RewardRepository())->periodIsFrozen($periodArg, $periodType);
+            $due    = $service->isDue($periodArg, $periodType);
+
+            Cli::out('  ' . $periodArg . ' (' . $periodType . '): due=' . ($due ? 'yes' : 'no')
                 . ', frozen=' . ($frozen ? 'yes' : 'no'));
 
             exit(0);
         }
 
-        $result = $service->closePeriod($periodArg);
+        $result = $service->closePeriod($periodArg, $periodType);
         report([$result]);
 
         exit($result['closed'] || $result['reason'] === 'already_closed' ? 0 : 1);
@@ -79,32 +113,47 @@ try {
 
     // Everything due, whether that is one period or a backlog left behind by a
     // deployment whose cron had stopped.
-    $cutoff = \FieldPulse\Support\Clock::now()
-        ->modify('-' . $grace . ' hours')
-        ->modify('-7 days');
-    $cutoffPeriod = PeriodResolver::periodStartDate(\FieldPulse\Support\Clock::sql($cutoff));
+    $rewardRepo = new \FieldPulse\Database\RewardRepository();
+    $typesToScan = $typeArg !== null ? [$typeArg] : [PeriodResolver::TYPE_WEEKLY, PeriodResolver::TYPE_MONTHLY];
+    $candidates = [];
 
-    $pending = (new \FieldPulse\Database\RewardRepository())->unfrozenPeriodsOnOrBefore($cutoffPeriod);
+    foreach ($typesToScan as $scanType) {
+        $cutoff = \FieldPulse\Support\Clock::now()->modify('-' . $grace . ' hours');
+        if ($scanType === PeriodResolver::TYPE_MONTHLY) {
+            $cutoffDate = \FieldPulse\Support\Clock::sql($cutoff->modify('-1 month'));
+            $cutoffPeriod = PeriodResolver::monthlyPeriodStartDate($cutoffDate);
+        } else {
+            $cutoffDate = \FieldPulse\Support\Clock::sql($cutoff->modify('-7 days'));
+            $cutoffPeriod = PeriodResolver::periodStartDate($cutoffDate);
+        }
 
-    if ($pending === []) {
+        $pending = $rewardRepo->unfrozenPeriodsOnOrBefore($cutoffPeriod, $scanType);
+        foreach ($pending as $p) {
+            $candidates[] = ['period' => $p, 'type' => $scanType];
+        }
+    }
+
+    if ($candidates === []) {
         Cli::ok('  nothing due; every period within the window is already closed');
         exit(0);
     }
 
-    Cli::out('  ' . count($pending) . ' candidate period(s): ' . implode(', ', $pending));
+    $summaryStrings = array_map(static fn (array $c): string => $c['period'] . ' (' . $c['type'] . ')', $candidates);
+    Cli::out('  ' . count($candidates) . ' candidate period(s): ' . implode(', ', $summaryStrings));
     Cli::out('');
 
     if ($dryRun) {
-        foreach ($pending as $period) {
-            Cli::out('  would close ' . $period . ($service->isDue($period) ? '' : ' (not yet due)'));
+        foreach ($candidates as $candidate) {
+            $due = $service->isDue($candidate['period'], $candidate['type']);
+            Cli::out('  would close ' . $candidate['period'] . ' (' . $candidate['type'] . ')' . ($due ? '' : ' (not yet due)'));
         }
         exit(0);
     }
 
     $results = [];
 
-    foreach ($pending as $period) {
-        $results[] = $service->closePeriod($period);
+    foreach ($candidates as $candidate) {
+        $results[] = $service->closePeriod($candidate['period'], $candidate['type']);
     }
 
     report($results);
@@ -127,12 +176,13 @@ function report(array $results): void
     Cli::heading('Result');
 
     foreach ($results as $result) {
+        $typeStr = isset($result['period_type']) ? ' (' . $result['period_type'] . ')' : '';
         if ($result['closed']) {
-            Cli::ok('  ' . $result['period'] . ': frozen ' . $result['frozen']
+            Cli::ok('  ' . $result['period'] . $typeStr . ': frozen ' . $result['frozen']
                 . ', published ' . $result['published']);
             continue;
         }
 
-        Cli::out('  ' . $result['period'] . ': not closed (' . $result['reason'] . ')');
+        Cli::out('  ' . $result['period'] . $typeStr . ': not closed (' . $result['reason'] . ')');
     }
 }

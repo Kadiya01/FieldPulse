@@ -2,7 +2,77 @@ import { expect, type BrowserContext, type Page, type TestInfo } from '@playwrig
 import { chromium, devices } from '@playwright/test';
 import { readCredentials, readOperatorCredentials, REPO_ROOT, type Credentials } from './fixtures';
 import path from 'node:path';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+
+/**
+ * Give each browser context its own fake camera image.
+ *
+ * Chromium's default fake device produces the same frame every run. Duplicate
+ * detection is intentionally global, so a capture from this run can be a
+ * perceptual match for a capture left behind by an earlier run — the submission
+ * is then rejected before a reviewer ever sees it. The suite is about the
+ * review/counting path, not about whether the fixture happened to reuse an old
+ * frame, so every context gets a deterministic-but-unique Y4M pattern instead.
+ *
+ * The file is repeated for a few frames because Chrome's fake capture device
+ * reads a stream, and the path is unique per launch so a previous browser that
+ * still has the old file open cannot make the next run fall back to its default
+ * test pattern.
+ */
+let fakeCameraSequence = 0;
+
+function writeFakeCameraVideo(testInfo: TestInfo, profileName: string): string {
+  fakeCameraSequence += 1;
+  const file = testInfo.outputPath(
+    `fake-camera-${profileName}-${Date.now()}-${fakeCameraSequence}.y4m`
+  );
+  mkdirSync(path.dirname(file), { recursive: true });
+
+  const width = 160;
+  const height = 120;
+  const blockWidth = 40;
+  const blockHeight = 30;
+  const blocksX = width / blockWidth;
+  const blocksY = height / blockHeight;
+  const frameCount = 300;
+  const fps = 10;
+
+  let state = (Math.random() * 0xffffffff) >>> 0;
+  const next = (): number => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  };
+
+  const u = Buffer.alloc((width / 2) * (height / 2), 128);
+  const v = Buffer.alloc((width / 2) * (height / 2), 128);
+  const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F${fps}:1 Ip A1:1 C420jpeg\n`, 'ascii');
+  const frames: Buffer[] = [];
+
+  /*
+   * A long, per-launch stream of coarse random blocks. Coarse blocks survive
+   * pHash downsampling, so different frames and different runs do not collapse
+   * into a cross-agent duplicate. The stream lasts long enough that the camera
+   * is still playing when the test captures; a short file can end before the
+   * app asks for a stream and Chrome then falls back to its default pattern.
+   */
+  for (let index = 0; index < frameCount; index++) {
+    const blockValues = Array.from({ length: blocksX * blocksY }, () => next() % 256);
+    const y = Buffer.alloc(width * height);
+
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        y[row * width + col] =
+          blockValues[Math.floor(row / blockHeight) * blocksX + Math.floor(col / blockWidth)];
+      }
+    }
+
+    frames.push(Buffer.concat([Buffer.from('FRAME\n', 'ascii'), y, u, v]));
+  }
+
+  writeFileSync(file, Buffer.concat([header, ...frames]));
+
+  return path.win32.normalize(file).replace(/\\/g, '/');
+}
 
 /**
  * Launch a real browser with a persistent profile.
@@ -45,6 +115,7 @@ export async function launchApp(
    * difference, and it means the fake-device flags below apply identically.
    */
   const channel = testInfo.project.name === 'edge' ? 'msedge' : undefined;
+  const fakeCamera = writeFakeCameraVideo(testInfo, profileName);
 
   const context = await chromium.launchPersistentContext(profile, {
     ...devices['Desktop Chrome'],
@@ -58,14 +129,13 @@ export async function launchApp(
      * upload path.
      */
     geolocation: { latitude: 6.5244, longitude: 3.3792, accuracy: 12 },
-    launchOptions: {
-      channel,
-      args: [
-        '--use-fake-ui-for-media-stream',
-        '--use-fake-device-for-media-stream',
-        '--autoplay-policy=no-user-gesture-required'
-      ]
-    }
+    channel,
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      `--use-file-for-fake-video-capture=${fakeCamera}`,
+      '--autoplay-policy=no-user-gesture-required'
+    ]
   });
 
   // Forward the browser's own diagnostics to the test output. Playwright does
@@ -116,12 +186,13 @@ async function completePairingIfAsked(page: Page, creds: Credentials): Promise<v
 }
 
 /**
- * Sign in an agent through the real IMEI form and land on the capture screen.
+ * Sign in an agent through the real username/password form and land on the
+ * capture screen.
  *
- * Typed into the actual input and submitted with the actual button, so the
- * whole authentication path runs: POST /auth/agent-login.php, device key
- * generation, POST /device/register.php, and the pairing exchange when the
- * deployment policy demands one.
+ * Typed into the actual inputs and submitted with the actual button, so the
+ * whole authentication path runs: POST /auth/login.php, device key generation,
+ * POST /device/register.php, and the pairing exchange when the deployment policy
+ * demands one.
  *
  * Not shortcut by seeding localStorage or calling the API directly - a test
  * that skipped this would never exercise the gate that decides whether the app
@@ -132,7 +203,8 @@ export async function signIn(page: Page, creds: Credentials = readCredentials())
 
   await expect(page.getByRole('heading', { name: 'Agent sign in' })).toBeVisible();
 
-  await page.locator('#agent-imei').fill(creds.imei);
+  await page.locator('#username').fill(creds.username);
+  await page.locator('#password').fill(creds.password);
   await page.getByRole('button', { name: 'Sign in' }).click();
 
   await completePairingIfAsked(page, creds);
@@ -142,7 +214,7 @@ export async function signIn(page: Page, creds: Credentials = readCredentials())
 export async function signInOperator(page: Page, creds: Credentials = readOperatorCredentials()): Promise<void> {
   await page.goto('/admin/login');
 
-  await expect(page.getByRole('heading', { name: 'Admin sign in' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Administrator sign in' })).toBeVisible();
 
   await page.locator('#username').fill(creds.username);
   await page.locator('#password').fill(creds.password);
@@ -161,6 +233,18 @@ export async function signInOperator(page: Page, creds: Credentials = readOperat
 export async function openRewards(page: Page): Promise<void> {
   await page.getByRole('link', { name: 'Rewards' }).click();
   await expect(page.getByRole('heading', { name: 'Rewards', exact: true })).toBeVisible();
+}
+
+/** Open the Leaderboard from the primary navigation. */
+export async function openLeaderboard(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Leaderboard' }).click();
+  await expect(page.getByRole('heading', { name: /standing$/ })).toBeVisible();
+}
+
+/** Open the operator review queue from the primary navigation. */
+export async function openReviews(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Reviews' }).click();
+  await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible();
 }
 
 /**

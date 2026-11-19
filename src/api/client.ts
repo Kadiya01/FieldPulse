@@ -1,4 +1,4 @@
-import { getDeviceIdentity, signPayload, hashRequestBody, generateNonce } from '../crypto/keys';
+import { getDeviceIdentity, signPayload, hashRequestBody, generateNonce, sha256Hex } from '../crypto/keys';
 import {
   getAccessToken,
   setAccessToken,
@@ -13,7 +13,7 @@ export const API_BASE = '/api/v1';
  * An error carrying the server's own `error` envelope.
  *
  * The server distinguishes UNAUTHENTICATED, RATE_LIMITED, VALIDATION_FAILED
- * and so on, and several flows here branch on that distinction — a missing
+ * and so on, and several flows here branch on that distinction â€” a missing
  * pairing code is a 422 naming the field, not a 401. Flattening every response
  * to a boolean throws away the only information that tells the UI what to do
  * next, so the envelope is kept intact and `field` is surfaced separately
@@ -159,7 +159,7 @@ export async function authenticatedFetch(path: string, options: ApiRequestOption
       throw new Error('Authentication failed');
     }
 
-    // Another request — in this tab or a sibling — may have refreshed while
+    // Another request â€” in this tab or a sibling â€” may have refreshed while
     // this one was in flight. When the access token under us has already
     // changed, this 401 is already answered: retry on the new token rather than
     // start a second refresh, which would present the rotated cookie and get
@@ -226,7 +226,7 @@ async function refreshUnderLock(): Promise<boolean> {
       return getAccessToken() !== null;
     }
 
-    const response = await fetch(`${API_BASE}/auth/refresh.php`, {
+    const response = await fetch(`${API_BASE}/abh/auth/refresh.php`, {
       method: 'POST',
       // Cookies are automatically sent if withCredentials is true (or SameOrigin)
     });
@@ -235,20 +235,21 @@ async function refreshUnderLock(): Promise<boolean> {
       return false;
     }
 
-    const data = await response.json();
+    const data = await response.json() as { access_token: string; agent?: SessionAgent };
     // The rotated access token has to be stored before the caller retries.
     // RefreshController returns it under access_token; discarding it here made
     // the retry re-send the token that had just been rejected, so the 401 branch
     // recursed instead of recovering.
     setAccessToken(data.access_token);
+    lastRefreshedAgent = data.agent ?? null;
     // Tell the other tabs. One may be holding a request about to 401, and this
     // is cheaper than letting it spend the cookie again.
-    announceAccessToken(data.access_token);
+    announceAccessToken(data.access_token, data.agent);
     return true;
   };
 
   if (typeof locks?.request === 'function') {
-    return locks.request('fieldpulse:refresh', work);
+    return locks.request('abh:refresh', work);
   }
 
   // No Web Locks: still single-flight within this tab, just not across tabs.
@@ -257,8 +258,12 @@ async function refreshUnderLock(): Promise<boolean> {
 
 // A token announced by a sibling tab means our next refresh can be skipped.
 let remoteTokenSeen = false;
-onRemoteAccessToken(() => {
+let lastRefreshedAgent: SessionAgent | null = null;
+onRemoteAccessToken((_token, agent) => {
   remoteTokenSeen = true;
+  if (agent) {
+    lastRefreshedAgent = agent;
+  }
 });
 
 export interface SessionAgent {
@@ -280,23 +285,36 @@ export interface LoginResult {
   access_token: string;
   expires_in: number;
   agent: SessionAgent;
-  device_bound: boolean;
-  next_step: string;
+  device_bound: true;
 }
 
 /**
- * Exchange a username and password for a bootstrap session.
- *
- * The result is a *bootstrap* session, not a usable one: it is bound to no
- * device, so the caller must follow it with registerDevice() before making any
- * signed request. `device_bound` is returned by the server precisely so this
- * client does not have to infer it.
+ * ABH agent sign-in. The password proves account knowledge and the private
+ * P-256 key stored by this browser proves device possession. The IMEI is never
+ * sent as a credential.
  */
-export async function login(username: string, password: string): Promise<LoginResult> {
-  const response = await fetch(`${API_BASE}/auth/login.php`, {
+export async function login(phone: string, password: string): Promise<LoginResult> {
+  const device = await getDeviceIdentity();
+  if (!device) {
+    throw new Error('This browser does not have the device key used during registration. Sign in on the registered browser.');
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = generateNonce();
+  const proof = ['ABH_LOGIN', phone.trim(), device.device_uuid, String(timestamp), nonce].join('\n');
+  const signature = await signPayload(proof, device.private_key);
+
+  const response = await fetch(`${API_BASE}/abh/auth/login.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({
+      phone: phone.trim(),
+      password,
+      device_uuid: device.device_uuid,
+      timestamp,
+      nonce,
+      signature
+    })
   });
 
   if (!response.ok) {
@@ -304,31 +322,345 @@ export async function login(username: string, password: string): Promise<LoginRe
   }
 
   const data = (await response.json()) as LoginResult;
-
-  // Held in memory for the registration call that follows. Never written to
-  // storage, so a reload in the middle of login resumes from the cookie rather
-  // than from a token left lying around in localStorage.
+  lastRefreshedAgent = data.agent;
   setAccessToken(data.access_token);
-  announceAccessToken(data.access_token);
-
+  announceAccessToken(data.access_token, data.agent);
   return data;
 }
+/** ABH Monthly Enrollment self-registration contract. */
+export interface AbhAgentRegistrationInput {
+  full_name: string;
+  phone: string;
+  password: string;
+  imei: string;
+  device_type: string;
+  email?: string;
+  location?: string;
+  device_uuid: string;
+  public_key_jwk: JsonWebKey;
+  key_proof: string;
+}
 
-export async function loginAgent(imei: string): Promise<LoginResult> {
-  const response = await fetch(`${API_BASE}/auth/agent-login.php`, {
+export interface AbhAgentRegistrationResult {
+  status: 'PENDING';
+  message: string;
+  agent: {
+    id: number;
+    agent_code: string;
+    full_name: string;
+    status: 'PENDING';
+  };
+}
+
+/**
+ * Register against the ABH identity tables. This endpoint is intentionally
+ * separate from the legacy FieldPulse registration route.
+ */
+export async function registerAbhAgent(input: AbhAgentRegistrationInput): Promise<AbhAgentRegistrationResult> {
+  const response = await fetch(`${API_BASE}/abh/agents/register.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ imei })
+    body: JSON.stringify(input)
   });
 
   if (!response.ok) {
     throw await toApiError(response);
   }
 
-  const data = (await response.json()) as LoginResult;
-  setAccessToken(data.access_token);
-  announceAccessToken(data.access_token);
-  return data;
+  return await response.json() as AbhAgentRegistrationResult;
+}
+
+/** ABH monthly enrollment submission returned by the dedicated API. */
+export interface AbhNotificationItem {
+  id: number;
+  event_key: string;
+  title: string;
+  message: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface AbhNotificationList {
+  items: AbhNotificationItem[];
+  total: number;
+  unread_count: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AbhAgentRewardItem {
+  program_id: number;
+  program_code: string;
+  program_name: string;
+  program_description: string | null;
+  program_status: string;
+  period_key: string;
+  period_status: string;
+  qualification_id: number | null;
+  qualification_status: 'ELIGIBLE' | 'INELIGIBLE' | string | null;
+  frozen_rank: number | null;
+  frozen_approved_quantity: number | null;
+  evaluated_at: string | null;
+  award_id: number | null;
+  gift_title_snapshot: string | null;
+  gift_description_snapshot: string | null;
+  gift_quantity: number | null;
+  estimated_value_snapshot: string | null;
+  currency_code_snapshot: string | null;
+  award_status: string | null;
+  assigned_at: string | null;
+  approved_at: string | null;
+  paid_total: string;
+  delivered_total: number;
+  last_event_at: string | null;
+  payment_status: 'NOT_STARTED' | 'VALUE_NOT_SET' | 'UNPAID' | 'PARTIALLY_PAID' | 'PAID';
+  delivery_status: 'NOT_STARTED' | 'NOT_DELIVERED' | 'PARTIALLY_DELIVERED' | 'DELIVERED';
+  display_status: string;
+}
+
+export interface AbhAgentRewardList {
+  items: AbhAgentRewardItem[];
+  total: number;
+}
+
+export async function fetchAbhAgentRewards(): Promise<AbhAgentRewardList> {
+  const response = await authenticatedFetch('/abh/agents/rewards.php');
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhAgentRewardList };
+  return envelope.data;
+}
+
+export interface AbhLeaderboardItem {
+  agent_id: number;
+  rank_position: number;
+  agent_code: string;
+  display_name: string;
+  approved_quantity: number;
+  target_quantity: number | null;
+  progress_percent: string | null;
+  is_viewer: boolean;
+}
+
+export interface AbhLeaderboardData {
+  period_key: string;
+  period_status: 'OPEN' | 'CLOSED' | string | null;
+  total: number;
+  items: AbhLeaderboardItem[];
+  viewer: {
+    rank_position: number | null;
+    approved_quantity: number;
+    target_quantity: number | null;
+    progress_percent: string | null;
+  };
+}
+
+export interface AbhAgentSubmissionItem {
+  id: number;
+  reference_no: string;
+  status: string;
+  period_key: string;
+  activity_date: string;
+  claimed_quantity: number;
+  submitted_at: string;
+  revision_no: number;
+  agent_note: string | null;
+  review_note: string | null;
+}
+
+export interface AbhAgentMonthlySummary {
+  period_status: string | null;
+  submitted_count: number;
+  approved_quantity: number;
+  pending_count: number;
+  rejected_count: number;
+  target_quantity: number | null;
+  progress_percent: number | null;
+  leaderboard_rank: number | null;
+}
+
+export interface AbhAgentSubmissionList {
+  items: AbhAgentSubmissionItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  month: string | null;
+  summary: AbhAgentMonthlySummary | null;
+}
+
+type AbhSubmissionResponse = {
+  id: number;
+  reference_no: string;
+  status: string;
+  period_key: string;
+  activity_date: string;
+  claimed_quantity: number;
+  submitted_at: string;
+  revision_no: number;
+  idempotent_replay: boolean;
+};
+
+/**
+ * Submit monthly enrollment activity with evidence. The exact JSON payload is
+ * signed and then placed unchanged into the multipart payload field.
+ */
+export async function submitAbhEnrollment(input: {
+  idempotency_key: string;
+  reporting_month: string;
+  activity_date: string;
+  claimed_quantity: number;
+  agent_note?: string;
+  evidence: File;
+}): Promise<AbhSubmissionResponse> {
+  const evidenceHash = await sha256Hex(input.evidence);
+  const payload = {
+    idempotency_key: input.idempotency_key,
+    reporting_month: input.reporting_month,
+    activity_date: input.activity_date,
+    claimed_quantity: input.claimed_quantity,
+    ...(input.agent_note?.trim() ? { agent_note: input.agent_note.trim() } : {}),
+    evidence_sha256: evidenceHash
+  };
+  const rawPayload = JSON.stringify(payload);
+  const form = new FormData();
+  form.append('payload', rawPayload);
+  form.append('evidence', input.evidence, input.evidence.name || 'evidence');
+
+  const response = await authenticatedFetch('/abh/agents/submissions.php', {
+    method: 'POST',
+    body: form,
+    signedBody: rawPayload
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhSubmissionResponse };
+  return envelope.data;
+}
+
+/**
+ * Submit a corrected immutable revision for a submission awaiting correction.
+ * The original reporting month is retained by the API and cannot be changed.
+ */
+export async function submitAbhCorrection(input: {
+  submission_id: number;
+  idempotency_key: string;
+  reporting_month: string;
+  activity_date: string;
+  claimed_quantity: number;
+  agent_note?: string;
+  evidence: File;
+}): Promise<AbhSubmissionResponse> {
+  const evidenceHash = await sha256Hex(input.evidence);
+  const payload = {
+    submission_id: input.submission_id,
+    idempotency_key: input.idempotency_key,
+    reporting_month: input.reporting_month,
+    activity_date: input.activity_date,
+    claimed_quantity: input.claimed_quantity,
+    ...(input.agent_note?.trim() ? { agent_note: input.agent_note.trim() } : {}),
+    evidence_sha256: evidenceHash
+  };
+  const rawPayload = JSON.stringify(payload);
+  const form = new FormData();
+  form.append('payload', rawPayload);
+  form.append('evidence', input.evidence, input.evidence.name || 'evidence');
+
+  const response = await authenticatedFetch('/abh/agents/submissions.php', {
+    method: 'POST',
+    body: form,
+    signedBody: rawPayload
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhSubmissionResponse };
+  return envelope.data;
+}
+
+export async function fetchAbhAgentNotifications(limit = 25, offset = 0): Promise<AbhNotificationList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await authenticatedFetch('/abh/agents/notifications.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhNotificationList };
+  return envelope.data;
+}
+
+export async function markAbhAgentNotificationRead(notificationId: number): Promise<number> {
+  const response = await authenticatedFetch('/abh/agents/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notification_id: notificationId })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
+}
+
+export async function markAllAbhAgentNotificationsRead(): Promise<number> {
+  const response = await authenticatedFetch('/abh/agents/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mark_all: true })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
+}
+
+export async function fetchAbhAgentLeaderboard(
+  month: string,
+  limit = 25,
+  offset = 0
+): Promise<AbhLeaderboardData> {
+  const params = new URLSearchParams({
+    month,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  const response = await authenticatedFetch('/abh/agents/leaderboard.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhLeaderboardData };
+  return envelope.data;
+}
+
+export async function fetchAbhAgentSubmissions(
+  month?: string,
+  limit = 25,
+  offset = 0
+): Promise<AbhAgentSubmissionList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (month) params.set('month', month);
+
+  const response = await authenticatedFetch('/abh/agents/submissions.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as {
+    data: AbhAgentSubmissionItem[];
+    meta: {
+      total: number;
+      limit: number;
+      offset: number;
+      month: string | null;
+      summary: AbhAgentMonthlySummary | null;
+    };
+  };
+  return {
+    items: envelope.data,
+    total: envelope.meta.total,
+    limit: envelope.meta.limit,
+    offset: envelope.meta.offset,
+    month: envelope.meta.month,
+    summary: envelope.meta.summary
+  };
 }
 
 export interface AgentRegistrationInput {
@@ -337,6 +669,10 @@ export interface AgentRegistrationInput {
   phone: string;
   imei: string;
   device_type: string;
+  username: string;
+  password: string;
+  email?: string;
+  location?: string;
 }
 
 export async function registerAgent(input: AgentRegistrationInput): Promise<void> {
@@ -408,9 +744,11 @@ export async function registerDevice(pairingCode?: string): Promise<RegisterResu
 
 export async function logout(): Promise<void> {
   try {
-    await fetch(`${API_BASE}/auth/logout.php`, { method: 'POST' });
+    await fetch(`${API_BASE}/abh/auth/logout.php`, { method: 'POST' });
   } finally {
     setAccessToken(null);
+    lastRefreshedAgent = null;
+    remoteTokenSeen = false;
   }
 }
 
@@ -427,8 +765,8 @@ export type RestoreResult =
  * has to ask the server who it is. Four outcomes, and the distinction matters:
  * a live session is usable, no session means the login screen, a registered
  * server session with no local private key means the browser cleared it and the
- * device must be re-registered — which is a different screen, because the
- * user's credentials are still perfectly good — and a network failure means the
+ * device must be re-registered â€” which is a different screen, because the
+ * user's credentials are still perfectly good â€” and a network failure means the
  * question could not be asked at all.
  *
  * That last one used to be reported as "anonymous", which threw away the single
@@ -443,29 +781,30 @@ export type RestoreResult =
  * still carries a signature.
  */
 export async function restoreSession(): Promise<RestoreResult> {
-  let response: Response;
+  // The browser key is checked before spending a one-time refresh cookie. If
+  // it is missing, revoke the cookie session and require an administrator to
+  // authorize a replacement device.
+  if (!await getDeviceIdentity()) {
+    await logout().catch(() => undefined);
+    return { status: 'unregistered' };
+  }
 
+  let restored: boolean;
   try {
-    response = await fetch(`${API_BASE}/auth/refresh.php`, { method: 'POST' });
+    // Share the same cross-tab lock as ordinary 401 refreshes. Concurrent page
+    // loads must not rotate the same single-use refresh token independently.
+    restored = await refreshUnderLock();
   } catch {
     setAccessToken(null);
     return { status: 'offline' };
   }
 
-  if (!response.ok) {
+  if (!restored) {
     setAccessToken(null);
     return { status: 'anonymous' };
   }
 
-  const data = (await response.json()) as { access_token: string; agent?: SessionAgent };
-  setAccessToken(data.access_token);
-  announceAccessToken(data.access_token);
-
-  if (!await getDeviceIdentity()) {
-    return { status: 'unregistered' };
-  }
-
-  return { status: 'authenticated', agent: data.agent ?? null };
+  return { status: 'authenticated', agent: lastRefreshedAgent };
 }
 
 /**
@@ -476,7 +815,7 @@ export async function restoreSession(): Promise<RestoreResult> {
  * The local record says what this handset still has to do; this says what the
  * server decided about the evidence it already holds. They are different
  * questions with different clocks, and collapsing them into one status is how a
- * client ends up reporting "received by server" as if it were "verified" — the
+ * client ends up reporting "received by server" as if it were "verified" â€” the
  * exact claim the agent must never be able to make on the server's behalf.
  */
 export interface ServerVerification {
@@ -485,6 +824,7 @@ export interface ServerVerification {
   count_claimed: number;
   received_at: string;
   captured_at: string | null;
+  reporting_month?: string | null;
   verified_at: string | null;
   counted: boolean;
   pending: boolean;
@@ -500,7 +840,7 @@ export interface ServerVerification {
  * Fetch the server's verdict for one submission.
  *
  * `bearer`-only and scoped to the calling agent's own submissions, so no device
- * signature is needed — which also means it can be called for a submission whose
+ * signature is needed â€” which also means it can be called for a submission whose
  * photo has long since been pruned from the handset. Returns null for a
  * submission the server has never heard of, which is the normal case for one
  * that is still queued locally.
@@ -526,7 +866,7 @@ export async function fetchServerVerification(submissionUuid: string): Promise<S
  * The operator review queue.
  *
  * Operator-only on the server (`SUPERVISOR`/`ADMIN`); an `AGENT` receives 403.
- * The path is `reviews/index.php` rather than `reviews.php` — the shim files
+ * The path is `reviews/index.php` rather than `reviews.php` â€” the shim files
  * under public_html are one per route, and there is no `reviews.php`.
  */
 export interface ReviewQueueItem {
@@ -585,7 +925,7 @@ export async function fetchReviewQueue(
 /**
  * Record an approve/reject decision against a queued submission.
  *
- * `note` is mandatory server-side (5–1000 characters) and deliberately so: a
+ * `note` is mandatory server-side (5â€“1000 characters) and deliberately so: a
  * decision that overrules the automated pass without recording why produces an
  * audit trail that cannot answer the only question anyone will later ask of it.
  */
@@ -612,11 +952,11 @@ export async function decideReview(
 }
 
 /**
- * The account directory (§16).
+ * The account directory (Â§16).
  *
  * ADMIN-only on the server (`Kernel`.requireAdmin)); anyone else receives 403.
  * The list is served from the `agents` table with the handful of summary
- * columns the directory needs, and every field here is presentation — the
+ * columns the directory needs, and every field here is presentation â€” the
  * privilege checks all happen against the database row on each call.
  */
 export type AdminAgentRole = 'AGENT' | 'SUPERVISOR' | 'ADMIN';
@@ -628,20 +968,38 @@ export interface AdminAgent {
   full_name: string;
   nin: string | null;
   phone: string | null;
+  email?: string | null;
+  location?: string | null;
+  monthly_target?: number;
   self_registered: boolean;
   role: AdminAgentRole;
   status: AdminAgentStatus;
+  status_reason?: string | null;
+  status_changed_at?: string | null;
+  imei?: string | null;
+  device_type?: string | null;
   /** The login username, when the account has one. Null after credential revoke/retire. */
   username: string | null;
   has_credential: boolean;
   active_device_count: number;
   created_at: string;
+  updated_at?: string | null;
+}
+
+export interface AdminAgentFilters {
+  q?: string;
+  status?: AdminAgentStatus;
+  role?: AdminAgentRole;
+  location?: string;
+  self_registered?: boolean;
 }
 
 export interface AdminAgentList {
   agents: AdminAgent[];
   meta: {
     pagination: { total: number; limit: number; offset: number };
+    filters?: AdminAgentFilters;
+    locations?: string[];
     active_admins: number;
     requested_by: string;
   };
@@ -651,11 +1009,24 @@ export interface AdminAgentList {
  * Fetch the account directory.
  *
  * The caller identifies itself in `meta.requested_by`, which the GUI uses to
- * disable the self-guarded actions the server would refuse anyway — a nuance
+ * disable the self-guarded actions the server would refuse anyway â€” a nuance
  * worth surfacing as disabled controls rather than as 409s.
  */
-export async function fetchAdminAgents(limit = 50, offset = 0): Promise<AdminAgentList> {
+export async function fetchAdminAgents(
+  limit = 50,
+  offset = 0,
+  filters: AdminAgentFilters = {}
+): Promise<AdminAgentList> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+
+    params.set(key, typeof value === 'boolean' ? String(value) : String(value));
+  }
+
   const response = await authenticatedFetch(`/admin/agents.php?${params.toString()}`);
 
   if (!response.ok) {
@@ -673,15 +1044,24 @@ export interface CreateAdminAgentInput {
   password: string;
   /** Optional; the server defaults a new account to AGENT. */
   role?: AdminAgentRole;
+  /** Optional; the server defaults a new account to ACTIVE. */
+  status?: Exclude<AdminAgentStatus, 'DELETED'>;
+  status_reason?: string;
+  nin?: string;
+  phone?: string;
+  email?: string;
+  location?: string;
+  monthly_target?: number;
   /** An IMEI to bind at create time; optional and administrative, never a credential. */
   imei?: string;
+  device_type?: string;
 }
 
 /**
  * Create an account.
  *
  * A created account always lands ACTIVE with a credential, so the person can
- * sign in on the first try — a created account is a promise to a person, not a
+ * sign in on the first try â€” a created account is a promise to a person, not a
  * draft. Duplicate code or username answers 409 IDEMPOTENCY_CONFLICT; the UI
  * shows the server's message rather than pre-checking, because the two rows can
  * collide with a concurrent create.
@@ -704,9 +1084,11 @@ export async function createAdminAgent(input: CreateAdminAgentInput): Promise<Ad
 /** The four state-changing actions the directory supports. */
 export type AdminAgentAction =
   | { action: 'SET_ROLE'; role: AdminAgentRole }
-  | { action: 'SET_STATUS'; status: AdminAgentStatus }
+  | { action: 'SET_STATUS'; status: AdminAgentStatus; reason?: string }
   | { action: 'SET_PASSWORD'; password: string }
-  | { action: 'REVOKE_CREDENTIAL' };
+  | { action: 'REVOKE_CREDENTIAL' }
+  | { action: 'SET_MONTHLY_TARGET'; monthly_target: number }
+  | { action: 'SET_PROFILE'; email?: string | null; location?: string | null; phone?: string | null };
 
 /**
  * Apply one state-changing action to an account.
@@ -737,7 +1119,7 @@ export async function actOnAdminAgent(id: number, patch: AdminAgentAction): Prom
  *
  * `pairing_code` is the one and only time the plaintext is served. The server
  * stores only its SHA-256 and the UI must not persist it, write it to storage,
- * or echo it back — it is copied to the clipboard and read aloud.
+ * or echo it back â€” it is copied to the clipboard and read aloud.
  */
 export interface IssuePairingCodeResult extends AdminAgent {
   /** The ten-digit, single-use registration code. Show once, never store. */
@@ -774,12 +1156,364 @@ export async function issuePairingCode(id: number, label?: string): Promise<Issu
   return envelope.data;
 }
 
+/* ---------------------------------------------------------------------------
+ * Admin management (Phase 4)
+ *
+ * These reads are server-derived: the dashboard aggregates the same summary
+ * table the agent dashboard uses, period history reads the same frozen flags
+ * the reward service writes, and the audit list is the append-only ledger. The
+ * UI never computes a statistic of its own.
+ * ------------------------------------------------------------------------- */
+
+export interface AdminAuditEntry {
+  id: number;
+  actor_agent_id: number | null;
+  actor_agent_code: string | null;
+  actor_full_name: string | null;
+  action: string;
+  entity_type: string | null;
+  entity_id: number | null;
+  metadata: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface AdminDashboard {
+  period: {
+    period_type: 'MONTHLY';
+    period_start_date: string;
+    period_end_date: string;
+    business_timezone: string;
+    due: boolean;
+    frozen: boolean;
+    published: boolean;
+  };
+  agents: {
+    total: number;
+    active: number;
+    inactive: number;
+    pending: number;
+    rejected: number;
+    suspended: number;
+    retired: number;
+    self_registered: number;
+  };
+  devices: {
+    total: number;
+    active: number;
+    pending: number;
+    revoked: number;
+    disabled: number;
+  };
+  enrollments: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+    agents_reporting: number;
+  };
+  target: {
+    monthly_target: number;
+    scope: 'ORGANIZATION';
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  };
+  locations: Array<{
+    location: string;
+    agent_count: number;
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+    target: number;
+    scope: string;
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  }>;
+  top_agents: Array<{
+    agent_id: number;
+    agent_code: string;
+    full_name: string;
+    location: string | null;
+    approved: number;
+    pending: number;
+    rejected: number;
+    target: number;
+    scope: string;
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  }>;
+  recent_activity: AdminAuditEntry[];
+}
+
+export async function fetchAdminDashboard(period?: string): Promise<AdminDashboard> {
+  const params = new URLSearchParams({ period_type: 'MONTHLY' });
+
+  if (period) {
+    params.set('period', period);
+  }
+
+  const response = await authenticatedFetch(`/admin/dashboard.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminDashboard };
+  return envelope.data;
+}
+
+export type AdminTargetScope = 'ORGANIZATION' | 'LOCATION' | 'AGENT';
+
+export interface AdminTarget {
+  id: number;
+  period_start_date: string;
+  scope_type: AdminTargetScope;
+  scope_key: string;
+  scope_label: string;
+  target: number;
+  configured: boolean;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminTargetsResponse {
+  targets: AdminTarget[];
+  meta: {
+    period: string;
+    period_start_date: string;
+    period_end_date: string;
+    organization_target: number;
+    locations: string[];
+    agents: Array<{
+      id: number;
+      agent_code: string;
+      full_name: string;
+      location: string | null;
+      monthly_target: number;
+    }>;
+    available_periods: string[];
+  };
+}
+
+export async function fetchAdminTargets(period?: string): Promise<AdminTargetsResponse> {
+  const params = new URLSearchParams();
+
+  if (period) {
+    params.set('period', period);
+  }
+
+  const query = params.toString();
+  const response = await authenticatedFetch(`/admin/targets.php${query ? `?${query}` : ''}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminTarget[]; meta: AdminTargetsResponse['meta'] };
+  return { targets: envelope.data, meta: envelope.meta };
+}
+
+export interface SaveAdminTargetInput {
+  scope_type: AdminTargetScope;
+  scope_key?: string;
+  agent_id?: number;
+  location?: string;
+  period: string;
+  target: number;
+  action?: 'SET' | 'CLEAR';
+}
+
+export async function saveAdminTarget(input: SaveAdminTargetInput): Promise<AdminTarget | null> {
+  const response = await authenticatedFetch('/admin/targets.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminTarget | null };
+  return envelope.data;
+}
+
+export async function clearAdminTarget(input: Omit<SaveAdminTargetInput, 'target' | 'action'>): Promise<void> {
+  const response = await authenticatedFetch('/admin/targets.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, target: 0, action: 'CLEAR' })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
+
+export interface AdminPeriodRow {
+  period_type: 'WEEKLY' | 'MONTHLY';
+  period_start_date: string;
+  period_end_date: string;
+  due: boolean;
+  frozen: boolean;
+  published: boolean;
+  totals: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+    agents_reporting: number;
+  };
+  rewards: {
+    pending: number;
+    approved: number;
+    paid: number;
+    void: number;
+    total: number;
+  };
+}
+
+export interface AdminPeriodsResponse {
+  periods: AdminPeriodRow[];
+  meta: {
+    period_type: 'WEEKLY' | 'MONTHLY';
+    current_period: string;
+    grace_hours: number;
+    business_timezone: string;
+    available_periods: string[];
+  };
+}
+
+export async function fetchAdminPeriods(
+  periodType: 'WEEKLY' | 'MONTHLY' = 'MONTHLY',
+  limit = 12
+): Promise<AdminPeriodsResponse> {
+  const params = new URLSearchParams({ period_type: periodType, limit: String(limit) });
+  const response = await authenticatedFetch(`/admin/periods.php?${params.toString()}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminPeriodRow[]; meta: AdminPeriodsResponse['meta'] };
+  return { periods: envelope.data, meta: envelope.meta };
+}
+
+export interface CloseAdminPeriodResult {
+  closed: boolean;
+  reason: string;
+  period: string;
+  period_type: 'WEEKLY' | 'MONTHLY';
+  frozen: number;
+  published: number;
+  period_end_date: string;
+}
+
+export async function closeAdminPeriod(
+  period: string,
+  periodType: 'WEEKLY' | 'MONTHLY' = 'MONTHLY'
+): Promise<CloseAdminPeriodResult> {
+  const response = await authenticatedFetch('/admin/periods.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ period_type: periodType, period, action: 'CLOSE' })
+  });
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: CloseAdminPeriodResult };
+  return envelope.data;
+}
+
+export interface AdminAuditFilters {
+  limit?: number;
+  offset?: number;
+  action?: string;
+  actor_agent_id?: number;
+  entity_type?: string;
+  entity_id?: number;
+}
+
+export interface AdminAuditResponse {
+  entries: AdminAuditEntry[];
+  meta: {
+    pagination: { total: number; limit: number; offset: number };
+    filters: AdminAuditFilters;
+  };
+}
+
+export async function fetchAdminAudit(filters: AdminAuditFilters = {}): Promise<AdminAuditResponse> {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+
+    params.set(key, String(value));
+  }
+
+  const query = params.toString();
+  const response = await authenticatedFetch(`/admin/audit.php${query ? `?${query}` : ''}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAuditEntry[]; meta: AdminAuditResponse['meta'] };
+  return { entries: envelope.data, meta: envelope.meta };
+}
+
+export interface AdminAgentDetail extends AdminAgent {
+  devices: Array<{
+    id: number;
+    device_uuid: string;
+    status: string;
+    registered_at: string | null;
+    last_seen_at: string | null;
+    imei: string | null;
+  }>;
+  recent_audit: AdminAuditEntry[];
+  targets: AdminTarget[];
+  target: {
+    target: number;
+    configured: boolean;
+    scope: string;
+    scope_key: string;
+    period_start_date: string;
+  };
+  summary: {
+    approved: number;
+    pending: number;
+    rejected: number;
+    submissions: number;
+  };
+}
+
+export async function fetchAdminAgentDetail(id: number): Promise<AdminAgentDetail> {
+  const response = await authenticatedFetch(`/admin/agent.php?id=${encodeURIComponent(String(id))}`);
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  const envelope = (await response.json()) as { data: AdminAgentDetail };
+  return envelope.data;
+}
+
 /**
- * Rewards (§14).
+ * Rewards (Â§14).
  *
  * A published entitlement, not a live figure. Every number here was copied onto
  * the row when the period closed and is served from the frozen ranking, so it
- * does not move when later submissions are verified — see `docs/REWARDS.md`.
+ * does not move when later submissions are verified â€” see `docs/REWARDS.md`.
  *
  * `status` and `is_paid` are deliberately separate fields. `PENDING` and
  * `APPROVED` are published entitlements; only `PAID` means the organisation has
@@ -787,10 +1521,13 @@ export async function issuePairingCode(id: number, label?: string): Promise<Issu
  * been paid when they had not, so the UI branches on `is_paid`, never on the
  * absence of `PENDING`.
  */
+export type PeriodType = 'WEEKLY' | 'MONTHLY';
+
 export type RewardStatus = 'PENDING' | 'APPROVED' | 'PAID' | 'VOID';
 
 export interface Reward {
   id: number;
+  period_type?: PeriodType;
   period_start_date: string;
   rank: number;
   total_verified_count: number;
@@ -821,8 +1558,11 @@ export interface MyRewards {
   meta: { agent_code: string; grace_hours: number; payment_note: string };
 }
 
-export async function fetchMyRewards(limit = 24): Promise<MyRewards> {
+export async function fetchMyRewards(limit = 24, periodType?: PeriodType): Promise<MyRewards> {
   const params = new URLSearchParams({ limit: String(limit) });
+  if (periodType) {
+    params.set('period_type', periodType);
+  }
   const response = await authenticatedFetch(`/rewards/self.php?${params.toString()}`);
 
   if (!response.ok) {
@@ -841,6 +1581,7 @@ export interface RewardPeriod {
   rewards: OperatorReward[];
   meta: {
     period: string;
+    period_type?: PeriodType;
     closed: boolean;
     available_periods: string[];
     tiers: { id: number; min_rank: number; max_rank: number; tier_label: string }[];
@@ -848,10 +1589,13 @@ export interface RewardPeriod {
   };
 }
 
-export async function fetchPeriodRewards(period?: string, limit = 100): Promise<RewardPeriod> {
+export async function fetchPeriodRewards(period?: string, limit = 100, periodType?: PeriodType): Promise<RewardPeriod> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (period) {
     params.set('period', period);
+  }
+  if (periodType) {
+    params.set('period_type', periodType);
   }
 
   const response = await authenticatedFetch(`/rewards/index.php?${params.toString()}`);
@@ -888,7 +1632,7 @@ export async function decideReward(
 }
 
 /**
- * The weekly standing (§13).
+ * The weekly standing (Â§13).
  *
  * Served entirely from the summary table, never by aggregating submissions, so
  * the shape is a ranked list plus the caller's own row even when that row is off
@@ -916,6 +1660,7 @@ export interface LeaderboardSelf {
 }
 
 export interface Leaderboard {
+  period_type?: PeriodType;
   period_start_date: string;
   scope: 'GLOBAL' | 'SITE';
   site_id: number | null;
@@ -925,8 +1670,15 @@ export interface Leaderboard {
   available_periods: string[];
 }
 
-export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
-  const qs = period ? `?period=${encodeURIComponent(period)}` : '';
+export async function fetchLeaderboard(period?: string, periodType?: PeriodType): Promise<Leaderboard> {
+  const params = new URLSearchParams();
+  if (period) {
+    params.set('period', period);
+  }
+  if (periodType) {
+    params.set('period_type', periodType);
+  }
+  const qs = params.toString() ? `?${params.toString()}` : '';
   const response = await authenticatedFetch(`/leaderboard.php${qs}`);
 
   if (!response.ok) {
@@ -935,6 +1687,7 @@ export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
 
   const envelope = (await response.json()) as {
     data: {
+      period_type?: PeriodType;
       period_start_date: string;
       scope: 'GLOBAL' | 'SITE';
       site_id: number | null;
@@ -942,11 +1695,1058 @@ export async function fetchLeaderboard(period?: string): Promise<Leaderboard> {
       pagination: { total: number; limit: number; offset: number };
       you: LeaderboardSelf | null;
     };
-    meta: { available_periods: string[] };
+    meta: { available_periods: string[]; period_type?: PeriodType };
   };
 
   return {
     ...envelope.data,
+    period_type: envelope.data.period_type ?? envelope.meta.period_type,
     available_periods: envelope.meta.available_periods
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 3: ABH Monthly Enrollment Dashboard, Profile & Notifications
+// ---------------------------------------------------------------------------
+
+export interface DashboardData {
+  agent: {
+    id: number;
+    agent_code: string;
+    full_name: string;
+    email: string | null;
+    location: string | null;
+    monthly_target: number;
+  };
+  period: {
+    period_type: PeriodType;
+    period_start_date: string;
+    business_timezone: string;
+  };
+  totals: {
+    approved_enrollments: number;
+    total_submissions: number;
+    pending: number;
+    rejected: number;
+  };
+  target: {
+    monthly_target: number;
+    configured: boolean;
+    achievement_percent: number | null;
+    remaining: number | null;
+  };
+  leaderboard: {
+    rank: number | null;
+    total_agents: number;
+  };
+  recent_submissions: {
+    submission_id: number;
+    submission_uuid: string;
+    count_claimed: number;
+    reporting_month: string | null;
+    status: string;
+    received_at: string;
+    verified_at: string | null;
+  }[];
+  notifications: {
+    unread_count: number;
+    items: {
+      id: number;
+      type: string;
+      title: string;
+      message: string;
+      read_at: string | null;
+      created_at: string;
+    }[];
+  };
+}
+
+export async function fetchDashboard(): Promise<DashboardData> {
+  const response = await authenticatedFetch('/dashboard.php');
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: DashboardData };
+  return envelope.data;
+}
+
+export interface ProfileData {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  nin: string | null;
+  phone: string | null;
+  email: string | null;
+  location: string | null;
+  imei: string | null;
+  device_type: string | null;
+  role: string;
+  status: string;
+  monthly_target: number;
+  created_at: string;
+}
+
+export interface ProfileUpdateInput {
+  email?: string;
+  location?: string;
+  phone: string;
+}
+
+export async function fetchProfile(): Promise<ProfileData> {
+  const response = await authenticatedFetch('/profile.php');
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: ProfileData };
+  return envelope.data;
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await authenticatedFetch('/auth/password.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
+
+export async function updateProfile(input: ProfileUpdateInput): Promise<ProfileData> {
+  const body = JSON.stringify(input);
+  const response = await authenticatedFetch('/profile.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: ProfileData };
+  return envelope.data;
+}
+
+export interface NotificationItem {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  entity_type: string | null;
+  entity_id: number | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationList {
+  items: NotificationItem[];
+  meta: {
+    unread_count: number;
+    pagination: {
+      limit: number;
+      offset: number;
+    };
+  };
+}
+
+export async function fetchNotifications(limit = 50, offset = 0): Promise<NotificationList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await authenticatedFetch('/notifications.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: NotificationItem[]; meta: NotificationList['meta'] };
+  return { items: envelope.data, meta: envelope.meta };
+}
+
+export async function markNotificationRead(id?: number): Promise<{ unread_count: number }> {
+  const body = id !== undefined ? JSON.stringify({ id }) : JSON.stringify({ mark_all: true });
+  const response = await authenticatedFetch('/notifications/read.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = (await response.json()) as { data: { unread_count: number } };
+  return envelope.data;
+}
+
+
+// ---------------------------------------------------------------------------
+// ABH administrator API. It intentionally has a separate in-memory token,
+// refresh cookie, Web Lock and BroadcastChannel from agent authentication.
+// ---------------------------------------------------------------------------
+
+export interface SessionAdmin {
+  id: number;
+  full_name: string;
+  email: string;
+  roles: string[];
+  permissions: string[];
+}
+
+export interface AbhAdminUserItem {
+  id: number;
+  full_name: string;
+  email: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  last_login_at: string | null;
+  created_at: string;
+  role_key: string | null;
+  role_name: string | null;
+}
+export interface AbhAdminRoleItem {
+  id: number;
+  role_key: string;
+  role_name: string;
+  description: string | null;
+  permissions: string[];
+}
+export interface AbhAdminUsersData {
+  users: AbhAdminUserItem[];
+  roles: AbhAdminRoleItem[];
+}
+
+export interface AbhAdminDashboardData {
+  period: {
+    id: number;
+    period_key: string;
+    starts_on: string;
+    ends_on: string;
+    timezone: string;
+    status: 'OPEN' | 'CLOSED' | string;
+    closed_at: string | null;
+  } | null;
+  agents: {
+    total: number;
+    pending: number;
+    active: number;
+    rejected: number;
+    suspended: number;
+  } | null;
+  submissions: {
+    total: number;
+    pending_review: number;
+    correction_requested: number;
+    approved: number;
+    rejected: number;
+    claimed_quantity: number;
+  } | null;
+  performance: {
+    approved_quantity: number;
+    organisation_target: number | null;
+    progress_percent: string | null;
+    top_agents: Array<{
+      agent_id: number;
+      agent_code: string;
+      full_name: string;
+      approved_quantity: number;
+      target_quantity: number | null;
+      rank_position: number;
+      progress_percent: string | null;
+    }>;
+  } | null;
+  rewards: {
+    programs_by_status: Record<string, number>;
+    qualifications_by_status: Record<string, number>;
+    awards_by_status: Record<string, number>;
+    paid_events: number;
+    delivered_events: number;
+  } | null;
+};
+
+export interface AdminLoginResult {
+  access_token: string;
+  expires_in: number;
+  admin: SessionAdmin;
+}
+
+export interface AdminAgentItem {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  email: string | null;
+  location_text: string | null;
+  status: 'PENDING' | 'ACTIVE' | 'REJECTED' | 'SUSPENDED';
+  status_reason: string | null;
+  registered_at: string;
+  approved_at: string | null;
+  device_count: number;
+  pending_device_count: number;
+  active_device_count: number;
+}
+
+let adminAccessToken: string | null = null;
+let adminLastIdentity: SessionAdmin | null = null;
+let adminRemoteTokenSeen = false;
+let adminRefreshInFlight: Promise<boolean> | null = null;
+const adminChannel = typeof window !== 'undefined' && typeof BroadcastChannel === 'function'
+  ? new BroadcastChannel('abh-admin-session')
+  : null;
+
+adminChannel?.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as { type?: string; access_token?: string; admin?: SessionAdmin };
+  if (data?.type === 'token' && typeof data.access_token === 'string') {
+    adminAccessToken = data.access_token;
+    adminLastIdentity = data.admin ?? null;
+    adminRemoteTokenSeen = true;
+  } else if (data?.type === 'logout') {
+    adminAccessToken = null;
+    adminLastIdentity = null;
+    adminRemoteTokenSeen = false;
+  }
+});
+
+function announceAdminToken(token: string, admin: SessionAdmin): void {
+  adminChannel?.postMessage({ type: 'token', access_token: token, admin });
+}
+
+async function refreshAdminUnderLock(): Promise<boolean> {
+  const locks = navigator.locks;
+  if (typeof locks?.request !== 'function') {
+    throw new Error('Secure administrator session restoration requires a browser with Web Locks support.');
+  }
+
+  const work = async (): Promise<boolean> => {
+    if (adminRemoteTokenSeen && adminAccessToken) {
+      adminRemoteTokenSeen = false;
+      return true;
+    }
+
+    const response = await fetch(`${API_BASE}/abh/admin/auth/refresh.php`, {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    if (!response.ok) {
+      adminAccessToken = null;
+      adminLastIdentity = null;
+      return false;
+    }
+
+    const data = await response.json() as AdminLoginResult;
+    adminAccessToken = data.access_token;
+    adminLastIdentity = data.admin;
+    announceAdminToken(data.access_token, data.admin);
+    return true;
+  };
+
+  return locks.request('abh:admin:refresh', work);
+}
+
+async function refreshAdmin(): Promise<boolean> {
+  if (adminRefreshInFlight) {
+    return adminRefreshInFlight;
+  }
+  adminRefreshInFlight = refreshAdminUnderLock()
+    .catch(() => false)
+    .finally(() => { adminRefreshInFlight = null; });
+  return adminRefreshInFlight;
+}
+
+export async function adminLogin(email: string, password: string): Promise<AdminLoginResult> {
+  const response = await fetch(`${API_BASE}/abh/admin/auth/login.php`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.trim(), password })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const data = await response.json() as AdminLoginResult;
+  adminAccessToken = data.access_token;
+  adminLastIdentity = data.admin;
+  adminRemoteTokenSeen = false;
+  announceAdminToken(data.access_token, data.admin);
+  return data;
+}
+
+export async function restoreAdminSession(): Promise<SessionAdmin | null> {
+  const restored = await refreshAdmin();
+  return restored ? adminLastIdentity : null;
+}
+
+export async function adminLogout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/abh/admin/auth/logout.php`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: adminAccessToken ? { Authorization: `Bearer ${adminAccessToken}` } : {}
+    });
+  } finally {
+    adminAccessToken = null;
+    adminLastIdentity = null;
+    adminRemoteTokenSeen = false;
+    adminChannel?.postMessage({ type: 'logout' });
+  }
+}
+
+export async function adminAuthenticatedFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const send = () => fetch(`${API_BASE}${path}`, {
+    ...options,
+    credentials: 'same-origin',
+    headers: {
+      ...(options.headers ?? {}),
+      ...(adminAccessToken ? { Authorization: `Bearer ${adminAccessToken}` } : {})
+    }
+  });
+
+  let response = await send();
+  if (response.status === 401) {
+    if (!await refreshAdmin()) {
+      adminAccessToken = null;
+      adminLastIdentity = null;
+      adminChannel?.postMessage({ type: 'logout' });
+      window.dispatchEvent(new CustomEvent('admin_auth_failure'));
+      return response;
+    }
+    response = await send();
+  }
+  return response;
+}
+
+export async function bootstrapFirstAdmin(input: {
+  bootstrap_key: string;
+  full_name: string;
+  email: string;
+  password: string;
+}): Promise<{ id: number; full_name: string; email: string }> {
+  const response = await fetch(`${API_BASE}/abh/admin/auth/bootstrap.php`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { admin: { id: number; full_name: string; email: string } };
+  return envelope.admin;
+}
+
+export type AbhAdminSubmissionStatus =
+  | 'PENDING_REVIEW'
+  | 'CORRECTION_REQUESTED'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'ALL';
+
+export interface AbhAdminSubmissionItem {
+  id: number;
+  reference_no: string;
+  status: string;
+  submitted_at: string;
+  period_key: string;
+  period_status: string;
+  agent_id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  location_text: string | null;
+  revision_id: number;
+  revision_no: number;
+  claimed_quantity: number;
+  activity_date: string;
+  agent_note: string | null;
+  original_filename: string;
+  mime_type: string;
+  byte_size: number;
+  sha256: string;
+  review_count: number;
+}
+
+export interface AbhAdminSubmissionList {
+  items: AbhAdminSubmissionItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function fetchAbhAdminNotifications(limit = 25, offset = 0): Promise<AbhNotificationList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await adminAuthenticatedFetch('/abh/admin/notifications.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhNotificationList };
+  return envelope.data;
+}
+
+export async function markAbhAdminNotificationRead(notificationId: number): Promise<number> {
+  const response = await adminAuthenticatedFetch('/abh/admin/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notification_id: notificationId })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
+}
+
+export async function markAllAbhAdminNotificationsRead(): Promise<number> {
+  const response = await adminAuthenticatedFetch('/abh/admin/notifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mark_all: true })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: { marked_read: number } };
+  return envelope.data.marked_read;
+}
+
+export async function fetchAbhAdminLeaderboard(
+  month: string,
+  limit = 50,
+  offset = 0
+): Promise<AbhLeaderboardData> {
+  const params = new URLSearchParams({
+    month,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  const response = await adminAuthenticatedFetch('/abh/admin/leaderboard.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhLeaderboardData };
+  return envelope.data;
+}
+
+export async function fetchAbhAdminSubmissions(
+  status: AbhAdminSubmissionStatus = 'PENDING_REVIEW',
+  month?: string,
+  limit = 50,
+  offset = 0
+): Promise<AbhAdminSubmissionList> {
+  const params = new URLSearchParams({
+    status,
+    limit: String(limit),
+    offset: String(offset)
+  });
+  if (month) params.set('month', month);
+
+  const response = await adminAuthenticatedFetch('/abh/admin/submissions.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.json() as AbhAdminSubmissionList;
+}
+
+export async function fetchAbhAdminSubmissionEvidence(submissionId: number): Promise<Blob> {
+  const response = await adminAuthenticatedFetch(
+    '/abh/admin/submission-evidence.php?id=' + encodeURIComponent(String(submissionId))
+  );
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.blob();
+}
+
+export async function decideAbhAdminSubmission(
+  submissionId: number,
+  decision: 'APPROVE' | 'REJECT' | 'REQUEST_CORRECTION',
+  reason: string | undefined,
+  idempotencyKey: string
+): Promise<{
+  submission_id: number;
+  reference_no: string;
+  status: string;
+  decision: string;
+  idempotent_replay: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/submission-decision.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      submission_id: submissionId,
+      decision,
+      ...(reason ? { reason } : {}),
+      idempotency_key: idempotencyKey
+    })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as {
+    data: {
+      submission_id: number;
+      reference_no: string;
+      status: string;
+      decision: string;
+      idempotent_replay: boolean;
+    };
+  };
+  return envelope.data;
+}
+
+export interface AbhAdminTargetAgent {
+  id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  location_text: string | null;
+}
+
+export interface AbhAdminAgentTarget {
+  target_id: number;
+  agent_id: number;
+  agent_code: string;
+  full_name: string;
+  phone: string;
+  target_quantity: number;
+  updated_at: string;
+}
+
+export interface AbhAdminTargetData {
+  period: {
+    id: number;
+    period_key: string;
+    starts_on: string;
+    ends_on: string;
+    timezone: string;
+    status: 'OPEN' | 'CLOSED' | string;
+    closed_at: string | null;
+  } | null;
+  organisation_target: number | null;
+  agent_targets: AbhAdminAgentTarget[];
+  agents: AbhAdminTargetAgent[];
+  pending_submissions_count: number;
+  organisation_snapshot: {
+    approved_quantity: number;
+    target_quantity: number | null;
+    progress_percent: string | null;
+    agent_count: number;
+    closed_at: string;
+  } | null;
+}
+
+export async function fetchAbhAdminTargets(month: string): Promise<AbhAdminTargetData> {
+  const params = new URLSearchParams({ month });
+  const response = await adminAuthenticatedFetch('/abh/admin/targets.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhAdminTargetData };
+  return envelope.data;
+}
+
+export async function saveAbhAdminTarget(input: {
+  period_key: string;
+  scope_type: 'ORGANISATION' | 'AGENT';
+  agent_id?: number;
+  target_quantity: number;
+}): Promise<{
+  id: number;
+  period_key: string;
+  scope_type: 'ORGANISATION' | 'AGENT';
+  agent_id: number | null;
+  target_quantity: number;
+  created: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/targets.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: {
+    id: number;
+    period_key: string;
+    scope_type: 'ORGANISATION' | 'AGENT';
+    agent_id: number | null;
+    target_quantity: number;
+    created: boolean;
+  } };
+  return envelope.data;
+}
+
+export interface AbhRewardProgram {
+  id: number;
+  program_code: string;
+  name: string;
+  description: string | null;
+  status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'CLOSED';
+  period_key: string;
+  active_rule_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AbhRewardRule {
+  id: number;
+  program_id: number;
+  rule_key: string;
+  rule_version: number;
+  rank_from: number | null;
+  rank_to: number | null;
+  minimum_approved_quantity: number | null;
+  eligibility_conditions_json: string;
+  is_active: boolean | number;
+  created_at: string;
+}
+
+export async function fetchAbhRewardPrograms(month: string): Promise<AbhRewardProgram[]> {
+  const params = new URLSearchParams({ month });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { items: AbhRewardProgram[] } };
+  return envelope.data.items;
+}
+
+export async function createAbhRewardProgram(input: {
+  period_key: string;
+  program_code: string;
+  name: string;
+  description?: string;
+}): Promise<{ id: number; program_code: string; name: string; status: 'DRAFT' }> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { id: number; program_code: string; name: string; status: 'DRAFT' } };
+  return envelope.data;
+}
+
+export async function updateAbhRewardProgram(input: {
+  program_id: number;
+  program_code: string;
+  name: string;
+  description?: string;
+}): Promise<{ id: number; program_code: string; name: string; description: string | null; status: 'DRAFT' }> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'UPDATE', ...input })
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: {
+    id: number; program_code: string; name: string; description: string | null; status: 'DRAFT'
+  } };
+  return envelope.data;
+}
+
+export async function activateAbhRewardProgram(programId: number): Promise<{ id: number; status: 'ACTIVE' }> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-programs.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'ACTIVATE', program_id: programId })
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { id: number; status: 'ACTIVE' } };
+  return envelope.data;
+}
+
+export async function fetchAbhRewardRules(programId: number): Promise<AbhRewardRule[]> {
+  const params = new URLSearchParams({ program_id: String(programId) });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-rules.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: { items: AbhRewardRule[] } };
+  return envelope.data.items;
+}
+
+export async function createAbhRewardRule(input: {
+  program_id: number;
+  rule_key: string;
+  rank_from?: number | null;
+  rank_to?: number | null;
+  minimum_approved_quantity?: number | null;
+}): Promise<AbhRewardRule> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-rules.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhRewardRule };
+  return envelope.data;
+}
+
+export interface AbhRewardQualificationItem {
+  agent_id: number;
+  agent_code: string;
+  display_name: string;
+  rank_position: number;
+  approved_quantity: number;
+  qualification_status: 'ELIGIBLE' | 'INELIGIBLE';
+  matched_rule: { id: number; rule_key: string; rule_version: number } | null;
+}
+
+export interface AbhRewardQualificationPreview {
+  program_id: number;
+  period_key: string;
+  period_status: 'CLOSED';
+  program_status: 'ACTIVE';
+  snapshot_count: number;
+  eligible_count: number;
+  ineligible_count: number;
+  items: AbhRewardQualificationItem[];
+  read_only: true;
+}
+
+export async function fetchAbhRewardQualificationPreview(programId: number): Promise<AbhRewardQualificationPreview> {
+  const params = new URLSearchParams({ program_id: String(programId) });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-qualifications.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhRewardQualificationPreview };
+  return envelope.data;
+}
+
+export async function evaluateAbhRewardQualifications(programId: number): Promise<{
+  program_id: number;
+  period_key: string;
+  evaluated_count: number;
+  eligible_count?: number;
+  ineligible_count?: number;
+  idempotent_replay: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-qualifications.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'EVALUATE', program_id: programId })
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: {
+    program_id: number; period_key: string; evaluated_count: number;
+    eligible_count?: number; ineligible_count?: number; idempotent_replay: boolean;
+  } };
+  return envelope.data;
+}
+
+export interface AbhRewardLifecycleData {
+  gifts: Array<{
+    id: number; program_id: number; gift_code: string; gift_title: string;
+    gift_description: string | null; available_quantity: number | null;
+    estimated_value: string | null; currency_code: string | null; status: string;
+    assigned_quantity: number;
+  }>;
+  qualifications: Array<{
+    id: number; agent_id: number; qualification_status: 'ELIGIBLE';
+    frozen_rank: number; frozen_approved_quantity: number; agent_code: string; display_name: string;
+  }>;
+  awards: Array<{
+    id: number; qualification_id: number; gift_id: number; agent_id: number;
+    gift_title_snapshot: string; gift_quantity: number; award_status: string;
+    assigned_by_admin_id: number; approved_by_admin_id: number | null;
+    agent_code: string; display_name: string; paid_amount: string; delivered_quantity: number;
+    estimated_value_snapshot: string | null; currency_code_snapshot: string | null;
+  }>;
+  events: Array<{
+    id: number; award_id: number; event_type: 'PAYMENT' | 'DELIVERY';
+    quantity: number | null; amount: string | null; currency_code: string | null;
+    reference_no: string | null; note: string | null; recorded_by_admin_id: number; created_at: string;
+  }>;
+}
+
+async function postAbhRewardLifecycle<T>(input: Record<string, unknown>): Promise<T> {
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-lifecycle.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input)
+  });
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: T };
+  return envelope.data;
+}
+
+export async function fetchAbhRewardLifecycle(programId: number): Promise<AbhRewardLifecycleData> {
+  const params = new URLSearchParams({ program_id: String(programId) });
+  const response = await adminAuthenticatedFetch('/abh/admin/reward-lifecycle.php?' + params.toString());
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhRewardLifecycleData };
+  return envelope.data;
+}
+
+export function createAbhRewardGift(input: {
+  program_id: number; gift_code: string; gift_title: string; gift_description?: string;
+  available_quantity?: number | null; estimated_value?: string; currency_code?: string;
+}): Promise<{ id: number; gift_code: string; gift_title: string; status: 'ACTIVE' }> {
+  return postAbhRewardLifecycle({ action: 'CREATE_GIFT', ...input });
+}
+
+export function updateAbhRewardGift(input: {
+  program_id: number; gift_id: number; gift_title: string; gift_description?: string;
+  available_quantity?: number | null; estimated_value?: string; currency_code?: string; status: 'ACTIVE' | 'INACTIVE';
+}): Promise<{ id: number; status: 'ACTIVE' | 'INACTIVE' }> {
+  return postAbhRewardLifecycle({ action: 'UPDATE_GIFT', ...input });
+}
+
+export function assignAbhRewardGift(input: {
+  program_id: number; qualification_id: number; gift_id: number; quantity: number;
+}): Promise<{ id: number; award_status: 'PENDING_APPROVAL' }> {
+  return postAbhRewardLifecycle({ action: 'ASSIGN_GIFT', ...input });
+}
+
+export function approveAbhRewardAward(awardId: number): Promise<{ id: number; award_status: 'APPROVED' }> {
+  return postAbhRewardLifecycle({ action: 'APPROVE_AWARD', award_id: awardId });
+}
+
+export function recordAbhRewardPayment(input: {
+  award_id: number; amount: string; currency_code: string; reference_no?: string; note?: string;
+  idempotency_key: string;
+}): Promise<{ id: number; idempotent_replay: boolean }> {
+  return postAbhRewardLifecycle({ action: 'RECORD_PAYMENT', ...input });
+}
+
+export function recordAbhRewardDelivery(input: {
+  award_id: number; quantity: number; reference_no?: string; note?: string; idempotency_key: string;
+}): Promise<{ id: number; idempotent_replay: boolean }> {
+  return postAbhRewardLifecycle({ action: 'RECORD_DELIVERY', ...input });
+}
+
+export async function closeAbhReportingPeriod(periodKey: string): Promise<{
+  period_key: string;
+  status: 'CLOSED';
+  approved_quantity: number;
+  organisation_target: number | null;
+  progress_percent: string | null;
+  ranked_agent_count: number;
+  closed_by_admin_id: number;
+  idempotent_replay: boolean;
+}> {
+  const response = await adminAuthenticatedFetch('/abh/admin/period-close.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ period_key: periodKey })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: {
+    period_key: string;
+    status: 'CLOSED';
+    approved_quantity: number;
+    organisation_target: number | null;
+    progress_percent: string | null;
+    ranked_agent_count: number;
+    closed_by_admin_id: number;
+    idempotent_replay: boolean;
+  } };
+  return envelope.data;
+}
+
+export async function fetchAbhAdminAgents(
+  status: AdminAgentItem['status'] | 'ALL' = 'PENDING',
+  search = '',
+  limit = 25,
+  offset = 0
+): Promise<{ items: AdminAgentItem[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams({
+    status, q: search, limit: String(limit), offset: String(offset)
+  });
+  const response = await adminAuthenticatedFetch('/abh/admin/agents.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.json() as { items: AdminAgentItem[]; total: number; limit: number; offset: number };
+}
+
+export async function fetchAbhAdminDashboard(month: string): Promise<AbhAdminDashboardData> {
+  const params = new URLSearchParams({ month });
+  const response = await adminAuthenticatedFetch('/abh/admin/dashboard.php?' + params.toString());
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const envelope = await response.json() as { data: AbhAdminDashboardData };
+  return envelope.data;
+}
+
+export async function fetchAbhAdminUsers(): Promise<AbhAdminUsersData> {
+  const response = await adminAuthenticatedFetch('/abh/admin/users.php');
+  if (!response.ok) throw await toApiError(response);
+  const envelope = await response.json() as { data: AbhAdminUsersData };
+  return envelope.data;
+}
+
+export async function createAbhAdminUser(input: {
+  full_name: string; email: string; password: string; role_key: string;
+}): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/users.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'CREATE', ...input })
+  });
+  if (!response.ok) throw await toApiError(response);
+}
+
+export async function updateAbhAdminUser(input: {
+  admin_id: number; status: 'ACTIVE' | 'SUSPENDED'; role_key: string;
+}): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/users.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'UPDATE', ...input })
+  });
+  if (!response.ok) throw await toApiError(response);
+}
+
+export async function decideAbhAdminAgent(
+  agentId: number,
+  decision: 'APPROVE' | 'REJECT' | 'SUSPEND' | 'REACTIVATE',
+  reason?: string
+): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/agent-decision.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, decision, ...(reason ? { reason } : {}) })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
+
+export async function decideAbhAdminDevice(
+  deviceId: number,
+  decision: 'APPROVE' | 'REVOKE',
+  reason?: string
+): Promise<void> {
+  const response = await adminAuthenticatedFetch('/abh/admin/device-decision.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id: deviceId, decision, ...(reason ? { reason } : {}) })
+  });
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+}
+
+
+export interface AdminAgentDetails {
+  agent: {
+    id: number;
+    agent_code: string;
+    full_name: string;
+    phone: string;
+    email: string | null;
+    location_text: string | null;
+    status: string;
+    status_reason: string | null;
+    registered_at: string;
+    approved_at: string | null;
+    approved_by_admin_id: number | null;
+  };
+  devices: Array<{
+    id: number;
+    device_type: string | null;
+    imei_value: string;
+    status: 'PENDING' | 'ACTIVE' | 'REVOKED';
+    registered_at: string;
+    verified_at: string | null;
+    revoked_at: string | null;
+    last_seen_at: string | null;
+  }>;
+}
+
+export async function fetchAbhAdminAgentDetails(agentId: number): Promise<AdminAgentDetails> {
+  const response = await adminAuthenticatedFetch('/abh/admin/agent.php?id=' + encodeURIComponent(String(agentId)));
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return await response.json() as AdminAgentDetails;
 }

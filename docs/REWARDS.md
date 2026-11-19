@@ -1,13 +1,13 @@
 # Rewards
 
-FieldPulse reports weekly activity, the server verifies it, and the
-organisation rewards agents from their **frozen** verified weekly standing. This
-document describes the last part of that sentence: how a week closes, how an
+FieldPulse reports weekly and monthly activity, the server verifies it, and the
+organisation rewards agents from their **frozen** verified standing. This
+document describes the last part of that sentence: how a period closes, how an
 entitlement is published, and what an operator may do with it afterwards.
 
 ## The cutoff rule
 
-> At period close, only the frozen verified weekly ranking determines reward eligibility and rank; later changes to live performance summaries do not change an already published reward entitlement.
+> At period close, only the frozen verified ranking determines reward eligibility and rank; later changes to live performance summaries do not change an already published reward entitlement.
 
 Everything else here is that rule made mechanical. If a change you are about to
 make would let a published entitlement move because a live summary moved, the
@@ -15,10 +15,30 @@ change is wrong.
 
 ## Periods
 
-A period is one business week, identified by `period_start_date`, the Monday
-`00:00:00` in the configured business timezone (`APP_TIMEZONE`, default
-`Africa/Lagos`). Periods are produced by `Domain\PeriodResolver`, which is the
-only place the boundary arithmetic lives.
+FieldPulse supports both **WEEKLY** and **MONTHLY** reporting periods, discriminated by `period_type`:
+
+- **WEEKLY**: One business week, identified by `period_start_date` as the Monday `00:00:00` in the configured business timezone (`APP_TIMEZONE`, default `Africa/Lagos`).
+- **MONTHLY**: One calendar month, identified by `period_start_date` as the first day of the month (`YYYY-MM-01 00:00:00`) in `APP_TIMEZONE`.
+
+Periods are produced by `Domain\PeriodResolver`, which is the only place boundary and period arithmetic lives.
+
+### Preserving historical records
+
+Migration 026 restores the `period_type ENUM('WEEKLY', 'MONTHLY') NOT NULL DEFAULT 'WEEKLY'` discriminator across:
+1. `agent_performance_summary`
+2. `reward_rankings`
+3. `agent_rewards`
+
+All historical records are backfilled and defaulted to `WEEKLY`, preserving all existing weekly data and functionality without change.
+
+### Collision prevention
+
+Because a monthly period always begins on the 1st of the month, and a weekly period can also begin on the 1st of the month (when the 1st falls on a Monday), `period_type` is included in all unique keys and composite primary keys:
+- `agent_performance_summary`: `PRIMARY KEY (agent_id, period_start_date, period_type)`
+- `reward_rankings`: `PRIMARY KEY (period_start_date, rank, period_type)` and `UNIQUE KEY (period_start_date, agent_id, period_type)`
+- `agent_rewards`: `PRIMARY KEY (id)`, `UNIQUE KEY (agent_id, period_start_date, period_type)`, and `FOREIGN KEY fk_reward_ranking (period_start_date, agent_id, period_type) REFERENCES reward_rankings (period_start_date, agent_id, period_type)`
+
+This structural separation ensures that weekly and monthly performance summaries, frozen rankings, and reward entitlements never collide, combine, or overwrite one another.
 
 A period becomes **closable** once its UTC window has ended and a grace window
 has passed:
@@ -37,18 +57,18 @@ read out. It defaults to 24 hours and is set by `REWARD_CLOSE_GRACE_HOURS`.
 | Table | Written | Meaning |
 |---|---|---|
 | `reward_tiers` | by an operator | the schedule: a rank band, a label, and (optionally) an amount |
-| `reward_rankings` | once, at close | the frozen standing — the ranked order for one week, immovable |
+| `reward_rankings` | once, at close | the frozen standing — the ranked order for one period, immovable |
 | `agent_rewards` | once, at close | the published entitlement, then moved through its states by operators |
 
 `reward_rankings` is the freeze. Its primary key is
-`(period_start_date, rank)`, so a week cannot hold two agents at the same rank,
-and nothing in the application ever updates it.
+`(period_start_date, rank, period_type)`, so a period cannot hold two agents at
+the same rank, and nothing in the application ever updates it.
 
-`agent_rewards` carries `FOREIGN KEY (period_start_date, agent_id) REFERENCES
-reward_rankings (period_start_date, agent_id)`. That is deliberate and is the
-structural half of the cutoff rule: an entitlement cannot exist for an agent and
-week that was not frozen, so there is no code path that could re-derive a reward
-from a live summary. The schema refuses.
+`agent_rewards` carries `FOREIGN KEY (period_start_date, agent_id, period_type)
+REFERENCES reward_rankings (period_start_date, agent_id, period_type)`. That is
+deliberate and is the structural half of the cutoff rule: an entitlement cannot
+exist for an agent and period that was not frozen, so there is no code path that
+could re-derive a reward from a live summary. The schema refuses.
 
 ### Rank order
 

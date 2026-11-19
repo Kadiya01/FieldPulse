@@ -1,12 +1,12 @@
 # FieldPulse
 
 Responsive web application for agent activity reporting, verification, weekly
-standing, and rewards.
+and monthly standing, and rewards.
 
 Field agents report the enrollment activity they perform in the field. Every
 report a device sends is a *claim* until a server-side pipeline has checked it,
-and only verified work counts toward an agent's weekly standing. At period
-close that verified weekly standing is frozen, and the organisation rewards
+and only verified work counts toward an agent's weekly or monthly standing. At
+period close that verified standing is frozen, and the organisation rewards
 agents from that frozen standing — never from a client assertion, and never
 from a standing that has since moved on.
 
@@ -72,12 +72,12 @@ verdict.
 steps, thirteen of which are checks, against the file itself and against
 server-side facts the client cannot influence: the SHA-256 of the bytes as
 stored, whether GD can decode them, the EXIF block, the perceptual hash, the
-agent's assigned sites, the server's own receive time, and the agent's weekly
+agent's assigned sites, the server's own receive time, and the agent's period
 cap. Only then does the row get a disposition — `VERIFIED`, `REQUIRES_REVIEW`,
 or `REJECTED`.
 
-**At period close.** When a weekly period's grace window has elapsed, closing it
-freezes the verified weekly ranking into an immutable row and writes each
+**At period close.** When a period's grace window has elapsed, closing it
+freezes the verified ranking into an immutable row and writes each
 agent's reward entitlement from that frozen row. The entitlement is *published*
 so the agent can see it; publication is not payment. An operator approves it,
 and only the organisation's own confirmation marks it paid. Later corrections to
@@ -98,9 +98,11 @@ publication rules.
 - **Reporting, not enrollment.** FieldPulse does not perform enrollment. Agents
   report the enrollment activity they did in the field; the application
   captures the evidence for that report and lets the server verify it.
-- **Weekly standing and rewards.** Closing a period freezes the verified weekly
-  ranking and writes reward entitlements from that frozen ranking, ranked by
-  verified count only. Publishing an entitlement tells the agent what they are
+- **Weekly and monthly standing and rewards.** Closing a period freezes the
+  verified ranking and writes reward entitlements from that frozen ranking,
+  ranked by verified count only. Weekly and monthly periods are tracked
+  independently, so a month and a week that start on the same date cannot
+  overwrite each other. Publishing an entitlement tells the agent what they are
   owed — it does not pay them.
 - **Offline capture.** Photo, count and metadata persist to IndexedDB and sync
   later. A failed upload is a state, not an error the agent has to solve.
@@ -194,11 +196,11 @@ verdict on screen.
 - **Two factors on state-changing calls.** A 15-minute HS256 bearer token *and*
   an ECDSA signature over `METHOD\nPATH\nTIMESTAMP\nNONCE\nSHA256HEX(body)`, with
   a replay-protected nonce and a timestamp window.
-- **A weak first token by design.** Admins and reviewers sign in with username
-  and password; newly registered agents use their IMEI alone. Both receive a
-  `scope=bootstrap` token that can reach exactly one route: device registration.
-  IMEI is an identifier, not a secret, so anyone who knows it may impersonate
-  the agent before a device key is bound.
+- **A weak first token by design.** Admins, reviewers and agents all sign in
+  with a username and password. Every login receives a `scope=bootstrap` token
+  that can reach exactly one route: device registration. The IMEI identifies a
+  device, never a login credential, and binding a browser key still follows the
+  configured pairing policy.
 - **The refresh cookie is unreadable by design.** `HttpOnly`, `Secure`,
   `SameSite=Strict`, scoped to `/api/v1/auth`, and `Origin`-checked — the only
   two cookie-authenticated endpoints, so they are the only two that need CSRF
@@ -209,10 +211,11 @@ verdict on screen.
 - **Validation details are safe in production.** `error.details.field` is
   allowlisted rather than gated behind `APP_DEBUG`, so a client can tell an agent
   which input is wrong without the debug flag leaking internals.
-- **Self-service agent registration.** Applicants submit their name, NIN,
-  Nigerian mobile number, IMEI and device type. Accounts remain pending until an
-  administrator approves or rejects them in account management. Full NIN and
-  phone are returned only by the ADMIN-only account directory.
+- **Self-service agent registration.** Applicants submit their name, username,
+  password, NIN, Nigerian mobile number, IMEI and device type. Accounts remain
+  pending until an administrator approves or rejects them in account
+  management. Full NIN and phone are returned only by the ADMIN-only account
+  directory.
 
 ## What this is not evidence of
 
@@ -247,7 +250,7 @@ model.
   Only the organisation's own confirmation marks an entitlement paid.
 - **It does not perform enrollment.** FieldPulse is not an enrollment system.
   Agents report the enrollment activity they performed in the field; this
-  application captures the evidence, verifies it, freezes the resulting weekly
+  application captures the evidence, verifies it, freezes the resulting period
   standing, and makes the reward defensible. Enrollment itself happens outside
   it. The word "provision" is used for creating an agent account, because
   enrolling an agent is not what that command does.
@@ -255,7 +258,7 @@ model.
   Installing it adds an icon and an offline cache; nothing is distributed through
   an app store, and the service worker can be deleted and re-created.
 - **It does not choose who to reward, or how much.** The organisation supplies
-  the tier schedule. FieldPulse computes the frozen weekly standing the schedule
+  the tier schedule. FieldPulse computes the frozen period standing the schedule
   applies to, and stops there.
 - **It does not decide rewards from a live leaderboard.** The standing used for a
   reward is the one frozen when the period closed. A leaderboard that moves
@@ -396,8 +399,9 @@ the changed backend PHP files and new API entry points, then upload the built
 `dist/` contents into the hostname's document root. Do not upload `dist/` alone:
 the backend and database migration are also required.
 
-The agent registration page is `/register`, agent IMEI sign-in is `/login`,
-and administrator/reviewer username-password sign-in is `/admin/login`.
+The agent registration page is `/register`, agent username-password sign-in is
+`/login`, and administrator/reviewer username-password sign-in is
+`/admin/login`.
 `private_storage/` must remain outside and beside the active document root.
 
 ## Documentation

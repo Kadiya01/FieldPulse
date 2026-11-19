@@ -327,18 +327,13 @@ final class DeviceController implements ActionInterface
 
     private function codeRequired(int $agentId): bool
     {
-        // Publicly registered agents already proved control of their IMEI.
-        // Requiring an administrator-issued code here would contradict the
-        // self-service flow and leave the new account unable to use its device.
-        $selfRegistered = Connection::fetchValue(
-            'SELECT self_registered FROM agents WHERE id = :a',
-            ['a' => $agentId]
-        );
-
-        if ((int) $selfRegistered === 1) {
-            return false;
-        }
-
+        /*
+         * Every agent follows the configured policy, including public
+         * self-registrations. Registering an IMEI in a web form does not prove
+         * control of the handset, so approval alone must not be enough to bind
+         * a browser key. Under ALWAYS a code is required for the first device
+         * as well; under FIRST_DEVICE_ONLY only that first binding needs one.
+         */
         return match ($this->policy()) {
             self::POLICY_ALWAYS => true,
             self::POLICY_NEVER  => false,

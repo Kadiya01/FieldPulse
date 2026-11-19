@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace FieldPulse\Testing;
 
+use FieldPulse\Support\Env;
 use FieldPulse\Support\Paths;
 
 /**
@@ -210,7 +211,7 @@ final class HttpServer
      */
     private static function writeEnvCopy(string $workDir, array $overrides): string
     {
-        $source = dirname(__DIR__, 2) . '/.env';
+        $source = Env::loadedFile() ?? (dirname(__DIR__, 2) . '/.env');
 
         if (!is_file($source) || !is_readable($source)) {
             throw new \RuntimeException('Cannot copy the environment file: ' . $source . ' is not readable.');

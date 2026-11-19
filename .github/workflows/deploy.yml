@@ -1,139 +1,376 @@
+name: ABH Preview Checks and Guarded cPanel Deployment
 
-name: FieldPulse Deployment
-
-"on":
+on:
   push:
     branches:
-      - main
+      - feature/abh-monthly-enrollment
+    paths:
+      - "src/**"
+      - "public/**"
+      - "public_html/**"
+      - "private_storage/app/**"
+      - "private_storage/bin/**"
+      - "private_storage/migrations/**"
+      - "private_storage/abh_migrations/**"
+      - "private_storage/workers/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.*"
+      - ".github/workflows/deploy.yml"
+      - "docs/ABH-PREVIEW-DEPLOYMENT-READY.md"
+  pull_request:
+    branches:
+      - feature/abh-monthly-enrollment
   workflow_dispatch:
+    inputs:
+      deploy_preview:
+        description: "Deploy after the full preview readiness gate has passed"
+        required: true
+        type: boolean
+        default: false
+      bootstrap_preview:
+        description: "One-time initial upload to the isolated preview roots only; no migrations or runtime sign-off"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: fieldpulse-deploy
-  cancel-in-progress: false
+  group: abh-preview-checks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
-    name: Build frontend and deploy
+  validate:
+    name: Validate ABH feature branch
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up PHP 8.2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: '8.2'
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: npm
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Lint PHP application and API files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+          done < <(find private_storage/app public_html/api -type f -name '*.php' -print0)
+          php -l private_storage/bin/bootstrap_path_test.php
+          php -l private_storage/bin/healthcheck.php
+          php -l private_storage/bin/selftest.php
+          php -l private_storage/bin/abh_migrate.php
+          php -l private_storage/bin/abh_migration_plan_test.php
+          php -l private_storage/bin/abh_schema_test.php
+
+      - name: Test preview bootstrap path isolation
+        run: php private_storage/bin/bootstrap_path_test.php
+
+      - name: Test cPanel document root resolution
+        run: php private_storage/bin/selftest.php --filter="document root"
+
+      - name: Test ABH migration safety and planning
+        run: php private_storage/bin/abh_migration_plan_test.php
+
       - name: Build frontend
         run: npm run build
 
-      - name: Verify frontend build
+      - name: Verify build output
         run: test -s dist/index.html
 
-      - name: Upload frontend (dist/) to document root
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          local-dir: dist/
-          server-dir: ${{ vars.FTP_DOCROOT_DIR || './' }}
-          state-name: .ftp-deploy-sync-state-frontend.json
-          dangerous-clean-slate: false
-
-      - name: Upload PHP entry points (public_html/) to document root
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          local-dir: public_html/
-          server-dir: ${{ vars.FTP_DOCROOT_DIR || './' }}
-          state-name: .ftp-deploy-sync-state-public-html.json
-          dangerous-clean-slate: false
-
-      - name: Upload application code (private_storage/)
-        if: ${{ vars.DEPLOY_PRIVATE_STORAGE == 'true' }}
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          local-dir: private_storage/
-          server-dir: ${{ vars.PRIVATE_STORAGE_SERVER_DIR }}
-          state-name: .ftp-deploy-sync-state-private-storage.json
-          dangerous-clean-slate: false
-          exclude: |
-            .env
-            .env.*
-            fieldpulse/
-            logs/
-            *.log
-
-      # A green upload step only proves the bytes went somewhere. This proves
-      # they went to the docroot that actually serves the site: the API entry
-      # point has to reach the PHP kernel (405 on GET, not 404), and the served
-      # index.html has to reference the asset hash this run just built.
-      - name: Smoke test deployment
-        env:
-          SITE_URL: ${{ vars.SITE_URL || 'https://monthlyperformance.abhglobalinformationtechnologysolutions.com.ng' }}
+      - name: Prepare cPanel deployment bundle
+        shell: bash
         run: |
           set -euo pipefail
 
-          code=""
-          for attempt in 1 2 3 4 5; do
-            code=$(curl -sS -H 'Cache-Control: no-cache' \
-              -o /tmp/agent-login.json -w '%{http_code}' \
-              "$SITE_URL/api/v1/auth/agent-login.php" || true)
-            [ "$code" = "405" ] && break
-            sleep 5
-          done
+          test -s public_html/.htaccess
+          test -s public_html/.user.ini
+          test -d public_html/api
+          test -s private_storage/app/bootstrap.php
+          test -d private_storage/bin
+          test -d private_storage/migrations
+          test -d private_storage/abh_migrations
+          test -d private_storage/workers
 
-          if [ "$code" != "405" ]; then
-            echo "agent-login.php returned $code from $SITE_URL"
-            cat /tmp/agent-login.json || true
+          rm -rf deploy/preview
+          mkdir -p deploy/preview/public deploy/preview/private
+
+          # Public document root: built frontend, the API entry points and
+          # the reviewed Apache/PHP runtime configuration for the preview host.
+          cp -a dist/. deploy/preview/public/
+          cp -a public_html/.htaccess public_html/.user.ini deploy/preview/public/
+          mkdir -p deploy/preview/public/api
+          cp -a public_html/api/. deploy/preview/public/api/
+
+          # Private sibling directory: code and operator tools only.
+          # .env, uploaded evidence, logs and runtime data are never packaged.
+          cp -a private_storage/app private_storage/bin private_storage/migrations private_storage/abh_migrations private_storage/workers deploy/preview/private/
+
+          test -s deploy/preview/public/index.html
+          test -s deploy/preview/public/.htaccess
+          test -s deploy/preview/public/.user.ini
+          test -s deploy/preview/private/app/bootstrap.php
+
+          if find deploy/preview -type f \( -name '.env' -o -name '.env.*' \) | grep -q .; then
+            echo "::error::A secret environment file was found in the deployment bundle."
             exit 1
           fi
 
-          grep -q METHOD_NOT_ALLOWED /tmp/agent-login.json || {
-            echo "agent-login.php did not reach the kernel:"
-            cat /tmp/agent-login.json
+      - name: Upload staging deployment bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: abh-preview-deployment
+          path: deploy/preview/
+          if-no-files-found: error
+          retention-days: 1
+
+  schema_compatibility:
+    name: Test ABH schema on supported database engines
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - name: MySQL 8.0
+            image: mysql:8.0
+            health_cmd: mysqladmin ping -h 127.0.0.1 -proot
+          - name: MySQL 8.4
+            image: mysql:8.4
+            health_cmd: mysqladmin ping -h 127.0.0.1 -proot
+          - name: MariaDB 11.4
+            image: mariadb:11.4
+            health_cmd: healthcheck.sh --connect --innodb_initialized
+    runs-on: ubuntu-latest
+    services:
+      database:
+        image: ${{ matrix.engine.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: abh_test_migrations
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="${{ matrix.engine.health_cmd }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      ABH_TEST_DB_HOST: 127.0.0.1
+      ABH_TEST_DB_PORT: "3306"
+      ABH_TEST_DB_NAME: abh_test_migrations
+      ABH_TEST_DB_USER: root
+      ABH_TEST_DB_PASSWORD: root
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up PHP 8.2 with PDO MySQL
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
+        with:
+          php-version: "8.2"
+          extensions: pdo_mysql
+
+      - name: Apply ABH migrations to disposable CI database and test constraints
+        run: php private_storage/bin/abh_schema_test.php
+
+  deploy_preview:
+    name: Deploy to ABH preview cPanel (FTPS)
+    needs: [validate, schema_compatibility]
+    if: >-
+      github.event_name == 'push' && vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' ||
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy_preview == true &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'true' ||
+      github.event_name == 'workflow_dispatch' &&
+      inputs.bootstrap_preview == true &&
+      inputs.deploy_preview == false &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'false' &&
+      vars.ABH_PREVIEW_DRY_RUN == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+    permissions:
+      contents: read
+    concurrency:
+      group: abh-preview-cpanel-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Check out deployment policy
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Require explicit ABH staging deployment readiness
+        if: inputs.bootstrap_preview != true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readiness_file="docs/ABH-PREVIEW-DEPLOYMENT-READY.md"
+          test -s "$readiness_file" || {
+            echo "::error::Deployment is locked. Complete the ABH preview readiness checklist before enabling deployment."
             exit 1
           }
 
-          asset=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' dist/index.html | head -n1)
+          grep -Fqx 'BOOTSTRAP_PATH_VERIFIED: true' "$readiness_file"
+          grep -Fqx 'ABH_RELEASE_GATE: PASS' "$readiness_file"
+          grep -Fqx 'STAGING_DATABASE: abhgloba_abhpreview' "$readiness_file"
 
-          if [ -z "$asset" ]; then
-            echo "dist/index.html references no hashed asset"
-            exit 1
-          fi
+          test -s private_storage/app/bootstrap.php
+          test -s public_html/.htaccess
+          test -s public_html/.user.ini
+          test -d public_html/api
 
-          for attempt in 1 2 3 4 5; do
-            if curl -sS -f -H 'Cache-Control: no-cache' \
-              "$SITE_URL/index.html" -o /tmp/live-index.html \
-              && grep -q "$asset" /tmp/live-index.html; then
-              break
+      - name: Validate one-time bootstrap mode
+        if: inputs.bootstrap_preview == true
+        shell: bash
+        env:
+          DEPLOY_ENABLED: ${{ vars.ABH_PREVIEW_DEPLOY_ENABLED || 'false' }}
+          DRY_RUN: ${{ vars.ABH_PREVIEW_DRY_RUN || 'true' }}
+        run: |
+          set -euo pipefail
+          [[ "${{ github.event_name }}" == "workflow_dispatch" ]]
+          [[ "${{ inputs.deploy_preview }}" == "false" ]]
+          [[ "$DEPLOY_ENABLED" == "false" ]]
+          [[ "$DRY_RUN" == "true" ]]
+          test ! -e docs/ABH-PREVIEW-DEPLOYMENT-READY.md
+          echo "Bootstrap mode confirmed: isolated preview file upload only; migrations and runtime sign-off remain blocked."
+
+      - name: Download validated deployment bundle
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: abh-preview-deployment
+          path: deploy/preview
+
+      - name: Verify dedicated FTPS credentials are configured
+        shell: bash
+        env:
+          PUBLIC_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          PUBLIC_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          PUBLIC_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          PRIVATE_FTP_SERVER: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          PRIVATE_FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          PRIVATE_FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in PUBLIC_FTP_SERVER PUBLIC_FTP_USERNAME PUBLIC_FTP_PASSWORD PRIVATE_FTP_SERVER PRIVATE_FTP_USERNAME PRIVATE_FTP_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required GitHub Actions secret: ABH preview FTPS credentials are incomplete."
+              exit 1
             fi
-            sleep 5
           done
 
-          grep -q "$asset" /tmp/live-index.html || {
-            echo "live index.html does not reference $asset"
+          [[ "$PUBLIC_FTP_SERVER" == "nano.yahmis.com" ]] || {
+            echo "::error::Public FTP server is not the confirmed cPanel FTPS host."
+            exit 1
+          }
+          [[ "$PRIVATE_FTP_SERVER" == "nano.yahmis.com" ]] || {
+            echo "::error::Private FTP server is not the confirmed cPanel FTPS host."
+            exit 1
+          }
+          [[ "$PUBLIC_FTP_USERNAME" == "abhpreview_public@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]] || {
+            echo "::error::Public FTP username is not the dedicated preview-only account."
+            exit 1
+          }
+          [[ "$PRIVATE_FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]] || {
+            echo "::error::Private FTP username is not the dedicated preview-only account."
             exit 1
           }
 
-          echo "Smoke test passed: $asset is live and the API entry point is routed."
+      # Each FTP user is jailed by cPanel to one directory, so ./ means only
+      # the dedicated preview directory, never the account home or production.
+      - name: Deploy private application files to staging storage
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview/private/
+          server-dir: ./
+          dangerous-clean-slate: false
+          dry-run: ${{ inputs.bootstrap_preview != true && vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env
+            **/.env.*
+            **/*.log
+            **/fieldpulse/**
+            **/uploads/**
+            **/quarantine/**
+            **/processed/**
+            **/tmp/**
+
+      - name: Deploy public application files to preview document root
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: deploy/preview/public/
+          server-dir: ./
+          dangerous-clean-slate: false
+          dry-run: ${{ inputs.bootstrap_preview != true && vars.ABH_PREVIEW_DRY_RUN != 'false' }}
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.env
+            **/.env.*
+            private_storage/**
+            **/private_storage/**
+
+      - name: Verify preview site responds over HTTPS
+        if: inputs.bootstrap_preview != true && vars.ABH_PREVIEW_DRY_RUN == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          preview_url="https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng"
+          root_status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$preview_url/")"
+          [[ "$root_status" == "200" ]] || {
+            echo "::error::Preview homepage returned HTTP $root_status; inspect cPanel deployment and document-root configuration."
+            exit 1
+          }
+          env_status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$preview_url/.env")"
+          [[ "$env_status" == "403" || "$env_status" == "404" ]] || {
+            echo "::error::Preview .env protection check returned HTTP $env_status; stop and review document-root protection."
+            exit 1
+          }
+          health_response="$(curl --silent --show-error --fail --location "$preview_url/api/v1/abh/health.php")"
+          grep -Fq '"status":"ok"' <<< "$health_response"
+          grep -Fq '"database":"connected"' <<< "$health_response" || {
+            echo "::error::ABH application or preview database health check failed."
+            exit 1
+          }

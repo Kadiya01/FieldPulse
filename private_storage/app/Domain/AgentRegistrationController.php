@@ -10,6 +10,7 @@ use FieldPulse\Http\ApiException;
 use FieldPulse\Http\ErrorCode;
 use FieldPulse\Http\Request;
 use FieldPulse\Http\Response;
+use FieldPulse\Security\Credentials;
 use FieldPulse\Security\RateLimiter;
 use FieldPulse\Support\Logger;
 
@@ -30,12 +31,20 @@ final class AgentRegistrationController implements ActionInterface
         }
 
         $body = $request->json();
-        Validator::assertNoUnknownKeys($body, ['full_name', 'nin', 'phone', 'imei', 'device_type'], 'agent registration');
+        Validator::assertNoUnknownKeys(
+            $body,
+            ['full_name', 'nin', 'phone', 'email', 'location', 'imei', 'device_type', 'username', 'password'],
+            'agent registration'
+        );
         $fullName = trim(Validator::string($body['full_name'] ?? null, 2, 191, 'full_name'));
         $nin = Validator::nin($body['nin'] ?? null);
         $phone = Validator::nigerianPhone($body['phone'] ?? null);
+        $email = Validator::email($body['email'] ?? null);
+        $location = Validator::location($body['location'] ?? null);
         $imei = Validator::imei($body['imei'] ?? null);
         $deviceType = Validator::deviceType($body['device_type'] ?? null);
+        $username = Validator::username($body['username'] ?? null);
+        $password = Validator::password($body['password'] ?? null);
 
         if ($fullName === '' || preg_match('/[\x00-\x1F\x7F]/', $fullName) === 1) {
             throw ApiException::validation('Enter a valid full name.', ['field' => 'full_name']);
@@ -54,7 +63,26 @@ final class AgentRegistrationController implements ActionInterface
             );
         }
 
+        if ($email !== null && $this->agents->emailExists($email)) {
+            RateLimiter::record(self::ENDPOINT, $nin, $ip, false, 'REGISTRATION_EXISTS');
+            throw new ApiException(
+                409,
+                ErrorCode::STATE_CONFLICT,
+                'A registration already exists for this email address.'
+            );
+        }
+
+        if ($this->agents->usernameExists($username)) {
+            RateLimiter::record(self::ENDPOINT, $nin, $ip, false, 'REGISTRATION_EXISTS');
+            throw new ApiException(
+                409,
+                ErrorCode::STATE_CONFLICT,
+                'That username is already taken.'
+            );
+        }
+
         $agentCode = 'FP-' . strtoupper(bin2hex(random_bytes(6)));
+        $passwordHash = Credentials::hash($password);
 
         try {
             $agentId = $this->agents->createSelfRegistered(
@@ -63,7 +91,11 @@ final class AgentRegistrationController implements ActionInterface
                 $nin,
                 $phone,
                 $imei,
-                $deviceType
+                $deviceType,
+                $username,
+                $passwordHash,
+                $email,
+                $location
             );
         } catch (\PDOException $e) {
             if ((string) $e->getCode() === '23000') {
@@ -71,7 +103,7 @@ final class AgentRegistrationController implements ActionInterface
                 throw new ApiException(
                     409,
                     ErrorCode::STATE_CONFLICT,
-                    'A registration already exists for this NIN or IMEI.',
+                    'A registration already exists for this NIN, IMEI, email address, or username.',
                     [],
                     $e
                 );
@@ -101,6 +133,8 @@ final class AgentRegistrationController implements ActionInterface
                 'id' => $agentId,
                 'agent_code' => $agentCode,
                 'full_name' => $fullName,
+                'email' => $email,
+                'location' => $location,
                 'role' => 'AGENT',
             ],
         ], 201);

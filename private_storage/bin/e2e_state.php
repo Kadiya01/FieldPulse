@@ -6,6 +6,7 @@ declare(strict_types=1);
  * Arrange reward state for the browser suite.
  *
  *   php private_storage/bin/e2e_state.php seed --agent=AG-001 --weeks-ago=2 --verified=42 --amount=50000 --currency=NGN
+ *   php private_storage/bin/e2e_state.php seed --agent=AG-001 --type=MONTHLY --months-ago=2 --verified=42
  *   php private_storage/bin/e2e_state.php bump --agent=AG-001 --weeks-ago=2 --verified=99
  *
  * The reward specs need an agent that has actually stood somewhere in a week
@@ -43,7 +44,7 @@ $argv   = Cli::argv();
 $action = $argv[0] ?? '';
 
 if (!in_array($action, ['seed', 'bump'], true)) {
-    Cli::fail('usage: e2e_state.php seed|bump --agent=CODE [--period=YYYY-MM-DD | --weeks-ago=N] [--verified=N]');
+    Cli::fail('usage: e2e_state.php seed|bump --agent=CODE [--type=WEEKLY|MONTHLY] [--period=YYYY-MM-DD | --weeks-ago=N | --months-ago=N] [--verified=N]');
     exit(1);
 }
 
@@ -63,14 +64,15 @@ try {
         exit(1);
     }
 
-    $period = resolvePeriod($argv);
+    $type   = resolveType($argv);
+    $period = resolvePeriod($argv, $type);
 
     if ($action === 'bump') {
-        bump($argv, (int) $agent['id'], $period);
+        bump($argv, (int) $agent['id'], $period, $type);
         exit(0);
     }
 
-    seed($argv, $agent, $period);
+    seed($argv, $agent, $period, $type);
     exit(0);
 } catch (ApiException $e) {
     Cli::fail($e->getMessage());
@@ -82,15 +84,27 @@ try {
 
 /* -------------------------------------------------------------------------- */
 
+function resolveType(array $argv): string
+{
+    $type = strtoupper((string) (Cli::option($argv, 'type') ?? PeriodResolver::TYPE_WEEKLY));
+
+    if (!in_array($type, PeriodResolver::PERIOD_TYPES, true)) {
+        throw new RuntimeException('--type must be WEEKLY or MONTHLY');
+    }
+
+    return $type;
+}
+
 /**
- * Which week to arrange.
+ * Which period to arrange.
  *
- * `--weeks-ago` is preferred over `--period` because the specs run against the
- * real clock: a hardcoded Monday would eventually stop being a week that has
- * closed, and the failure would look like a broken engine rather than a stale
- * fixture. `--period` stays for a spec that wants to name an exact date.
+ * `--weeks-ago` / `--months-ago` is preferred over `--period` because the specs
+ * run against the real clock: a hardcoded date would eventually stop being a
+ * period that has closed, and the failure would look like a broken engine rather
+ * than a stale fixture. `--period` stays for a spec that wants to name an exact
+ * date, including the same date for both a weekly and a monthly period.
  */
-function resolvePeriod(array $argv): string
+function resolvePeriod(array $argv, string $type): string
 {
     $explicit = Cli::option($argv, 'period');
 
@@ -99,7 +113,22 @@ function resolvePeriod(array $argv): string
             throw new RuntimeException('--period must be YYYY-MM-DD');
         }
 
+        $expected = PeriodResolver::periodStartDateForType($type, $explicit . ' 00:00:00');
+
+        if ($expected !== $explicit) {
+            throw new RuntimeException('--period is not a ' . $type . ' period start; expected ' . $expected);
+        }
+
         return $explicit;
+    }
+
+    if ($type === PeriodResolver::TYPE_MONTHLY) {
+        $months = (int) (Cli::option($argv, 'months-ago') ?? '2');
+        $months = max(1, min($months, 24));
+
+        return PeriodResolver::monthlyPeriodStartDate(
+            Clock::sql(Clock::now()->modify('-' . $months . ' months'))
+        );
     }
 
     $weeks = (int) (Cli::option($argv, 'weeks-ago') ?? '2');
@@ -115,7 +144,7 @@ function resolvePeriod(array $argv): string
  *
  * @param array<string,mixed> $agent
  */
-function seed(array $argv, array $agent, string $period): void
+function seed(array $argv, array $agent, string $period, string $type): void
 {
     $agentId  = (int) $agent['id'];
     $verified = max(0, (int) (Cli::option($argv, 'verified') ?? '1'));
@@ -147,23 +176,35 @@ function seed(array $argv, array $agent, string $period): void
 
     $service = new RewardService();
 
-    // Re-seeding the same week must be repeatable: clear anything a previous
-    // run left so the frozen standing is exactly what this call specifies.
-    Connection::execute('DELETE FROM agent_rewards WHERE period_start_date = :p', ['p' => $period]);
-    Connection::execute('DELETE FROM reward_rankings WHERE period_start_date = :p', ['p' => $period]);
-    Connection::execute('DELETE FROM agent_performance_summary WHERE period_start_date = :p', ['p' => $period]);
+    // Re-seeding the same period must be repeatable: clear anything a previous
+    // run left so the frozen standing is exactly what this call specifies. The
+    // period_type is part of every delete, so arranging a monthly period never
+    // erases a weekly period that happens to start on the same date.
+    Connection::execute(
+        'DELETE FROM agent_rewards WHERE period_start_date = :p AND period_type = :t',
+        ['p' => $period, 't' => $type]
+    );
+    Connection::execute(
+        'DELETE FROM reward_rankings WHERE period_start_date = :p AND period_type = :t',
+        ['p' => $period, 't' => $type]
+    );
+    Connection::execute(
+        'DELETE FROM agent_performance_summary WHERE period_start_date = :p AND period_type = :t',
+        ['p' => $period, 't' => $type]
+    );
 
     Connection::execute(
         'INSERT INTO agent_performance_summary (
-            agent_id, period_start_date,
+            agent_id, period_start_date, period_type,
             total_verified_count, total_submissions, total_rejected, total_pending, updated_at
          ) VALUES (
-            :agent_id, :period_date,
+            :agent_id, :period_date, :period_type,
             :verified, :submissions, :rejected, :pending, UTC_TIMESTAMP()
          )',
         [
             'agent_id'    => $agentId,
             'period_date' => $period,
+            'period_type' => $type,
             'verified'    => $verified,
             'submissions' => $verified + $pending + $rejected,
             'rejected'    => $rejected,
@@ -171,19 +212,20 @@ function seed(array $argv, array $agent, string $period): void
         ]
     );
 
-    $result = $service->closePeriod($period);
+    $result = $service->closePeriod($period, $type);
 
     $reward = Connection::fetchOne(
         'SELECT r.id, r.rank, r.status, r.tier_label, r.reward_amount, r.currency,
                 r.total_verified_count
            FROM agent_rewards r
-          WHERE r.period_start_date = :p AND r.agent_id = :a',
-        ['p' => $period, 'a' => $agentId]
+          WHERE r.period_start_date = :p AND r.period_type = :t AND r.agent_id = :a',
+        ['p' => $period, 't' => $type, 'a' => $agentId]
     );
 
     emit([
         'action'  => 'seed',
         'period'  => $period,
+        'period_type' => $type,
         'agent'   => (string) $agent['agent_code'],
         'agent_id' => $agentId,
         'closed'  => $result['closed'],
@@ -201,7 +243,7 @@ function seed(array $argv, array $agent, string $period): void
  * or bin/reaggregate.php would do to a historical week. A correct system leaves
  * the published entitlement untouched.
  */
-function bump(array $argv, int $agentId, string $period): void
+function bump(array $argv, int $agentId, string $period, string $type): void
 {
     $verified = max(0, (int) (Cli::option($argv, 'verified') ?? '1'));
 
@@ -210,18 +252,20 @@ function bump(array $argv, int $agentId, string $period): void
             SET total_verified_count = :verified,
                 total_submissions = :submissions,
                 updated_at = UTC_TIMESTAMP()
-          WHERE agent_id = :agent_id AND period_start_date = :period_date',
+          WHERE agent_id = :agent_id AND period_start_date = :period_date AND period_type = :period_type',
         [
             'verified'      => $verified,
             'submissions'   => $verified,
             'agent_id'      => $agentId,
             'period_date'   => $period,
+            'period_type'   => $type,
         ]
     );
 
     Cli::out(json_encode([
         'action'  => 'bump',
         'period'  => $period,
+        'period_type' => $type,
         'agent_id' => $agentId,
         'changed' => $changed,
         'verified' => $verified,

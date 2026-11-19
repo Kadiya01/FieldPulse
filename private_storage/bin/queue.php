@@ -918,8 +918,8 @@ $t->test('processing the same submission twice counts once', function (TestRunne
 
     $first = Connection::fetchOne(
         'SELECT total_verified_count, total_submissions FROM agent_performance_summary
-          WHERE agent_id = :a AND period_start_date = :p',
-        ['a' => $agentId, 'p' => $period['date']]
+          WHERE agent_id = :a AND period_start_date = :p AND period_type = :t',
+        ['a' => $agentId, 'p' => $period['date'], 't' => PeriodResolver::TYPE_WEEKLY]
     );
 
     $t->assertSame(3, (int) $first['total_verified_count'], 'the first pass counts the claimed amount once');
@@ -929,8 +929,8 @@ $t->test('processing the same submission twice counts once', function (TestRunne
 
     $second = Connection::fetchOne(
         'SELECT total_verified_count, total_submissions FROM agent_performance_summary
-          WHERE agent_id = :a AND period_start_date = :p',
-        ['a' => $agentId, 'p' => $period['date']]
+          WHERE agent_id = :a AND period_start_date = :p AND period_type = :t',
+        ['a' => $agentId, 'p' => $period['date'], 't' => PeriodResolver::TYPE_WEEKLY]
     );
 
     $t->assertSame(3, (int) $second['total_verified_count'], 'a second pass does not double the total');
@@ -957,15 +957,16 @@ $t->test('summary rebuild is a deterministic recompute', function (TestRunner $t
 
     $read = static fn (): array => (array) Connection::fetchOne(
         'SELECT total_verified_count, total_submissions, total_rejected, total_pending
-           FROM agent_performance_summary WHERE agent_id = :a AND period_start_date = :p',
-        ['a' => $agentId, 'p' => $period['date']]
+           FROM agent_performance_summary
+          WHERE agent_id = :a AND period_start_date = :p AND period_type = :t',
+        ['a' => $agentId, 'p' => $period['date'], 't' => PeriodResolver::TYPE_WEEKLY]
     );
 
     $before = $read();
 
     // Rebuild from the ledger twice; both rebuilds must reproduce the same row.
-    $leaderboard->refresh($agentId, $period['date']);
-    $leaderboard->refresh($agentId, $period['date']);
+    $leaderboard->refresh($agentId, $period['date'], PeriodResolver::TYPE_WEEKLY);
+    $leaderboard->refresh($agentId, $period['date'], PeriodResolver::TYPE_WEEKLY);
 
     $after = $read();
 

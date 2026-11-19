@@ -112,23 +112,35 @@ uses a bearer header, which a browser will not attach cross-origin.
 
 | Method | Path | Auth |
 |---|---|---|
-| POST | `/api/v1/agents/register.php` | public, self-registration |
-| POST | `/api/v1/auth/agent-login.php` | public, IMEI |
-| POST | `/api/v1/auth/login.php` | public, username + password for administrators/reviewers |
+| POST | `/api/v1/agents/register.php` | public, self-registration with username + password |
+| POST | `/api/v1/auth/login.php` | public, username + password for every account |
+| POST | `/api/v1/auth/password.php` | signed, own password change |
 | POST | `/api/v1/auth/refresh.php` | refresh cookie + Origin |
 | POST | `/api/v1/auth/logout.php` | refresh cookie + Origin |
-| POST | `/api/v1/device/register.php` | bootstrap token; new self-registered agents do not need a pairing code |
+| POST | `/api/v1/device/register.php` | bootstrap token; configured pairing policy |
 | POST | `/api/v1/submit.php` | **signed** |
 | GET | `/api/v1/submission.php?uuid=` | bearer, own submissions only |
+| GET | `/api/v1/dashboard.php` | bearer, own standing only |
+| GET | `/api/v1/profile.php` | signed, own profile only |
+| POST | `/api/v1/profile.php` | signed, own profile only |
+| GET | `/api/v1/notifications.php` | bearer, own notifications only |
+| POST | `/api/v1/notifications/read.php` | bearer, own notifications only |
 | GET | `/api/v1/leaderboard.php` | bearer |
 | GET | `/api/v1/reviews/index.php` | operator |
 | POST | `/api/v1/reviews/decide.php` | operator |
 | GET | `/api/v1/rewards/self.php` | bearer, own entitlements only |
 | GET | `/api/v1/rewards/index.php` | operator |
 | POST | `/api/v1/rewards/decide.php` | operator |
-| GET | `/api/v1/admin/agents.php` | admin |
-| POST | `/api/v1/admin/agents.php` | admin, disabled; agents self-register |
-| POST | `/api/v1/admin/agent.php` | admin |
+| GET | `/api/v1/admin/agents.php` | admin, searchable account directory |
+| POST | `/api/v1/admin/agents.php` | admin, create an account |
+| GET | `/api/v1/admin/agent.php?id=` | admin, account detail |
+| POST | `/api/v1/admin/agent.php` | admin, update one account |
+| GET | `/api/v1/admin/dashboard.php` | admin, management statistics |
+| GET | `/api/v1/admin/targets.php` | admin, monthly targets |
+| POST | `/api/v1/admin/targets.php` | admin, set or clear a target |
+| GET | `/api/v1/admin/periods.php` | admin, closing history |
+| POST | `/api/v1/admin/periods.php` | admin, close a period |
+| GET | `/api/v1/admin/audit.php` | admin, append-only audit search |
 
 Every path is the literal file on disk, `.php` suffix included. There is no
 extensionless rewrite in `.htaccess`, so `/api/v1/auth/login` is a 404 and not a
@@ -140,8 +152,9 @@ the first cPanel request.
 
 ### POST /api/v1/auth/login.php
 
-Exchanges an administrator/reviewer username and password for a **bootstrap**
-session. Agent accounts use `/api/v1/auth/agent-login.php`.
+Exchanges a username and password for a **bootstrap** session. Every account —
+agent, reviewer or administrator — signs in here. The IMEI is never a login
+credential.
 
 ```json
 { "username": "ada", "password": "…" }
@@ -181,9 +194,10 @@ them being distinguishable is a way to learn things about the account.
 limit is keyed on the username **and** the source IP; per-IP is what stops a
 single host walking the whole user table.
 
-This route does not authenticate AGENT-role accounts created through public
-self-registration. Pre-existing agent accounts retain their current login
-credentials for compatibility; new agents use IMEI login.
+Publicly self-registered agents become ordinary `ACTIVE` accounts after
+approval and sign in here with the username and password chosen at registration.
+A row left over from the retired IMEI-only model has no password hash and is
+treated exactly like an unknown username until an administrator sets one.
 
 ---
 
@@ -195,33 +209,56 @@ administrator approves it in the account directory.
 ```json
 {
   "full_name": "Ada Lovelace",
+  "username": "ada.lovelace",
+  "password": "…",
   "nin": "12345678901",
   "phone": "08012345678",
   "imei": "490154203237518",
-  "device_type": "SAMSUNG"
+  "device_type": "SAMSUNG",
+  "email": "ada@example.test",
+  "location": "Lagos"
 }
 ```
 
-`phone` accepts a Nigerian mobile number as `08012345678`, `+2348012345678`
-or `2348012345678`; the server stores it in E.164 form. The NIN and phone are
-stored and exposed only through the ADMIN-only account directory.
-`device_type` must be one of `EACRUGGED`, `EASTAEON`, `HENA`, `MANTRA`,
-`OUKITEL`, `SAMSUNG` or `WHEATEK`. Duplicate NIN or IMEI values receive a
-generic `409 STATE_CONFLICT` response. Registration attempts are rate-limited
-by NIN and source IP.
+`username` is 3–64 characters of letters, digits, dot, underscore or hyphen and
+must contain at least one letter. `password` is 8–128 characters; it is stored
+only as a bcrypt hash. `phone` accepts a Nigerian mobile number as
+`08012345678`, `+2348012345678` or `2348012345678`; the server stores it in
+E.164 form. The NIN and phone are stored and exposed only through the
+ADMIN-only account directory. `device_type` must be one of `EACRUGGED`,
+`EASTAEON`, `HENA`, `MANTRA`, `OUKITEL`, `SAMSUNG` or `WHEATEK`. `email` and
+`location` are optional profile fields; `email` is stored lowercased and must
+be unique. Duplicate NIN, IMEI, email or username values receive a generic
+`409 STATE_CONFLICT` response. Registration attempts are rate-limited by NIN and
+source IP.
 
 The successful response includes the registration status and an agent summary,
-but never returns the NIN, phone or IMEI. A pending registration cannot use
-`/api/v1/auth/agent-login.php`; after approval the agent can sign in with the
-registered IMEI and bind the browser's device key.
+but never returns the NIN, phone, IMEI or password. A pending registration
+cannot sign in. After approval the agent signs in at
+`/api/v1/auth/login.php` with the chosen username and password, then binds the
+browser's device key through the configured pairing policy.
+
+### POST /api/v1/auth/password.php
+
+Changes the signed-in agent's own password. Requires a **signed** request and
+the current password, so possession of a live session alone cannot take the
+account over.
+
+```json
+{ "current_password": "…", "new_password": "…" }
+```
+
+Success is `200 { "status": "CHANGED" }`. A wrong current password is
+`422 VALIDATION_FAILED` with `details.field = "current_password"`; the message
+can be specific because the caller is already authenticated. The response never
+echoes either password.
 
 ### POST /api/v1/auth/agent-login.php
 
-Exchanges an active agent's IMEI for a **bootstrap** session. The IMEI is an
-identifier, not a secret; anyone who knows or copies it may impersonate that
-agent. Requests are rate-limited by IMEI and source IP. The client must bind
-the browser's device key at `/api/v1/device/register.php` before making signed
-requests.
+Retired. This route previously exchanged an IMEI for a bootstrap session; it now
+returns `401 UNAUTHENTICATED` without reading the body and never issues a token.
+An IMEI is hardware identification, not a secret, and cannot authenticate a
+person.
 
 ---
 
@@ -254,7 +291,10 @@ the JWK above is sent. The field is `public_key_jwk`, a JWK object — not a PEM
 string.
 
 `pairing_code` is required when the agent's policy demands it (`ALWAYS`, or
-`FIRST_DEVICE_ONLY` before the first device exists). If it is missing, this
+`FIRST_DEVICE_ONLY` before the first device exists). This applies to every
+account, including publicly self-registered agents: entering an IMEI in a web
+form does not prove control of the handset, so approval never waives pairing. If
+it is missing, this
 returns `422 VALIDATION_FAILED` with `error.details.field = "pairing_code"`,
 which is how the client knows to prompt: the policy is server-side, so the UI
 asks when it is asked rather than guessing. Codes are issued out of band by
@@ -333,10 +373,17 @@ client MIME is rejected on content, not on its name.
   "latitude": 6.5244,
   "longitude": 3.3792,
   "accuracy_m": 12.5,
-  "file_sha256": "e3b0c442…",
-  "notes": "optional, ≤500 chars"
+  "file_sha256": "e3b0c442�?�",
+  "reporting_month": "2026-11",
+  "notes": "optional, �%500 chars"
 }
 ```
+
+`reporting_month` is optional and accepts `YYYY-MM` or `YYYY-MM-01`. It is the
+month the enrollment counts toward, independent of when the queued photo finally
+reaches the server. A future month is rejected. When omitted, the server uses
+the month of `captured_at`, which keeps records queued by older clients counting
+in the month they were taken.
 
 `submission_uuid` is generated on the device and is the idempotency key.
 `file_sha256` is **required**: it is what ties the device signature to the file
@@ -473,10 +520,65 @@ be able to tell that apart from one already actioned.
 
 ---
 
+### GET /api/v1/dashboard.php
+
+Bearer-authenticated. Returns the caller's current monthly standing, read from
+the persisted summary rather than by re-aggregating the local queue.
+
+```json
+{
+  "data": {
+    "agent": { "id": 12, "agent_code": "AG-001", "full_name": "Ada", "email": null, "location": "Lagos", "monthly_target": 40 },
+    "period": { "period_type": "MONTHLY", "period_start_date": "2026-11-01", "business_timezone": "Africa/Lagos" },
+    "totals": { "approved_enrollments": 31, "total_submissions": 36, "pending": 3, "rejected": 2 },
+    "target": { "monthly_target": 40, "configured": true, "achievement_percent": 77.5, "remaining": 9 },
+    "leaderboard": { "rank": 4, "total_agents": 27 },
+    "recent_submissions": [],
+    "notifications": { "unread_count": 2, "items": [] }
+  }
+}
+```
+
+`approved_enrollments` is the sum of `count_claimed` for `VERIFIED` rows only.
+Pending and rejected records are reported separately and never enter the
+numerator. `achievement_percent` is `(approved / target) * 100`; when no target
+is configured it is `null`, not `0`, and `configured` is `false`. A target of
+zero means "not configured" and is rendered as such.
+
+### GET|POST /api/v1/profile.php
+
+Signed, scoped to the caller. `GET` returns the profile; `POST` accepts only
+`email`, `location` and `phone`. NIN, IMEI, role, status and monthly target are
+read-only here; a profile form cannot promote an account or change the number it
+is measured against. An email already used by another account is
+`409 STATE_CONFLICT`.
+
+```json
+{ "email": "ada@example.test", "location": "Lagos", "phone": "08012345678" }
+```
+
+### GET /api/v1/notifications.php
+
+Bearer-authenticated, scoped to the caller. Query: `limit` (1–100, default 50),
+`offset`. Returns `{ "data": [ ... ], "meta": { "unread_count": 2, "pagination": { ... } } }`.
+Notifications are written when a registration or account status is decided and
+when a submission is approved or rejected, so the agent has a durable record of
+a decision that has no other screen.
+
+### POST /api/v1/notifications/read.php
+
+Marks one notification read with `{ "id": 7 }`, or all of them with
+`{ "mark_all": true }`. An id belonging to another agent is a no-op, not a
+`403`, so the endpoint cannot be used to probe whether an id exists. Returns
+`{ "data": { "unread_count": 0 } }`.
+
+---
+
 ### GET /leaderboard
 
-Query: `period` (`YYYY-MM-DD`, any day in the week — normalised to its Monday),
-`site` (site name or id, optional), `limit` (1–100, default 25), `offset`.
+Query: `period` (`YYYY-MM-DD`, Monday for weekly or 1st of month for monthly),
+`period_type` (`WEEKLY` | `MONTHLY`, default `WEEKLY`),
+`site_id` (assigned site id, optional), `limit` (1–100, default 25), `offset`.
 
 ```json
 { "data": { "period_start": "2026-09-28", "site": null, "entries": [ … ], "self": { "rank": 12, "total_verified_count": 31 } } }
@@ -515,7 +617,7 @@ supervisor who made it.
 
 Bearer, and only ever the caller's own entitlements: the controller queries on
 the caller's `agent_id` and there is no parameter that can widen it. Query:
-`limit` (1–120, default 24).
+`limit` (1–120, default 24), `period_type` (`WEEKLY` | `MONTHLY`, optional).
 
 ```json
 {
@@ -558,7 +660,7 @@ Operator-only (`SUPERVISOR` or `ADMIN`). An `AGENT` role receives `403`.
 
 `GET /api/v1/rewards/index.php` lists one period's published entitlements in
 frozen-rank order. Query: `period` (`YYYY-MM-DD`, default the newest closed
-period), `limit` (1–100, default 25), `offset`. `meta.tiers` carries the current
+period), `period_type` (`WEEKLY` | `MONTHLY`, default `WEEKLY`), `limit` (1–100, default 25), `offset`. `meta.tiers` carries the current
 schedule and `meta.closed` says whether that period has been frozen yet;
 `meta.available_periods` drives a period selector without hardcoding dates.
 
@@ -583,8 +685,9 @@ would read as though the payee had approved their own payment.
 
 ---
 
+### Admin account management
 ### GET /api/v1/admin/agents.php  ·  POST /api/v1/admin/agents.php
-### POST /api/v1/admin/agent.php
+### GET /api/v1/admin/agent.php  ·  POST /api/v1/admin/agent.php
 
 Administrator-only (`ADMIN`). A `SUPERVISOR` or `AGENT` receives `403 FORBIDDEN`,
 and an unauthenticated caller `401 UNAUTHENTICATED`. The gate is the Kernel's
@@ -593,7 +696,11 @@ controller mistake cannot leave the surface open.
 
 #### GET `/api/v1/admin/agents.php`
 
-The account directory. Query: `limit` (1–200, default 50), `offset` (default 0).
+The account directory. Query: `limit` (1–200, default 50), `offset` (default 0),
+`q` (case-insensitive match on name, agent code, username, email or phone),
+`status`, `role`, `location`, and `self_registered` (`1` or `0`). Filters are
+applied server-side and echoed back in `meta.filters`; `meta.locations` lists the
+locations present in the directory for the location selector.
 
 ```json
 {
@@ -608,13 +715,21 @@ The account directory. Query: `limit` (1–200, default 50), `offset` (default 0
       "username": "mpadmin",
       "has_credential": true,
       "active_device_count": 1,
+      "email": "ada@example.test",
+      "location": "Lagos",
+      "monthly_target": 40,
+      "status_reason": null,
+      "status_changed_at": null,
+      "self_registered": true,
       "created_at": "2026-09-28 09:41:05"
     }
   ],
   "meta": {
     "pagination": { "total": 12, "limit": 50, "offset": 0 },
     "active_admins": 2,
-    "requested_by": "AG-001"
+    "requested_by": "AG-001",
+    "filters": { "q": null, "status": null, "role": null, "location": null, "self_registered": null },
+    "locations": ["Lagos", "Abuja"]
   }
 }
 ```
@@ -631,13 +746,43 @@ in". `meta.requested_by` is the caller's own `agent_code` and `meta.active_admin
 the count the last-admin guard is applied against; a client uses both to disable
 the controls the server would refuse, rather than offering a button that 409s.
 
-#### POST `/api/v1/admin/agents.php` (disabled)
+#### POST `/api/v1/admin/agents.php`
 
-Returns `405 METHOD_NOT_ALLOWED`. Agent accounts are created by the public
-self-registration endpoint; administrators do not approve or create agent
-registrations. Existing account management remains available through
-`POST /api/v1/admin/agent.php`.
+Creates a managed account with a credential and returns `201`. Unlike public
+self-registration, an administrator supplies the agent code, username and
+password; `role` defaults to `AGENT` and `status` defaults to `ACTIVE`.
 
+```json
+{
+  "agent_code": "AG-014",
+  "full_name": "Ada Lovelace",
+  "username": "ada",
+  "password": "…",
+  "role": "AGENT",
+  "status": "ACTIVE",
+  "nin": "12345678901",
+  "phone": "08012345678",
+  "email": "ada@example.test",
+  "location": "Lagos",
+  "monthly_target": 40,
+  "imei": "490154203237518",
+  "device_type": "SAMSUNG"
+}
+```
+
+`agent_code`, `full_name`, `username` and `password` are required. `status` may
+not be `DELETED` at creation; retirement remains a separate, audited action.
+`imei` and `device_type` must be supplied together. Duplicate agent code,
+username, NIN, email or IMEI returns `409 IDEMPOTENCY_CONFLICT`. The response is
+`{ "data": <agent> }` in directory shape, and the creation appends
+`admin.agent.created`.
+
+#### GET `/api/v1/admin/agent.php?id=`
+
+Returns one account's administrator detail: the directory fields, sanitized
+devices (never public-key material), recent audit rows, recent monthly targets,
+the effective target for the current month, and the current monthly summary
+(approved, submitted, pending, rejected and achievement).
 
 #### POST `/api/v1/admin/agent.php`
 
@@ -647,10 +792,12 @@ that action's own field list is a `422`.
 
 ```json
 { "id": 12, "action": "SET_ROLE",            "role": "SUPERVISOR" }
-{ "id": 12, "action": "SET_STATUS",          "status": "SUSPENDED" }
+{ "id": 12, "action": "SET_STATUS",          "status": "SUSPENDED", "reason": "repeated evidence mismatch" }
 { "id": 12, "action": "SET_PASSWORD",        "password": "…" }
 { "id": 12, "action": "REVOKE_CREDENTIAL" }
 { "id": 12, "action": "ISSUE_PAIRING_CODE" }
+{ "id": 12, "action": "SET_MONTHLY_TARGET", "monthly_target": 40 }
+{ "id": 12, "action": "SET_PROFILE",         "email": "ada@example.test", "location": "Lagos", "phone": "08012345678" }
 ```
 
 `SET_STATUS` accepts `PENDING`, `ACTIVE`, `REJECTED`, `SUSPENDED` or `DELETED`.
@@ -659,7 +806,14 @@ reject it. Rejected registrations can be reopened to `PENDING` for reconsiderati
 `DELETED` is retirement: devices and credential are revoked, the `DELETED`
 status is terminal, and the row and its history survive for compliance. Any
 transition away from `ACTIVE` revokes the account's devices, so a token that
-outlived the account stops working on its next request.
+outlived the account stops working on its next request. An optional `reason`
+(up to 500 characters) is stored as `status_reason`/`status_changed_at`, shown in
+the directory and detail responses, appended to the agent's notification, and
+recorded in the audit row.
+
+`SET_PROFILE` updates `email`, `location` and `phone`; the same validators and
+uniqueness rules as self-registration apply. It cannot change identity, role,
+status or credentials.
 
 `ISSUE_PAIRING_CODE` mints the out-of-band code a managed-account device-registration flow (or the
 device-registration step of the sign-in page) consumes to bind the account's
@@ -671,6 +825,13 @@ issuer as `created_by` — and the response adds `pairing_code`, `expires_at`
 (e.g. an agent's name) is stored with the code for an operator to recognise.
 Issuing a code is a way in for somebody, never a way out, so — like a password
 reset — it is also allowed on the caller's **own** account.
+
+`SET_MONTHLY_TARGET` sets the integer `monthly_target` used by the dashboard
+achievement calculation, in the range `0..1000000`. `0` means "not configured"
+and is rendered as such, not as `0%`. It is a measurement setting rather than an
+access control, so an administrator may set it on their own account; a no-op
+change writes no audit row. Every real change appends
+`admin.agent.monthly_target_changed`.
 
 Each call returns the updated account as `{ "data": <agent> }`, in the same shape
 as the directory.
@@ -690,9 +851,71 @@ retired account, which is immutable. `403` means the caller is not an `ADMIN`.
 Every action appends an immutable audit row: `admin.agent.created`,
 `admin.agent.role_changed`, `admin.agent.suspended`, `admin.agent.reinstated`,
 `admin.agent.retired`, `admin.agent.password_reset`,
-`admin.agent.credential_revoked` or `admin.agent.pairing_code_issued`. The
-audit metadata for a pairing code records who issued it, the TTL and the expiry —
-never the code itself.
+`admin.agent.credential_revoked`, `admin.agent.pairing_code_issued`,
+`admin.agent.monthly_target_changed` or `admin.agent.profile_changed`. Status
+changes also record the reason. The audit metadata for a pairing code records
+who issued it, the TTL and the expiry — never the code itself.
+
+---
+
+### Admin dashboard, targets, periods and audit
+
+Administrator-only (`ADMIN`); `SUPERVISOR` and `AGENT` receive `403`.
+
+#### GET `/api/v1/admin/dashboard.php`
+
+Query: `period` (`YYYY-MM`, default the current month) and `period_type`
+(`MONTHLY` default, `WEEKLY`). Returns agent, device, enrollment, target, reward
+and location aggregates for that period, plus the top agents and the period's
+closing state. Achievement is `approved ÷ effective target × 100`; a target of
+`0` is returned with `configured: false` and is never presented as `0%`.
+
+#### GET `/api/v1/admin/targets.php`
+
+Query: `period` (`YYYY-MM`, default current month), `period_type`, and optional
+`scope_type` (`ORGANIZATION` | `LOCATION` | `AGENT`) plus `scope_key`. Returns
+the configured targets, the effective organization/location values, the
+period's month, and `meta.agents`/`meta.locations` for selectors.
+
+Effective target precedence for an agent is: agent period target → legacy
+account `monthly_target` when greater than `0` → location period target →
+organization period target → not configured.
+
+#### POST `/api/v1/admin/targets.php`
+
+```json
+{ "period": "2026-11", "scope_type": "AGENT", "agent_id": 12, "target": 40 }
+{ "period": "2026-11", "scope_type": "LOCATION", "location": "Lagos", "target": 120 }
+{ "period": "2026-11", "scope_type": "ORGANIZATION", "target": 500 }
+{ "period": "2026-11", "scope_type": "AGENT", "agent_id": 12, "action": "CLEAR" }
+```
+
+`target` is `0..1000000`; `0` clears the period override and means "not
+configured". Setting or clearing audits `admin.target.set` /
+`admin.target.cleared`.
+
+#### GET `/api/v1/admin/periods.php`
+
+Query: `period_type` (default `MONTHLY`) and `limit` (default 6). Returns recent
+periods with submission totals, reward totals, due/frozen/published state, the
+business timezone and the close grace window.
+
+#### POST `/api/v1/admin/periods.php`
+
+```json
+{ "period": "2026-10", "period_type": "MONTHLY" }
+```
+
+Requests a close through the reward service. A period that is not yet due (or
+already frozen) returns `200` with `closed: false` and a reason rather than
+pretending to close. A real close freezes rankings/rewards and audits
+`admin.period.close_requested`.
+
+#### GET `/api/v1/admin/audit.php`
+
+Query: `limit` (1–200), `offset`, `action`, `entity_type`, `entity_id`,
+`actor_agent_id`, `from` and `to` (`YYYY-MM-DD`). Returns append-only audit rows
+with actor codes and decoded metadata. Audit rows are never edited or deleted.
 
 **Suspension and retirement are not distinguishable at login.** Any non-`ACTIVE`
 account returns the same `401 UNAUTHENTICATED` as a wrong password, for the same
@@ -703,14 +926,16 @@ account-status oracle.
 
 ## Client integration order
 
-For agents, register at `/register` with full name, NIN, IMEI and one of the
-supported device types. Registration activates the account immediately. Then
-sign in at `/login` with the registered IMEI; the agent flow binds the browser's
-device key without an administrator-issued code. An IMEI is an identifier, not
-a secret.
+For agents, register at `/register` with full name, username, password, NIN,
+IMEI and one of the supported device types. Registration creates a `PENDING`
+account; sign-in is unavailable until an administrator approves it. After
+approval, sign in at `/login` with the username and password chosen at
+registration. The first browser then registers its device key under the
+configured pairing policy, which may require an operator-issued code. An IMEI
+identifies a device, not a secret and never a login credential.
 
-For administrators and reviewers, sign in at `/admin/login` with username and
-password:
+Administrators and reviewers sign in at `/admin/login` with username and
+password. The same credential flow applies:
 
 1. `POST /api/v1/auth/login.php` with username and password. Keep the returned access token
    in memory only — never in `localStorage` or `sessionStorage` — and let the

@@ -15,9 +15,9 @@ use FieldPulse\Support\Clock;
  *
  * Two independent windows are enforced: per identifier and per IP. Either being
  * exhausted blocks the request. The identifier is whatever the endpoint names
- * as its subject — username, IMEI, NIN or device UUID — and hashes it before
- * storing it as a key to count against. IMEI is still a weak credential even
- * though its limiter key is hashed.
+ * as its subject - username, IMEI, NIN or device UUID - and hashes it before
+ * storing it as a key to count against. Hashing the limiter key does not turn a
+ * public identifier into a secret.
  *
  * Both windows are needed. The per-identifier one stops a single account being
  * ground down from a botnet; the per-IP one stops one host walking the entire

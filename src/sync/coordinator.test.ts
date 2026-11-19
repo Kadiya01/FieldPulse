@@ -221,6 +221,17 @@ describe('buildSubmitPayload', () => {
     ]);
   });
 
+  it('carries the reporting month the agent chose', () => {
+    const payload = buildSubmitPayload(makeSubmission({ reporting_month: '2026-05' }));
+
+    expect(payload.reporting_month).toBe('2026-05');
+  });
+
+  it('omits an unset reporting month so the server can fall back to capture time', () => {
+    expect(buildSubmitPayload(makeSubmission({ reporting_month: null }))).not.toHaveProperty('reporting_month');
+    expect(buildSubmitPayload(makeSubmission())).not.toHaveProperty('reporting_month');
+  });
+
   it('does not carry local bookkeeping fields onto the wire', () => {
     const payload = buildSubmitPayload(makeSubmission());
 

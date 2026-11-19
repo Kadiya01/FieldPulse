@@ -54,6 +54,15 @@ const CHROME_MEDIA_ARGS = [
 
 const BASE_URL = process.env.FIELDPULSE_E2E_URL ?? 'http://127.0.0.1:8791';
 
+/*
+ * The browser suite has no default .env to fall back to. Publish the isolated
+ * MariaDB environment to every child process this run starts: the webServer,
+ * global setup, the test workers and every CLI fixture they invoke.
+ */
+const E2E_ENV_FILE = process.env.FIELDPULSE_E2E_ENV
+  ?? path.join(HERE, 'private_storage', '.env.mariadb');
+process.env.FIELDPULSE_E2E_ENV = E2E_ENV_FILE;
+
 export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',
@@ -106,7 +115,9 @@ export default defineConfig({
     env: {
       // The E2E server only binds 127.0.0.1, but being explicit documents that
       // this suite has no business reaching anything off-host.
-      FIELDPULSE_E2E_LOCAL_ONLY: '1'
+      FIELDPULSE_E2E_LOCAL_ONLY: '1',
+      // Never let the server fall back to a deployment .env.
+      FIELDPULSE_E2E_ENV: E2E_ENV_FILE
     }
   },
 

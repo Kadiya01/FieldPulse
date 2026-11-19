@@ -20,8 +20,8 @@ require_once dirname(__DIR__) . '/app/bootstrap.php';
 
 use FieldPulse\Config\Config;
 use FieldPulse\Console\Cli;
+use FieldPulse\Database\AbhMigrationCatalog;
 use FieldPulse\Database\Connection;
-use FieldPulse\Database\Migrator;
 use FieldPulse\Support\Env;
 use FieldPulse\Support\Paths;
 
@@ -31,10 +31,11 @@ Cli::init(__FILE__);
 // needs this: verifying a second engine by copying the tree next to a second
 // document root proves nothing about the deployment that will actually run,
 // while re-reading one .env proves the same code against a different server.
-$argv = Cli::argv();
+$argv      = Cli::argv();
+$envOption = Cli::option($argv, 'env');
 
-if (Cli::option($argv, 'env') !== null) {
-    Config::boot(Cli::option($argv, 'env'));
+if ($envOption !== null) {
+    Config::boot($envOption);
 }
 
 $hardFailures = 0;
@@ -404,26 +405,33 @@ try {
     $fail('storage layout: ' . $e->getMessage());
 }
 
-$envFile = FIELDPULSE_PRIVATE_ROOT . '/.env';
+$envFile  = $envOption ?? FIELDPULSE_PRIVATE_ROOT . '/.env';
+$envLabel = basename($envFile);
+
 if (!is_file($envFile)) {
-    $fail('.env missing — copy .env.example and configure it');
+    $fail($envLabel . ' missing — copy .env.example and configure it');
 } else {
     $perms = @fileperms($envFile);
     // POSIX mode bits only. Windows reports 0777 from fileperms() for every
     // file and enforces access through ACLs, so the test there is permanently
     // true and would report a local file as world-readable no matter what.
     if (PHP_OS_FAMILY !== 'Windows' && $perms !== false && ($perms & 0o004) !== 0) {
-        $fail('.env is world-readable - run: chmod 640 .env');
+        $fail($envLabel . ' is world-readable - run: chmod 640 ' . $envLabel);
     } else {
-        $ok('.env present with 0640-style permissions');
+        $ok($envLabel . ' present with 0640-style permissions');
     }
 }
 
-$dotfiles = glob(FIELDPULSE_BASE_ROOT . '/public_html/.env*') ?: [];
+$dotfiles = [];
+foreach ($resolvedDocroots as $docroot) {
+    $dotfiles = array_merge($dotfiles, glob(rtrim($docroot, '/\\') . '/.env*') ?: []);
+}
+$dotfiles = array_values(array_unique($dotfiles));
+
 if ($dotfiles !== []) {
-    $fail('an .env file exists inside public_html: ' . implode(', ', array_map('basename', $dotfiles)));
+    $fail('an .env file exists inside a resolved document root: ' . implode(', ', array_map('basename', $dotfiles)));
 } else {
-    $ok('no .env inside public_html');
+    $ok('no .env files inside resolved document roots');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -485,28 +493,108 @@ try {
         ? 'ST_Distance_Sphere available (Haversine fallback not required)'
         : 'ST_Distance_Sphere absent — PHP Haversine fallback will be used');
 
-    $migrator = new Migrator(FIELDPULSE_PRIVATE_ROOT . '/migrations');
-    $pending  = array_filter($migrator->status(), static fn (array $r): bool => $r['status'] !== 'APPLIED');
+    // This deployment is ABH Monthly Enrollment, not the legacy FieldPulse
+    // schema. Verify the dedicated preview identity and read the ABH ledger only.
+    $config = Config::instance();
+    AbhMigrationCatalog::assertPreviewConfiguration(
+        FIELDPULSE_PRIVATE_ROOT,
+        $config->str('app.url'),
+        $config->str('db.name'),
+        $config->str('db.user'),
+        Env::loadedFile()
+    );
 
-    if ($pending === []) {
-        $ok('schema up to date (' . count($migrator->status()) . ' migrations)');
+    $actualDatabase = (string) Connection::fetchValue('SELECT DATABASE()');
+    AbhMigrationCatalog::assertConnectedDatabase($actualDatabase);
+    $actualUser = (string) Connection::fetchValue('SELECT CURRENT_USER()');
+    AbhMigrationCatalog::assertConnectedUser($actualUser);
+    $ok('connected to dedicated ABH preview database and database user');
+
+    $catalog = new AbhMigrationCatalog(FIELDPULSE_PRIVATE_ROOT . '/abh_migrations');
+    $ledgerExists = (int) Connection::fetchValue(
+        "SELECT COUNT(*) FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'abh_schema_migrations'"
+    ) === 1;
+
+    if (!$ledgerExists) {
+        $fail('ABH migration ledger missing — inspect with bin/abh_migrate.php --status');
     } else {
-        $fail('pending migrations: ' . implode(', ', array_column($pending, 'filename')));
+        $appliedRows = Connection::fetchAll(
+            'SELECT filename, checksum, applied_at FROM abh_schema_migrations ORDER BY filename ASC'
+        );
+        $statuses = $catalog->status($appliedRows);
+        $mismatches = array_values(array_filter(
+            $statuses,
+            static fn (array $row): bool => $row['checksum_mismatch']
+        ));
+        $pending = array_values(array_filter(
+            $statuses,
+            static fn (array $row): bool => $row['status'] === 'PENDING'
+        ));
+        $appliedCount = count(array_filter(
+            $statuses,
+            static fn (array $row): bool => $row['status'] === 'APPLIED' && !$row['checksum_mismatch']
+        ));
+
+        if ($mismatches !== []) {
+            $fail('ABH migration history has checksum mismatch or missing files: '
+                . implode(', ', array_column($mismatches, 'filename')));
+        } elseif ($pending !== []) {
+            $fail('pending ABH migrations: ' . implode(', ', array_column($pending, 'filename')));
+        } elseif ($statuses === []) {
+            $fail('no ABH SQL migrations found in the deployed private migration directory');
+        } else {
+            $ok('ABH schema up to date (' . $appliedCount . ' migrations; checksums match)');
+        }
     }
 
-    $nonce = (int) Connection::fetchValue('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', ['request_nonces']);
-    $nonce === 1 ? $ok('request_nonces present (replay protection active)') : $fail('request_nonces missing — replay protection unavailable');
+    // Validate ABH tables, never the retired FieldPulse table names.
+    $requiredTables = [
+        'abh_admin_roles', 'abh_admin_permissions', 'abh_admin_users',
+        'abh_admin_user_roles', 'abh_admin_role_permissions', 'abh_agents',
+        'abh_agent_credentials', 'abh_agent_devices', 'abh_reporting_periods',
+        'abh_enrollment_submissions', 'abh_submission_revisions',
+        'abh_submission_evidence', 'abh_submission_reviews',
+        'abh_submission_adjustments', 'abh_monthly_targets',
+        'abh_monthly_agent_totals', 'abh_monthly_leaderboard_snapshots',
+        'abh_monthly_organisation_snapshots', 'abh_reward_programs',
+        'abh_reward_rules', 'abh_reward_qualifications', 'abh_reward_gifts',
+        'abh_reward_awards', 'abh_reward_fulfilment_events', 'abh_audit_events',
+        'abh_notifications', 'abh_registration_attempts', 'abh_agent_sessions',
+        'abh_auth_nonces', 'abh_auth_attempts', 'abh_admin_sessions',
+        'abh_admin_auth_attempts', 'abh_admin_bootstrap_guard',
+    ];
 
-    // The three reward tables ship together; two of the three is a half-applied
-    // close and would fail on the FK from agent_rewards to reward_rankings.
-    foreach (['reward_tiers', 'reward_rankings', 'agent_rewards'] as $rewardTable) {
-        $present = (int) Connection::fetchValue(
-            'SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
-            [$rewardTable]
+    $tablePlaceholders = implode(',', array_fill(0, count($requiredTables), '?'));
+    $tableRows = Connection::fetchAll(
+        'SELECT TABLE_NAME FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (' . $tablePlaceholders . ')',
+        $requiredTables
+    );
+    $presentTables = array_fill_keys(
+        array_map(static fn (array $row): string => (string) $row['TABLE_NAME'], $tableRows),
+        true
+    );
+    $missingTables = array_values(array_filter(
+        $requiredTables,
+        static fn (string $table): bool => !isset($presentTables[$table])
+    ));
+
+    if ($missingTables === []) {
+        $ok('all ' . count($requiredTables) . ' required ABH tables present');
+    } else {
+        $fail('required ABH tables missing: ' . implode(', ', $missingTables));
+    }
+
+    foreach (['abh_agents', 'abh_enrollment_submissions', 'abh_monthly_targets', 'abh_reward_awards'] as $table) {
+        $engine = (string) Connection::fetchValue(
+            'SELECT ENGINE FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+            [$table]
         );
-        $present === 1
-            ? $ok($rewardTable . ' present')
-            : $fail($rewardTable . ' missing — run bin/migrate.php');
+        strtolower($engine) === 'innodb'
+            ? $ok($table . ' uses InnoDB')
+            : $fail($table . ' missing or not using InnoDB');
     }
 } catch (Throwable $e) {
     $fail('database: ' . $e->getMessage());

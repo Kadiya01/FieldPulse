@@ -219,7 +219,15 @@ final class SignatureVerifier
             throw new ApiException(401, ErrorCode::SIGNATURE_INVALID, 'Malformed proof-of-possession signature.');
         }
 
-        if (@openssl_verify($message, $raw, $key, OPENSSL_ALGO_SHA256) !== 1) {
+        $result = @openssl_verify($message, $raw, $key, OPENSSL_ALGO_SHA256);
+        if ($result === -1 && strlen($raw) === 64) {
+            $der = self::p1363ToDer($raw);
+            if ($der !== null) {
+                $result = @openssl_verify($message, $der, $key, OPENSSL_ALGO_SHA256);
+            }
+        }
+
+        if ($result !== 1) {
             throw new ApiException(
                 401,
                 ErrorCode::SIGNATURE_INVALID,

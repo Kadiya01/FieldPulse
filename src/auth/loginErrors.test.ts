@@ -5,7 +5,7 @@ import { loginErrorMessage } from './loginErrors';
 describe('login error messages', () => {
   it('keeps credential failures indistinguishable', () => {
     expect(loginErrorMessage(new ApiError(401, 'UNAUTHENTICATED', 'Authentication failed.', null)))
-      .toBe('Sign in failed. Check your username and password.');
+      .toBe('Sign in failed. Check your phone number and password.');
   });
 
   it('explains rate limiting', () => {

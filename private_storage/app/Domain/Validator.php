@@ -74,11 +74,10 @@ final class Validator
     /**
      * IMEI: 14-16 digits, and Luhn-valid.
      *
-     * The agent login flow uses IMEI as its sole typed credential by
-     * requirement. An IMEI is a hardware identifier, not a secret, so this is
-     * materially weaker than password authentication; rate limiting does not
-     * make the identifier secret. Existing P-256 device binding remains in
-     * place for signed requests after the first login.
+     * The IMEI is recorded as an administrative device attribute during
+     * registration and provisioning. It identifies hardware, not a secret, and
+     * is never accepted as a login credential. The value is still validated
+     * here because it is a unique identity attribute.
      */
     public static function imei(mixed $value, string $field = 'imei'): string
     {
@@ -145,6 +144,162 @@ final class Validator
             'Enter a valid Nigerian mobile number, for example 08012345678 or +2348012345678.',
             ['field' => 'phone']
         );
+    }
+
+    /**
+     * Optional profile email. Absent and empty both mean "not provided".
+     */
+    public static function email(mixed $value, string $field = 'email'): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw ApiException::validation('Field "' . $field . '" must be an email address.', ['field' => $field]);
+        }
+
+        $email = strtolower(trim($value));
+
+        if ($email === '') {
+            return null;
+        }
+
+        if (mb_strlen($email) > 191 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            throw ApiException::validation(
+                'Enter a valid email address.',
+                ['field' => $field]
+            );
+        }
+
+        return $email;
+    }
+
+    /**
+     * Optional free-text location shown on the agent dashboard.
+     */
+    public static function location(mixed $value, string $field = 'location'): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw ApiException::validation('Field "' . $field . '" must be text.', ['field' => $field]);
+        }
+
+        $location = trim($value);
+
+        if ($location === '') {
+            return null;
+        }
+
+        $length = mb_strlen($location);
+
+        if ($length < 2 || $length > 191 || preg_match('/[\x00-\x1F\x7F]/', $location) === 1) {
+            throw ApiException::validation(
+                'Location must be between 2 and 191 characters.',
+                ['field' => $field]
+            );
+        }
+
+        return $location;
+    }
+
+    /**
+     * Normalise a reporting month to the first day of that business month.
+     *
+     * Accepts both `YYYY-MM` (what an <input type="month"> sends) and the
+     * canonical `YYYY-MM-01`. A future month is rejected: a submission cannot
+     * report work that has not happened yet, and accepting one would let an
+     * agent park a count outside every closed period.
+     */
+    /**
+     * Normalise a management period to the first day of that month.
+     *
+     * Unlike reportingMonth(), a future month is allowed by default: an
+     * administrator sets next month's target before it starts. The calendar
+     * check is the same strict one, so 2026-02-30 can never roll into March.
+     */
+    public static function periodMonth(mixed $value, string $field = 'period', bool $allowFuture = true): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is required.',
+                ['field' => $field]
+            );
+        }
+
+        $raw = trim($value);
+
+        if (preg_match('/^(\d{4})-(\d{2})$/', $raw, $m) === 1) {
+            $date = $m[1] . '-' . $m[2] . '-01';
+        } elseif (preg_match('/^(\d{4})-(\d{2})-01$/', $raw, $m) === 1) {
+            $date = $raw;
+        } else {
+            throw ApiException::validation(
+                'Field "' . $field . '" must be a month in YYYY-MM form.',
+                ['field' => $field]
+            );
+        }
+
+        $year = (int) $m[1];
+        $month = (int) $m[2];
+
+        if ($year < 1900 || $year > 2999 || !self::isIsoDate($date) || $month < 1 || $month > 12) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is not a valid calendar month.',
+                ['field' => $field]
+            );
+        }
+
+        if (!$allowFuture && $date > PeriodResolver::monthlyPeriodStartDate()) {
+            throw ApiException::validation(
+                'Field "' . $field . '" cannot be in the future.',
+                ['field' => $field]
+            );
+        }
+
+        return $date;
+    }
+
+    public static function reportingMonth(mixed $value, string $field = 'reporting_month'): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is required.',
+                ['field' => $field]
+            );
+        }
+
+        $raw = trim($value);
+
+        if (preg_match('/^(\d{4})-(\d{2})$/', $raw, $m) === 1) {
+            $date = $m[1] . '-' . $m[2] . '-01';
+        } elseif (preg_match('/^(\d{4})-(\d{2})-01$/', $raw, $m) === 1) {
+            $date = $raw;
+        } else {
+            throw ApiException::validation(
+                'Field "' . $field . '" must be a month in YYYY-MM form.',
+                ['field' => $field]
+            );
+        }
+
+        if (!self::isIsoDate($date) || (int) $m[2] < 1 || (int) $m[2] > 12) {
+            throw ApiException::validation(
+                'Field "' . $field . '" is not a valid calendar month.',
+                ['field' => $field]
+            );
+        }
+
+        if ($date > PeriodResolver::monthlyPeriodStartDate()) {
+            throw ApiException::validation(
+                'Reporting month cannot be in the future.',
+                ['field' => $field]
+            );
+        }
+
+        return $date;
     }
 
     public static function deviceType(mixed $value): string

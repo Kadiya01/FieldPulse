@@ -94,17 +94,20 @@ final class SubmissionRepository extends Repository
         string $fileMime,
         int $fileSize,
         int $imageWidth,
-        int $imageHeight
+        int $imageHeight,
+        ?string $reportingMonth = null
     ): int {
         $this->exec(
             'INSERT INTO submissions (
                 submission_uuid, agent_id, device_id, count_claimed,
                 client_latitude, client_longitude, client_captured_at, client_accuracy_m,
+                reporting_month,
                 file_path, file_sha256, file_mime, file_size, image_width, image_height,
                 server_received_at, status, created_at, updated_at
              ) VALUES (
                 :uuid, :agent_id, :device_id, :count_claimed,
                 :lat, :lng, :captured_at, :accuracy,
+                :reporting_month,
                 :file_path, :sha256, :mime, :size, :width, :height,
                 UTC_TIMESTAMP(), :status, UTC_TIMESTAMP(), UTC_TIMESTAMP()
              )',
@@ -117,6 +120,7 @@ final class SubmissionRepository extends Repository
                 'lng'          => $clientLng,
                 'captured_at'  => $clientCapturedAt,
                 'accuracy'     => $clientAccuracyM,
+                'reporting_month' => $reportingMonth,
                 'file_path'    => $filePath,
                 'sha256'       => $fileSha256,
                 'mime'         => $fileMime,
@@ -442,8 +446,39 @@ final class SubmissionRepository extends Repository
      *
      * @return array{total_verified_count:int,total_submissions:int,total_rejected:int,total_pending:int}
      */
-    public function summarisePeriod(int $agentId, string $startUtc, string $endUtc): array
-    {
+    public function summarisePeriod(
+        int $agentId,
+        string $startUtc,
+        string $endUtc,
+        ?string $reportingMonth = null
+    ): array {
+        $params = [
+            'verified'   => self::VERIFIED,
+            'rejected'   => self::REJECTED,
+            'queued'     => self::QUEUED,
+            'processing' => self::PROCESSING,
+            'received'   => self::RECEIVED,
+            'agent_id'   => $agentId,
+            'start'      => $startUtc,
+            'end'        => $endUtc,
+        ];
+
+        /*
+         * A monthly total is keyed by the month the agent reported, not by the
+         * moment the server happened to receive the file. Historical rows have
+         * no reporting_month, so they keep counting through the received-at
+         * window; new rows are counted exactly once, in the month they claim.
+         * Without the fallback, applying migration 027 would erase every
+         * existing monthly total until each old row was backfilled.
+         */
+        $periodClause = 'server_received_at >= :start AND server_received_at < :end';
+
+        if ($reportingMonth !== null) {
+            $periodClause = '(reporting_month = :reporting_month
+                OR (reporting_month IS NULL AND server_received_at >= :start AND server_received_at < :end))';
+            $params['reporting_month'] = $reportingMonth;
+        }
+
         $row = $this->one(
             'SELECT
                 COALESCE(SUM(CASE WHEN status = :verified THEN count_claimed ELSE 0 END), 0) AS verified_count,
@@ -452,18 +487,8 @@ final class SubmissionRepository extends Repository
                 COALESCE(SUM(CASE WHEN status IN (:queued, :processing, :received) THEN 1 ELSE 0 END), 0) AS total_pending
              FROM submissions
              WHERE agent_id = :agent_id
-               AND server_received_at >= :start
-               AND server_received_at < :end',
-            [
-                'verified'   => self::VERIFIED,
-                'rejected'   => self::REJECTED,
-                'queued'     => self::QUEUED,
-                'processing' => self::PROCESSING,
-                'received'   => self::RECEIVED,
-                'agent_id'   => $agentId,
-                'start'      => $startUtc,
-                'end'        => $endUtc,
-            ]
+               AND ' . $periodClause,
+            $params
         );
 
         return [
@@ -496,7 +521,7 @@ final class SubmissionRepository extends Repository
     public function listForAgent(int $agentId, int $limit = 50, int $offset = 0): array
     {
         return $this->all(
-            'SELECT id, submission_uuid, count_claimed, status, server_received_at,
+            'SELECT id, submission_uuid, count_claimed, reporting_month, status, server_received_at,
                     verified_at, file_path, image_width, image_height, file_size
                FROM submissions
               WHERE agent_id = :a

@@ -5,20 +5,30 @@ import { triggerSync } from '../sync/coordinator';
 import { Camera, Send, AlertTriangle } from 'lucide-react';
 import { getDeviceIdentity, sha256Hex } from '../crypto/keys';
 
+/** The current business month in the `<input type="month">` format. */
+function currentReportingMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export default function CapturePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [cameraReady, setCameraReady] = useState(false);
   const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [countClaimed, setCountClaimed] = useState<number>(1);
+  const [reportingMonth, setReportingMonth] = useState<string>(currentReportingMonth);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   // Start camera on mount
   useEffect(() => {
+    let mediaStream: MediaStream | null = null;
+
     async function startCamera() {
       try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
+        mediaStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment' }
         });
         setStream(mediaStream);
@@ -31,18 +41,46 @@ export default function CapturePage() {
     }
     startCamera();
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-      }
+      mediaStream?.getTracks().forEach(t => t.stop());
     };
   }, []); // eslint-disable-line
 
+  useEffect(() => {
+    const video = videoRef.current;
+
+    if (!video || !stream) {
+      setCameraReady(false);
+      return;
+    }
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+
+    const markReady = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setCameraReady(true);
+      }
+    };
+
+    if (video.readyState >= 1) {
+      markReady();
+    }
+
+    video.addEventListener('loadedmetadata', markReady);
+    return () => video.removeEventListener('loadedmetadata', markReady);
+  }, [stream, photoUrl]);
+
   const capturePhoto = useCallback(() => {
-    if (!videoRef.current || !stream) return;
-    
+    if (!videoRef.current || !stream || !cameraReady) return;
+
+    const width = videoRef.current.videoWidth;
+    const height = videoRef.current.videoHeight;
+    if (!width || !height) return;
+
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0);
@@ -53,7 +91,7 @@ export default function CapturePage() {
         }
       }, 'image/jpeg', 0.95);
     }
-  }, [stream]);
+  }, [stream, cameraReady]);
 
   const saveSubmission = async () => {
     if (!photoBlob) return;
@@ -109,6 +147,7 @@ export default function CapturePage() {
         longitude: lng,
         accuracy_m: accuracy,
         captured_at: new Date(now).toISOString(),
+        reporting_month: reportingMonth,
         created_at: now,
         updated_at: now,
         status: 'PENDING',
@@ -182,7 +221,7 @@ export default function CapturePage() {
             <button
               type="button"
               onClick={capturePhoto}
-              disabled={!stream}
+              disabled={!stream || !cameraReady}
               aria-label="Take photo"
               className="bg-white text-blue-700 rounded-full p-4 shadow-xl active:scale-95 transition disabled:opacity-60"
             >
@@ -202,7 +241,26 @@ export default function CapturePage() {
             <img src={photoUrl} alt="Photo just captured, awaiting confirmation" className="w-full h-auto" />
           </div>
 
-          <div className="bg-white p-4 rounded shadow">
+          <div className="bg-white p-4 rounded shadow space-y-4">
+            <div>
+              <label htmlFor="reporting-month" className="block text-sm font-medium text-gray-800 mb-1">
+                Reporting month
+              </label>
+              <input
+                id="reporting-month"
+                type="month"
+                value={reportingMonth}
+                max={currentReportingMonth()}
+                onChange={(e) => setReportingMonth(e.target.value || currentReportingMonth())}
+                aria-describedby="reporting-month-help"
+                className="w-full border-gray-400 rounded-md shadow-sm p-2 border"
+              />
+              <p id="reporting-month-help" className="mt-1 text-xs text-gray-700">
+                The month this enrollment counts toward. It cannot be in the future.
+              </p>
+            </div>
+
+            <div>
             <label htmlFor="count" className="block text-sm font-medium text-gray-800 mb-1">
               Count claimed
             </label>
@@ -218,8 +276,9 @@ export default function CapturePage() {
             />
             <p id="count-help" className="mt-1 text-xs text-gray-700">
               This is your claim. The server verifies it independently before it counts
-              toward your weekly standing.
+              toward your monthly standing.
             </p>
+            </div>
           </div>
 
           <div className="flex gap-4">

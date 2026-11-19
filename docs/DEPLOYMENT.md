@@ -150,7 +150,8 @@ because the spec's requirements are only satisfiable with extra columns:
 | 014 `agent_role` | §13 review decisions need a supervisor role |
 | 015 review provenance | Who reviewed what, when, and why |
 | 017 `add_username_password` | §6 username/password credentials; `refresh_tokens.device_id` becomes nullable |
-| 018 `retire_auth_challenges` | Drops the challenge table; §6 is now credentials, not PoP-on-login
+| 018 `retire_auth_challenges` | Drops the challenge table; §6 is now credentials, not PoP-on-login |
+| 026 `restore_monthly_periods` | Adds `period_type` to summaries, rankings and entitlements so weekly and monthly periods cannot collide |
 
 ---
 
@@ -270,9 +271,9 @@ that tier did not run rather than quietly passing.
 ### Updating an existing installation for agent self-registration
 
 This release changes both the backend and frontend. Uploading `dist/` alone
-does **not** enable self-registration or IMEI sign-in. Apply the additive
-database migration first; the previous application continues to work while
-the update is in progress.
+does **not** enable self-registration or username-password sign-in. Apply the
+additive database migration first; the previous application continues to work
+while the update is in progress.
 
 1. Back up the production database and the existing `private_storage/app/` and
    web document-root trees. Do not overwrite `private_storage/.env`.
@@ -296,17 +297,19 @@ the update is in progress.
    private_storage/app/Config/schema.php
    private_storage/app/Database/AgentRepository.php
    private_storage/app/Domain/AdminAgentController.php
-   private_storage/app/Domain/AgentLoginController.php        (new)
+   private_storage/app/Domain/AgentLoginController.php        (retired IMEI tombstone)
    private_storage/app/Domain/AgentRegistrationController.php (new)
    private_storage/app/Domain/DeviceController.php
    private_storage/app/Domain/LoginController.php
+   private_storage/app/Domain/PasswordController.php          (new)
    private_storage/app/Domain/Validator.php
    private_storage/app/Http/Kernel.php
    private_storage/app/Security/RateLimiter.php
    private_storage/migrations/024_self_registration.sql
    private_storage/migrations/025_pending_agent_approval.sql
    public_html/api/v1/agents/register.php                     (new)
-   public_html/api/v1/auth/agent-login.php                    (new)
+   public_html/api/v1/auth/agent-login.php                    (retired IMEI tombstone)
+   public_html/api/v1/auth/password.php                       (new)
    ```
 
    Keep `private_storage` outside the active web document root. Do not replace
@@ -319,10 +322,10 @@ the update is in progress.
    content-hashed files from that directory; do not delete the document root
    or its protected files.
 6. Run `php ~/private_storage/bin/healthcheck.php`. Check `/login` for agent
-   IMEI sign-in, `/register` for self-registration, and `/admin/login` for
-   administrator/reviewer username-password sign-in. Confirm the API routes
-   return API responses rather than SPA HTML, and that an authorized
-   administrator can view the account directory.
+   username-password sign-in, `/register` for self-registration, and
+   `/admin/login` for administrator/reviewer username-password sign-in. Confirm
+   the API routes return API responses rather than SPA HTML, and that an
+   authorized administrator can view the account directory.
 
 New registrations remain pending until an administrator approves them in
 account management; rejected registrations can be reopened there for
@@ -330,6 +333,50 @@ reconsideration. The registration form requires a Nigerian mobile number.
 IMEI is an identifier, not a secret.
 Do not test registration using a person's NIN or IMEI unless that person is
 intentionally being registered.
+
+### Updating an existing installation for monthly periods
+
+Migration 026 is additive. It keeps every existing summary, ranking and
+entitlement as `WEEKLY`, then adds the `period_type` discriminator and rebuilds
+the affected keys.
+
+1. Back up the production database and the existing `private_storage/app/` tree.
+2. Upload `private_storage/migrations/026_restore_monthly_periods.sql` to the
+   existing sibling `private_storage/migrations/` directory.
+3. Apply from the deployed copy, then confirm the ledger:
+
+   ```bash
+   php ~/private_storage/bin/migrate.php --status
+   php ~/private_storage/bin/migrate.php
+   php ~/private_storage/bin/migrate.php --status
+   ```
+
+   The final status must show 026 applied with no checksum mismatch. Migration
+   checksums are byte-sensitive; keep the file LF and apply the same copy that
+   was uploaded (see `docs/RELEASE.md`).
+4. Upload the monthly-capable application files and the new `dist/` build.
+5. Monthly summaries start accumulating from the first verification after
+   deployment. To backfill historical months from the submission ledger, run
+   the monthly backfill tool:
+
+   ```bash
+   php ~/private_storage/bin/backfill_monthly.php --dry-run
+   php ~/private_storage/bin/backfill_monthly.php --from=2026-01 --to=2026-10
+   ```
+
+   It writes MONTHLY rows only, recomputes each agent/month from submissions,
+   and never writes rankings or entitlements. Existing MONTHLY rows that differ
+   are reported and left alone unless `--overwrite` is passed. A frozen month
+   is never changed. Exit code 2 means inconsistent historical rows remain for
+   review. Use `--period=YYYY-MM` or `--agent=CODE` to narrow a repair.
+
+   For a single current-month rebuild, `reaggregate.php` still works:
+
+   ```bash
+   php ~/private_storage/bin/reaggregate.php --period=2026-10-01 --type=MONTHLY
+   ```
+6. Run `php ~/private_storage/bin/healthcheck.php` and confirm the leaderboard
+   and rewards screens can switch between Weekly and Monthly.
 
 ---
 
@@ -413,12 +460,13 @@ cron. Run any of them with no arguments to see usage.
 | `provision_agent.php` | Provision an agent: code, name, optional role, optional site |
 | `pair_device.php` | Issue a one-time device pairing code |
 | `prune.php` | TTL housekeeping; `--dry-run` first |
-| `reaggregate.php` | Rebuild leaderboard summaries; `--period=`, `--all` |
+| `reaggregate.php` | Rebuild leaderboard summaries; `--period=`, `--type=`, `--all` |
+| `backfill_monthly.php` | Backfill historical MONTHLY summaries; `--from=`, `--to=`, `--period=`, `--agent=`, `--dry-run`, `--overwrite`, `--json` |
 | `close_rewards.php` | Close due reward periods; `--period=`, `--all`, `--dry-run` |
 | `../workers/process_queue.php` | Run the verification queue; `--stats`, `--prune` |
 
-Two of these are worth explaining because they are the ones you will reach for
-only when something is already wrong.
+These are worth explaining because they are the ones you will reach for only
+when something is already wrong.
 
 `prune.php --dry-run` prints what it would delete without deleting it. Run it
 first; the counts tell you whether a retention window is set to something
@@ -430,10 +478,16 @@ after changing a threshold in `.env`, or after restoring a database from backup
 every counter is a full recompute rather than an increment, running it twice
 changes nothing, so it is safe to run speculatively.
 
+`backfill_monthly.php` is the historical-month version of that repair. It walks
+the submission ledger month by month and writes only MONTHLY summaries. Start
+with `--dry-run`; if it exits 2, review the reported differences before adding
+`--overwrite`. Frozen months are reported and left unchanged.
+
 ```bash
 php private_storage/bin/prune.php --dry-run
 php private_storage/bin/reaggregate.php --period=2026-09-28
 php private_storage/bin/reaggregate.php --all
+php private_storage/bin/backfill_monthly.php --from=2026-01 --to=2026-10 --dry-run
 ```
 
 ---
@@ -455,14 +509,14 @@ file, so this is a correctness check, not a hardening preference.
 
 ## 9. Security model in one paragraph
 
-Administrators and reviewers sign in with a **username and password** (bcrypt).
-Agents self-register with their full name, NIN, IMEI and an approved device type,
-then sign in with the registered IMEI. The IMEI is an identifier, not a secret:
-anyone who knows it can request an agent bootstrap session. The session can only
-bind a browser device key; subsequent state-changing requests require a device
-signature. New self-registered agents bind their first browser without a
-pairing code, while existing managed accounts continue to follow their
-configured pairing policy.
+Every account signs in with a **username and password** (bcrypt). Agents
+self-register with their full name, username, password, NIN, IMEI and an
+approved device type; the account stays pending until an administrator approves
+it. The IMEI identifies a device, not a secret and never a login credential. A
+login returns a bootstrap session that can only bind a browser device key;
+subsequent state-changing requests require a device signature. New devices
+follow the configured pairing policy, which may require an operator-issued
+one-time code.
 
 Every login failure is byte-identical, and the password hash is verified even
 when the username does not exist, so neither the body nor the response time is

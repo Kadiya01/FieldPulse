@@ -1,0 +1,171 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const read = (path: string) => readFileSync(resolve(here, path), 'utf8');
+
+const migration = read('../private_storage/abh_migrations/008_admin_sessions_and_permissions.sql');
+const bootstrapController = read('../private_storage/app/Domain/AbhAdminBootstrapController.php');
+const authRepository = read('../private_storage/app/Database/AbhAdminAuthRepository.php');
+const loginController = read('../private_storage/app/Domain/AbhAdminLoginController.php');
+const authenticator = read('../private_storage/app/Security/AbhAdminAuthenticator.php');
+const agentRepository = read('../private_storage/app/Database/AbhAdminAgentRepository.php');
+const decisionController = read('../private_storage/app/Domain/AbhAdminAgentDecisionController.php');
+const deviceController = read('../private_storage/app/Domain/AbhAdminDeviceDecisionController.php');
+const detailsController = read('../private_storage/app/Domain/AbhAdminAgentDetailsController.php');
+const kernel = read('../private_storage/app/Http/Kernel.php');
+const request = read('../private_storage/app/Http/Request.php');
+const api = read('api/client.ts');
+const app = read('App.tsx');
+const page = read('pages/AdminPortalPage.tsx');
+const adminUsersRepository = read('../private_storage/app/Database/AbhAdminUserRepository.php');
+const adminUsersController = read('../private_storage/app/Domain/AbhAdminUsersController.php');
+const adminUsersShim = read('../public_html/api/v1/abh/admin/users.php');
+const healthController = read('../private_storage/app/Domain/AbhHealthController.php');
+const healthShim = read('../public_html/api/v1/abh/health.php');
+const deployWorkflow = read('../.github/workflows/deploy.yml');
+const schemaIntegration = read('../private_storage/bin/abh_schema_test.php');
+
+describe('ABH administrator security and management contract', () => {
+  it('creates independent administrator sessions and attempt throttling', () => {
+    expect(migration).toContain('CREATE TABLE abh_admin_sessions');
+    expect(migration).toContain('CREATE TABLE abh_admin_auth_attempts');
+    expect(migration).toContain('access_token_hash');
+    expect(migration).toContain('refresh_token_hash');
+    expect(migration).toContain('token_family');
+    expect(migration).toContain('CREATE TABLE abh_admin_bootstrap_guard');
+    expect(migration).toContain('SUPER_ADMIN');
+    expect(migration).toContain('AGENT_REVIEWER');
+    expect(migration).toContain('devices.approve');
+  });
+
+  it('permits only one secret-gated first administrator setup', () => {
+    expect(bootstrapController).toContain('ABH_ADMIN_BOOTSTRAP_KEY');
+    expect(bootstrapController).toContain('hash_equals');
+    expect(bootstrapController).toContain('bootstrapFirstAdmin');
+    expect(authRepository).toContain('abh_admin_bootstrap_guard');
+    expect(authRepository).toContain('FOR UPDATE');
+    expect(authRepository).toContain('already_initialized');
+    expect(authRepository).toContain("'SUPER_ADMIN'");
+    expect(page).toContain('First-time setup');
+    expect(page).toContain('bootstrap_key: bootstrapKey');
+  });
+
+  it('does not mix administrator credentials with agent or legacy users', () => {
+    expect(loginController).toContain("['email', 'password']");
+    expect(loginController).toContain('AbhAdminAuthRepository::findLoginIdentity');
+    expect(authRepository).toContain('FROM abh_admin_users');
+    expect(authRepository).toContain('abh_admin_sessions');
+    expect(authRepository).not.toMatch(/\b(?:FROM|JOIN|INTO|UPDATE)\s+(?:agents|users|refresh_tokens|login_attempts)\b/i);
+    expect(authenticator).toContain('AbhAdminAuthRepository::findByAccessToken');
+    expect(authenticator).toContain('AbhAdminContext');
+    expect(request).toContain('requireAbhAdminContext');
+  });
+
+  it('authorizes administration using live database roles and permissions', () => {
+    expect(authRepository).toContain('abh_admin_user_roles');
+    expect(authRepository).toContain('abh_admin_role_permissions');
+    expect(authenticator).toContain("['roles'] === []");
+    expect(kernel).toContain("'abh.admin.auth.login'");
+    expect(kernel).toContain("'abh.admin.agents'");
+    expect(kernel).toContain("str_starts_with($route, 'abh.admin.')");
+    expect(page).toContain("admin.permissions.includes('agents.read')");
+  });
+
+  it('reviews applications transactionally and invalidates sessions on suspension', () => {
+    expect(agentRepository).toContain('Connection::transaction');
+    expect(agentRepository).toContain('UPDATE abh_agents');
+    expect(agentRepository).toContain('UPDATE abh_agent_sessions');
+    expect(agentRepository).toContain('INSERT INTO abh_audit_events');
+    expect(agentRepository).toContain('INSERT INTO abh_notifications');
+    expect(decisionController).toContain("agents.approve");
+    expect(decisionController).toContain("agents.reject");
+    expect(decisionController).toContain("agents.suspend");
+    expect(decisionController).toContain('A reason is required');
+  });
+
+  it('authorizes and revokes devices separately from agent accounts', () => {
+    expect(agentRepository).toContain('UPDATE abh_agent_devices');
+    expect(agentRepository).toContain('UPDATE abh_agent_sessions');
+    expect(agentRepository).toContain('DEVICE_REVOKED');
+    expect(deviceController).toContain("devices.approve");
+    expect(deviceController).toContain("devices.revoke");
+    expect(agentRepository).toContain("['agent_status'] !== 'ACTIVE'");
+    expect(detailsController).toContain("$admin->hasPermission('devices.read')");
+  });
+
+  it('keeps ABH admin browser calls namespaced away from legacy admin APIs', () => {
+    expect(api).toContain('fetchAbhAdminAgents');
+    expect(api).toContain('decideAbhAdminAgent');
+    expect(api).toContain('decideAbhAdminDevice');
+    expect(api).toContain('fetchAbhAdminAgentDetails');
+  });
+
+  it('uses distinct native-PDO placeholders for device approval fields', () => {
+    expect(agentRepository).toContain(':is_approved_at');
+    expect(agentRepository).toContain(':is_approved_by');
+    expect(agentRepository).not.toContain(':is_approved = 1');
+  });
+
+  it('uses a separate administrator browser session and portal route', () => {
+    expect(api).toContain('/abh/admin/auth/login.php');
+    expect(api).toContain('/abh/admin/auth/refresh.php');
+    expect(api).toContain('/abh/admin/auth/logout.php');
+    expect(api).toContain("'abh:admin:refresh'");
+    expect(api).toContain("new BroadcastChannel('abh-admin-session')");
+    expect(api).toContain('fetchAbhAdminAgents');
+    expect(api).toContain('decideAbhAdminDevice');
+    expect(app).toContain('useLocation');
+    expect(app).toContain('<AdminPortalPage />');
+    expect(page).toContain('Administrator sign in');
+    expect(page).toContain('Agent applications');
+  });
+
+  it('provides permission-gated administrator account and role management', () => {
+    expect(migration).toContain("'admin.users.manage'");
+    expect(kernel).toContain("'abh.admin.users' => \\FieldPulse\\Domain\\AbhAdminUsersController::class");
+    expect(kernel).toContain("'abh.admin.users' => 'admin'");
+    expect(adminUsersController).toContain("requirePermission('admin.users.manage')");
+    expect(adminUsersController).toContain("['action', 'full_name', 'email', 'password', 'role_key']");
+    expect(adminUsersController).toContain("['action', 'admin_id', 'status', 'role_key']");
+    expect(adminUsersRepository).toContain('password_hash($password, PASSWORD_DEFAULT)');
+    expect(adminUsersRepository).toContain('last_super_admin');
+    expect(adminUsersRepository).toContain('ORDER BY a.id ASC FOR UPDATE');
+    expect(adminUsersRepository).toContain('self_lockout');
+    expect(adminUsersRepository).toContain('ADMIN_ACCESS_CHANGED');
+    expect(adminUsersRepository).toContain('admin.user.created');
+    expect(adminUsersRepository).toContain('admin.user.updated');
+    expect(adminUsersShim).toContain("Kernel::handle('abh.admin.users')");
+    expect(api).toContain('fetchAbhAdminUsers');
+    expect(api).toContain('createAbhAdminUser');
+    expect(api).toContain('updateAbhAdminUser');
+    expect(page).toContain('Administrator accounts');
+    expect(page).toContain('Create administrator');
+    expect(page).toContain('Staff access');
+  });
+
+
+  it('provides a minimal database health probe and guarded post-deploy smoke check', () => {
+    expect(kernel).toContain("'abh.health' => \\FieldPulse\\Domain\\AbhHealthController::class");
+    expect(kernel).toContain("'abh.health' => 'public'");
+    expect(healthController).toContain("Connection::fetchValue('SELECT 1')");
+    expect(healthController).toContain("'database' => 'connected'");
+    expect(healthShim).toContain("Kernel::handle('abh.health')");
+    expect(deployWorkflow).toContain('/api/v1/abh/health.php');
+    expect(deployWorkflow).toContain('ABH application or preview database health check failed');
+  });
+
+  it('runs actual PHP reward lifecycle and administrator repositories on the disposable database matrix', () => {
+    expect(schemaIntegration).toContain('AbhAdminUserRepository::create');
+    expect(schemaIntegration).toContain('AbhAdminUserRepository::update');
+    expect(schemaIntegration).toContain('AbhAdminRewardQualificationRepository::evaluate');
+    expect(schemaIntegration).toContain('AbhAdminRewardLifecycleRepository::assignGift');
+    expect(schemaIntegration).toContain('AbhAdminRewardLifecycleRepository::approveAward');
+    expect(schemaIntegration).toContain('AbhAdminRewardLifecycleRepository::recordEvent');
+    expect(schemaIntegration).toContain('AbhLeaderboardRepository::getForMonth');
+    expect(schemaIntegration).toContain('preserves frozen display names after live profile changes');
+  });
+
+});

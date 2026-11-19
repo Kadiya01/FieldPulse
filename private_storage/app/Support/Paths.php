@@ -41,26 +41,67 @@ final class Paths
     /**
      * Candidate document roots, most specific first.
      *
-     * APP_URL wins when it names a subdirectory, because that is the only
-     * authoritative statement of where the operator believes the app lives.
-     * public_html beside private_storage is the documented default and is
-     * always tried as a fallback.
+     * The APP_URL hostname identifies cPanel addon/subdomain roots; its path
+     * identifies an optional application subdirectory. The account-level
+     * public_html remains the final fallback.
      *
      * @return list<string>
      */
     public static function documentRootCandidates(): array
     {
+        return self::documentRootCandidatesFor(
+            Config::instance()->str('app.url', ''),
+            FIELDPULSE_BASE_ROOT
+        );
+    }
+
+    /**
+     * Resolve likely cPanel document roots from the configured application URL.
+     *
+     * cPanel commonly assigns addon domains and subdomains a directory named
+     * after the hostname beneath public_html. The hostname must be considered
+     * even when APP_URL has the root path ("/"), otherwise a preview vhost is
+     * incorrectly checked against the account-level public_html directory.
+     *
+     * The URL path candidate supports applications installed below a domain
+     * document root. The account-level public_html remains the final fallback
+     * for the primary domain and conventional installations.
+     *
+     * @return list<string>
+     */
+    public static function documentRootCandidatesFor(string $appUrl, string $baseRoot): array
+    {
+        $baseRoot = rtrim($baseRoot, '/\\');
+        $publicHtml = $baseRoot . '/public_html';
         $candidates = [];
 
-        $urlPath = parse_url((string) Config::instance()->str('app.url', ''), PHP_URL_PATH);
-
-        if (is_string($urlPath) && trim($urlPath, '/') !== '') {
-            $candidates[] = dirname(FIELDPULSE_BASE_ROOT . '/' . rtrim($urlPath, '/'));
+        $host = parse_url($appUrl, PHP_URL_HOST);
+        if (
+            is_string($host)
+            && $host !== ''
+            && preg_match('/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i', $host) === 1
+            && !str_contains($host, '..')
+        ) {
+            $candidates[] = $publicHtml . '/' . strtolower($host);
         }
 
-        $candidates[] = FIELDPULSE_BASE_ROOT . '/public_html';
+        $urlPath = parse_url($appUrl, PHP_URL_PATH);
+        if (is_string($urlPath) && trim($urlPath, '/') !== '') {
+            $relativePath = trim($urlPath, '/');
+            $segments = explode('/', rawurldecode(str_replace('\\', '/', $relativePath)));
+            $safeSegments = array_filter(
+                $segments,
+                static fn (string $segment): bool => $segment !== '' && $segment !== '.' && $segment !== '..'
+            );
 
-        return $candidates;
+            if (count($safeSegments) === count($segments)) {
+                $candidates[] = $publicHtml . '/' . implode('/', $safeSegments);
+            }
+        }
+
+        $candidates[] = $publicHtml;
+
+        return array_values(array_unique($candidates));
     }
 
     /**

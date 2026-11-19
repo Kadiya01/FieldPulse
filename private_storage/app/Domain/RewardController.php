@@ -60,14 +60,16 @@ final class RewardController implements ActionInterface
             throw new ApiException(405, ErrorCode::METHOD_NOT_ALLOWED, 'Method not allowed.');
         }
 
-        $limit = $this->clamp($request->queryInt('limit'), 24, 1, 120);
+        $limit      = $this->clamp($request->queryInt('limit'), 24, 1, 120);
+        $periodType = $this->resolvePeriodType($request, false);
 
-        $rows = $this->rewards->forAgent($context->agentId(), $limit);
+        $rows = $this->rewards->forAgent($context->agentId(), $limit, $periodType);
 
         return Response::json([
             'data' => array_map(fn (array $row): array => $this->present($row, false), $rows),
             'meta' => [
                 'agent_code'   => $context->agentCode(),
+                'period_type'  => $periodType,
                 'grace_hours'  => $this->rewards->graceHours(),
                 // Spelled out so the PWA cannot render PENDING as "paid" by
                 // inference: these two are different states, and the only one
@@ -89,16 +91,18 @@ final class RewardController implements ActionInterface
         $limit  = $this->clamp($request->queryInt('limit'), 25, 1, 100);
         $offset = $this->clamp($request->queryInt('offset'), 0, 0, 100000);
 
-        $period = $this->period($request);
+        $periodType = $this->resolvePeriodType($request, true) ?? PeriodResolver::TYPE_WEEKLY;
+        $period     = $this->period($request, $periodType);
 
-        $result = $this->rewards->forPeriod($period, $limit, $offset);
+        $result = $this->rewards->forPeriod($period, $limit, $offset, $periodType);
 
         return Response::json([
             'data' => array_map(fn (array $row): array => $this->present($row, true), $result['items']),
             'meta' => [
                 'period'            => $period,
+                'period_type'       => $periodType,
                 'closed'            => $result['closed'],
-                'available_periods' => $this->rewards->closedPeriods(24),
+                'available_periods' => $this->rewards->closedPeriods(24, $periodType),
                 'tiers'             => $this->rewards->tiers(),
                 'pagination'        => [
                     'total'  => $result['total'],
@@ -148,14 +152,30 @@ final class RewardController implements ActionInterface
 
     /* ------------------------------------------------------------------ */
 
+    private function resolvePeriodType(Request $request, bool $defaultWeekly = true): ?string
+    {
+        $type = $request->query('period_type');
+
+        if ($type === null || $type === '') {
+            return $defaultWeekly ? PeriodResolver::TYPE_WEEKLY : null;
+        }
+
+        $type = strtoupper((string) $type);
+
+        if (!in_array($type, PeriodResolver::PERIOD_TYPES, true)) {
+            throw ApiException::validation(
+                'period_type must be WEEKLY or MONTHLY.',
+                ['field' => 'period_type', 'allowed' => PeriodResolver::PERIOD_TYPES]
+            );
+        }
+
+        return $type;
+    }
+
     /**
      * Which period the operator asked for.
-     *
-     * Defaults to the newest period that actually produced entitlements rather
-     * than to the current week, because the current week is not closed and an
-     * empty board with no explanation is the failure this avoids.
      */
-    private function period(Request $request): string
+    private function period(Request $request, string $periodType): string
     {
         $requested = $request->query('period');
 
@@ -167,12 +187,30 @@ final class RewardController implements ActionInterface
                 );
             }
 
+            $tz       = \FieldPulse\Config\Config::instance()->businessTimezone();
+            $local    = new \DateTimeImmutable($requested . ' 00:00:00', $tz);
+            $expected = PeriodResolver::periodStartDateForType(
+                $periodType,
+                \FieldPulse\Support\Clock::sql($local)
+            );
+
+            if ($expected !== $requested) {
+                $message = $periodType === PeriodResolver::TYPE_MONTHLY
+                    ? 'period must be the first day of the month (YYYY-MM-01).'
+                    : 'period must be the first day of the week.';
+
+                throw ApiException::validation(
+                    $message,
+                    ['field' => 'period', 'expected' => $expected]
+                );
+            }
+
             return $requested;
         }
 
-        $closed = $this->rewards->closedPeriods(1);
+        $closed = $this->rewards->closedPeriods(1, $periodType);
 
-        return $closed[0] ?? PeriodResolver::periodStartDate();
+        return $closed[0] ?? ($periodType === PeriodResolver::TYPE_MONTHLY ? PeriodResolver::monthlyPeriodStartDate() : PeriodResolver::periodStartDate());
     }
 
     /**
@@ -187,6 +225,7 @@ final class RewardController implements ActionInterface
 
         $payload = [
             'id'                   => (int) $row['id'],
+            'period_type'          => (string) ($row['period_type'] ?? PeriodResolver::TYPE_WEEKLY),
             'period_start_date'    => (string) $row['period_start_date'],
             'rank'                 => (int) $row['rank'],
             'total_verified_count' => (int) $row['total_verified_count'],
