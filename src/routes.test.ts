@@ -100,6 +100,13 @@ describe('ABH app routing and legacy isolation', () => {
     expect(read('pages/LoginPage.tsx')).not.toContain('admin?: boolean');
   });
 
+  it('keeps public login and registration reachable without a stored device key', () => {
+    expect(appSource).toContain("location.pathname === '/login' || location.pathname === '/register'");
+    expect(appSource).toContain('if (isAdminPath || isPublicAuthPath)');
+    expect(appSource).toContain('if (isPublicAuthPath && gate !== \'ready\')');
+    expect(appSource).toContain('return agentAuthRoutes;');
+  });
+
   it('renders the dedicated ABH agent portal after successful agent authentication', () => {
     expect(appSource).toContain("import AbhAgentPortalPage from './pages/AbhAgentPortalPage'");
     expect(appSource).toContain('<AbhAgentPortalPage agent={agent} onSignOut={endSession} />');
