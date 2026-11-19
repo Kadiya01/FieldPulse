@@ -46,13 +46,15 @@ jobs:
           test -z "$(find private_storage/abh_migrations -type l -print -quit)"
           while IFS= read -r -d '' file; do
             test -s "$file"
-            grep -qE '^[[:space:]]*(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|RENAME|SET|--|/\*)' "$file"
+            grep -qE '^[[:space:]]*(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|RENAME|SET|--|/\\*)' "$file"
           done < <(find private_storage/abh_migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -print0)
           mkdir -p deploy/preview-private/abh_migrations
           cp private_storage/abh_migrations/[0-9][0-9][0-9]_*.sql deploy/preview-private/abh_migrations/
           staged=$(find deploy/preview-private/abh_migrations -maxdepth 1 -type f -name '*.sql' | wc -l)
           test "$staged" -eq 11
-          echo "Verified and staged $staged ABH SQL catalog files. No SQL was executed."
+          echo "Verified and staged $staged ABH SQL catalog files."
+          echo "Upload target: private root /abh_migrations/*.sql"
+          echo "No SQL is executed by this workflow."
 
       - name: Verify dedicated preview private FTPS destination
         shell: bash
@@ -68,7 +70,7 @@ jobs:
           [[ "$FTP_SERVER" == "nano.yahmis.com" ]]
           [[ "$FTP_USERNAME" == "abhpreview_private@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
 
-      - name: Upload only ABH migration catalog to preview private storage
+      - name: Upload migration SQL files into the exact ABH catalog directory
         uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
         with:
           server: ${{ secrets.ABH_PREVIEW_PRIVATE_FTP_SERVER }}
@@ -77,9 +79,9 @@ jobs:
           port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
           protocol: ftps
           security: strict
-          local-dir: deploy/preview-private/
+          local-dir: deploy/preview-private/abh_migrations/
           server-dir: ./abh_migrations/
-          state-name: .ftp-deploy-sync-state-abh-migrations.json
+          state-name: .ftp-deploy-sync-state-abh-migrations-root.json
           dangerous-clean-slate: false
           dry-run: false
           timeout: 60000
