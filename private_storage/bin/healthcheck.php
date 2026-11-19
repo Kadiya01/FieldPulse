@@ -565,9 +565,11 @@ try {
         'abh_admin_auth_attempts', 'abh_admin_bootstrap_guard',
     ];
 
+    $tablePlaceholders = implode(',', array_fill(0, count($requiredTables), '?'));
     $tableRows = Connection::fetchAll(
-        "SELECT TABLE_NAME FROM information_schema.TABLES
-          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'abh\\_%' ESCAPE '\\\\'"
+        'SELECT TABLE_NAME FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (' . $tablePlaceholders . ')',
+        $requiredTables
     );
     $presentTables = array_fill_keys(
         array_map(static fn (array $row): string => (string) $row['TABLE_NAME'], $tableRows),
