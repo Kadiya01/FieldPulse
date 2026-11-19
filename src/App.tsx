@@ -25,11 +25,25 @@ type Gate = 'checking' | 'ready' | 'login' | 'unregistered';
 export default function App() {
   const location = useLocation();
   const isAdminPath = location.pathname === '/admin' || location.pathname.startsWith('/admin/');
+  const isPublicAuthPath = location.pathname === '/login' || location.pathname === '/register';
   const [gate, setGate] = useState<Gate>('checking');
   const [agent, setAgent] = useState<SessionAgent | null>(null);
 
+  const agentAuthRoutes = (
+    <Routes>
+      <Route path="/login" element={
+        <LoginPage onAuthenticated={authenticated => { setAgent(authenticated); setGate('ready'); }} />
+      } />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
+  );
+
   useEffect(() => {
-    if (isAdminPath) {
+    // Login and registration are public entry points. A browser with no local
+    // device key must still be able to register its first device or reach the
+    // sign-in form; the private key is enforced by the login/register flows.
+    if (isAdminPath || isPublicAuthPath) {
       return;
     }
     let live = true;
@@ -93,10 +107,16 @@ export default function App() {
       live = false;
       window.removeEventListener('auth_failure', onFailure);
     };
-  }, [isAdminPath]);
+  }, [isAdminPath, isPublicAuthPath]);
 
   if (isAdminPath) {
     return <AdminPortalPage />;
+  }
+
+  // Render public authentication routes before the authenticated-session gate.
+  // After a successful sign-in, allow the normal ready/portal branch below.
+  if (isPublicAuthPath && gate !== 'ready') {
+    return agentAuthRoutes;
   }
 
   if (gate === 'checking') {
@@ -172,13 +192,5 @@ export default function App() {
       );
   }
 
-  return (
-    <Routes>
-      <Route path="/login" element={
-        <LoginPage onAuthenticated={authenticated => { setAgent(authenticated); setGate('ready'); }} />
-      } />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
-  );
+  return agentAuthRoutes;
 }
