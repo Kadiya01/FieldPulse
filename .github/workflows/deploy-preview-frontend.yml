@@ -1,0 +1,122 @@
+name: ABH Preview Frontend Upload
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_preview_frontend_upload:
+        description: "Build and upload the reviewed frontend to the dedicated ABH preview document root only"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: abh-preview-frontend-upload
+  cancel-in-progress: false
+
+jobs:
+  upload_preview_frontend:
+    name: Build and upload ABH preview frontend only
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/feature/abh-monthly-enrollment' &&
+      inputs.confirm_preview_frontend_upload == true &&
+      vars.ABH_PREVIEW_DEPLOY_ENABLED == 'false' &&
+      vars.ABH_PREVIEW_DRY_RUN == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: abh-preview
+      url: https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng
+    steps:
+      - name: Check out the approved ABH feature branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: feature/abh-monthly-enrollment
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: npm
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend lint
+        run: npm run lint
+
+      - name: Run frontend unit tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Verify frontend bundle contains only public build files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -d dist/assets
+          test -n "$(find dist/assets -maxdepth 1 -type f -print -quit)"
+          if find dist -type f | grep -E '(^|/)(\.env([^/]*)?|\.htaccess|\.user.ini|api|private_storage)(/|$)'; then
+            echo "::error::Unexpected private or server configuration file in frontend build."
+            exit 1
+          fi
+          echo "Verified public frontend build. No API source, private storage, environment files, or cPanel configuration will be uploaded."
+
+      - name: Verify dedicated preview public FTPS destination
+        shell: bash
+        env:
+          FTP_SERVER: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$FTP_SERVER"
+          test -n "$FTP_USERNAME"
+          test -n "$FTP_PASSWORD"
+          [[ "$FTP_SERVER" == "nano.yahmis.com" ]]
+          [[ "$FTP_USERNAME" == "abhpreview_public@monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng" ]]
+
+      - name: Upload frontend build to preview document root only
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287
+        with:
+          server: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_SERVER }}
+          username: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_USERNAME }}
+          password: ${{ secrets.ABH_PREVIEW_PUBLIC_FTP_PASSWORD }}
+          port: ${{ vars.ABH_PREVIEW_FTP_PORT || '21' }}
+          protocol: ftps
+          security: strict
+          local-dir: dist/
+          server-dir: ./
+          state-name: .ftp-deploy-sync-state-abh-preview-frontend.json
+          dangerous-clean-slate: false
+          dry-run: false
+          timeout: 60000
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.env
+            **/.env.*
+            **/.htaccess
+            **/.user.ini
+            **/api/**
+            **/private_storage/**
+
+      - name: Verify preview frontend routes respond
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://monthlyperformancepreview.abhglobalinformationtechnologysolutions.com.ng"
+          for route in / /login /register; do
+            status="$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' "$base$route")"
+            [[ "$status" == "200" ]] || {
+              echo "::error::Preview route $route returned HTTP $status."
+              exit 1
+            }
+            echo "[ok] $route returned HTTP 200"
+          done
